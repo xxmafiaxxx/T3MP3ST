@@ -4941,6 +4941,7 @@ Correlating findings across agents, identifying patterns, producing actionable i
         }
 
         function saveState() {
+            try { if (typeof queueSettingsSync === 'function') queueSettingsSync(state.settings); } catch (_) {}
             localStorage.setItem('t3mp3st', JSON.stringify({
                 settings: state.settings,
                 targets: state.targets,
@@ -18936,7 +18937,124 @@ ${entries}
             }
 
             renderConfigLibrary();
-            toast(`🗑️ Deleted "${config.name}"`, 'warning');
+            toast(`🗑️ Deleted "${config.name}
+        // ── Config Library: click-to-edit editor ──
+        function openConfigEditor(configId, evt) {
+            if (evt && evt.target && evt.target.closest && evt.target.closest('button')) return; // action buttons keep their own handlers
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const esc = (v) => escapeHtml(String(v == null ? '' : v));
+            const opsHtml = OPERATORS.map(o => {
+                const on = (config.operators || []).includes(o.id);
+                return '<label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:6px;cursor:pointer;font-size:11px;color:#ccc;">' +
+                    '<input type="checkbox" class="cfg-edit-op" data-op="' + o.id + '"' + (on ? ' checked' : '') + ' onchange="renderConfigEditorOps()"> ' +
+                    '<span>' + esc(o.icon || '') + ' ' + esc(o.name || o.id) + '</span></label>';
+            }).join('');
+            const html =
+                '<div style="font-size:11px;color:#888;">Saved ' + esc(new Date(config.savedAt).toLocaleString()) + ' · score ' + esc(config.score) + '% (read-only — re-benchmark to update)</div>' +
+                '<div style="margin-top:10px;display:grid;gap:8px;">' +
+                  '<label style="font-size:11px;color:#888;">NAME<input id="cfgEditName" value="' + esc(config.name) + '" style="width:100%;margin-top:3px;padding:7px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#fff;font-size:12px;"></label>' +
+                  '<label style="font-size:11px;color:#888;">MODEL<input id="cfgEditModel" value="' + esc(config.model || '') + '" placeholder="e.g. z-ai/glm-5.3-flash" style="width:100%;margin-top:3px;padding:7px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#fff;font-size:12px;"></label>' +
+                  '<div><div style="font-size:11px;color:#888;margin-bottom:4px;">OPERATORS IN THIS CONFIG</div>' +
+                  '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;">' + opsHtml + '</div></div>' +
+                  '<div><div style="font-size:11px;color:#888;margin-bottom:4px;">PER-OPERATOR SETTINGS</div><div id="cfgEditOps" style="display:grid;gap:8px;"></div></div>' +
+                '</div>' +
+                '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">' +
+                  '<button class="btn btn-primary" onclick="saveConfigEdits(\'' + configId + '\')">💾 Save Changes</button>' +
+                  '<button class="btn" onclick="duplicateConfig(\'' + configId + '\')" style="background:rgba(255,255,255,0.08);border:1px solid #333;color:#ccc;">⧉ Duplicate</button>' +
+                  '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+                '</div>';
+            openModal('⚙️ Edit Config — ' + config.name, html);
+            renderConfigEditorOps(config);
+        }
+
+        function renderConfigEditorOps(config) {
+            const container = document.getElementById('cfgEditOps');
+            if (!container) return;
+            const selected = [...document.querySelectorAll('.cfg-edit-op:checked')].map(cb => cb.getAttribute('data-op'));
+            const esc = (v) => escapeHtml(String(v == null ? '' : v));
+            container.innerHTML = selected.length === 0
+                ? '<div style="font-size:11px;color:#666;padding:8px;">No operators selected — tick at least one above.</div>'
+                : selected.map(opId => {
+                    const oc = (config.operatorConfigs || {})[opId] || {};
+                    const p = oc.params || {};
+                    const tools = Array.isArray(oc.tools) ? oc.tools.join(', ') : '';
+                    return '<div style="padding:10px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">' +
+                        '<div style="font-size:12px;font-weight:bold;color:#fff;margin-bottom:6px;">' + esc(opId) + '</div>' +
+                        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+                          '<label style="font-size:10px;color:#888;">TEMP <input id="cfgEditTemp-' + esc(opId) + '" type="number" min="0" max="1" step="0.05" value="' + (p.temperature != null ? p.temperature : 0.4) + '" style="width:70px;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                          '<label style="font-size:10px;color:#888;">MAX TOKENS <input id="cfgEditTokens-' + esc(opId) + '" type="number" min="128" step="128" value="' + (p.maxTokens != null ? p.maxTokens : 4096) + '" style="width:90px;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                          '<label style="font-size:10px;color:#888;flex:1;min-width:220px;">TOOLS (comma-separated) <input id="cfgEditTools-' + esc(opId) + '" value="' + esc(tools) + '" placeholder="empty = archetype defaults" style="width:100%;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                        '</div>' +
+                        '<label style="font-size:10px;color:#888;">SYSTEM PROMPT<textarea id="cfgEditPrompt-' + esc(opId) + '" rows="3" placeholder="empty = archetype default prompt" style="width:100%;padding:6px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#ddd;font-size:11px;font-family:inherit;resize:vertical;">' + esc(oc.systemPrompt || '') + '</textarea></label>' +
+                      '</div>';
+                  }).join('');
+        }
+
+        function saveConfigEdits(configId) {
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const name = (document.getElementById('cfgEditName') || {}).value || '';
+            if (!name.trim()) { toast('Config name cannot be empty', 'error'); return; }
+            const num = (id, def, min, max) => {
+                const el = document.getElementById(id);
+                let v = el ? parseFloat(el.value) : NaN;
+                if (!isFinite(v)) return def;
+                return Math.min(max, Math.max(min, v));
+            };
+            const selected = [...document.querySelectorAll('.cfg-edit-op:checked')].map(cb => cb.getAttribute('data-op'));
+            if (selected.length === 0) { toast('Select at least one operator', 'error'); return; }
+            config.name = name.trim();
+            const modelEl = document.getElementById('cfgEditModel');
+            if (modelEl) config.model = modelEl.value.trim() || config.model;
+            config.operators = selected;
+            config.operatorConfigs = config.operatorConfigs || {};
+            selected.forEach(opId => {
+                const existing = config.operatorConfigs[opId] || {};
+                const temp = num('cfgEditTemp-' + opId, (existing.params || {}).temperature != null ? existing.params.temperature : 0.4, 0, 1);
+                const tokens = Math.round(num('cfgEditTokens-' + opId, (existing.params || {}).maxTokens != null ? existing.params.maxTokens : 4096, 128, 200000));
+                const toolsStr = ((document.getElementById('cfgEditTools-' + opId) || {}).value || '').trim();
+                const promptEl = document.getElementById('cfgEditPrompt-' + opId);
+                const prompt = promptEl ? promptEl.value : (existing.systemPrompt || '');
+                config.operatorConfigs[opId] = {
+                    ...existing,
+                    tools: toolsStr ? toolsStr.split(',').map(t => t.trim()).filter(Boolean) : (existing.tools || []),
+                    params: { ...((existing.params) || {}), temperature: temp, maxTokens: tokens },
+                    systemPrompt: prompt.trim() || existing.systemPrompt || ''
+                };
+            });
+            config.lastEditedAt = new Date().toISOString();
+            saveConfigLibrary(library);
+            renderConfigLibrary();
+            try { updateCurrentConfigSummary(); } catch (_) {}
+            closeModal();
+            toast('💾 Saved edits to "' + config.name + '"', 'success');
+            addIntel('CONFIG', 'Edited config: ' + config.name, 'success');
+        }
+
+        function duplicateConfig(configId) {
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const copy = JSON.parse(JSON.stringify(config));
+            copy.id = 'config_' + Date.now();
+            copy.name = config.name + ' (copy)';
+            copy.savedAt = new Date().toISOString();
+            delete copy.lastEditedAt;
+            const idx = library.findIndex(c => c.id === configId);
+            library.splice(idx + 1, 0, copy);
+            if (library.length > 20) library.pop();
+            saveConfigLibrary(library);
+            renderConfigLibrary();
+            toast('⧉ Duplicated as "' + copy.name + '"', 'success');
+        }
+        window.openConfigEditor = openConfigEditor;
+        window.saveConfigEdits = saveConfigEdits;
+        window.duplicateConfig = duplicateConfig;
+        window.renderConfigEditorOps = renderConfigEditorOps;
+"`, 'warning');
         }
 
         // Render config library
@@ -18988,7 +19106,8 @@ ${entries}
                 const savedTime = new Date(config.savedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
                 return `
-                <div class="config-card" style="
+                <div class="config-card" data-config-id="${config.id}" onclick="openConfigEditor('${config.id}', event)" style="
+                    cursor: pointer;
                     background: ${isDefault ? 'linear-gradient(135deg, rgba(255,215,0,0.1), rgba(136,0,255,0.1))' : 'rgba(0,0,0,0.3)'};
                     border: 1px solid ${isDefault ? 'rgba(255,215,0,0.5)' : 'rgba(255,255,255,0.1)'};
                     border-radius: 12px;

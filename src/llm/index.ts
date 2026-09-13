@@ -14,13 +14,13 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import { spawn } from 'child_process';
+
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
 import { config } from '../config/index.js';
-import { localAgentChat } from '../agent/local-agents.js';
+import { localAgentChat, resolveBin, spawnAgent } from '../agent/local-agents.js';
 import { fetchBypassingProxy } from '../net/proxy.js';
 
 // =============================================================================
@@ -1286,7 +1286,7 @@ class CodexAdapter implements LLMProviderAdapter {
     const workDir = await mkdtemp(join(tmpdir(), 't3mp3st-codex-'));
     const outputPath = join(workDir, 'last-message.txt');
     const prompt = this.formatPrompt(messages, options);
-    const command = config.get('codex').command || 'codex';
+    const command = resolveBin(config.get('codex').command || 'codex') || 'codex';
     const args = [
       '--ask-for-approval',
       'never',
@@ -1311,7 +1311,9 @@ class CodexAdapter implements LLMProviderAdapter {
 
     try {
       const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-        const child = spawn(command, args, {
+        // resolveBin + spawnAgent: on Windows the npm shim is codex.cmd — a bare spawn('codex')
+        // throws ENOENT (cmd shims need an explicit cmd.exe-mediated, pre-quoted launch).
+        const child = spawnAgent(resolveBin(command) || command, args, {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, NO_COLOR: '1' },
         });
@@ -1323,8 +1325,8 @@ class CodexAdapter implements LLMProviderAdapter {
           reject(new Error('Codex CLI timed out while planning'));
         }, this.config.timeout || 240000);
 
-        child.stdout.on('data', chunk => { stdout += chunk.toString(); });
-        child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+        child.stdout?.on('data', chunk => { stdout += chunk.toString(); });
+        child.stderr?.on('data', chunk => { stderr += chunk.toString(); });
         child.on('error', error => {
           clearTimeout(timer);
           reject(error);
@@ -1337,7 +1339,7 @@ class CodexAdapter implements LLMProviderAdapter {
             reject(new Error(`Codex CLI exited ${code}: ${(stderr || stdout).trim().slice(0, 4000)}`));
           }
         });
-        child.stdin.end(prompt);
+        child.stdin?.end(prompt);
       });
 
       let content = '';

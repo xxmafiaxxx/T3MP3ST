@@ -282,6 +282,10 @@ import {
 // =============================================================================
 
 const DEFAULT_AGENT_MAX_ITERATIONS = 15;
+// The exfiltrator's credential-assault playbook (secret-file sweep → login discovery →
+// default-cred matrix → spray → token attacks → injection dumps → pivots) needs more ReAct
+// turns than the default budget or it gets reaped mid-playbook.
+const EXFILTRATOR_AGENT_MAX_ITERATIONS = 25;
 const LOCAL_AGENT_MAX_ITERATIONS = Number(process.env.T3MP3ST_LOCAL_AGENT_MAX_ITERATIONS || 30);
 const MAX_PROGRESS_EVENTS = 300;
 
@@ -1495,7 +1499,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     const profile = ARCHETYPE_PROFILES[archetype];
     const maxIterations = operatorLLM.getProvider() === 'local-agent'
       ? LOCAL_AGENT_MAX_ITERATIONS
-      : DEFAULT_AGENT_MAX_ITERATIONS;
+      : (archetype === 'exfiltrator' ? EXFILTRATOR_AGENT_MAX_ITERATIONS : DEFAULT_AGENT_MAX_ITERATIONS);
     const agentLoop = new AgentLoop(operatorLLM, this.arsenal, {
       maxIterations,
       maxTokens: 50000,

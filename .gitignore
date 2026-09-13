@@ -84,3 +84,14 @@ coverage/
 scratch/
 bash.exe.stackdump
 nul
+# operator settings DB (holds API keys — never publish)
+memory/
+
+# transient probe / harvest detritus (rebuilt from the wire)
+.fp_*
+.b_*
+*.stackdump
+.bounup.html
+.login.html
+.memberlist.html
+.core*.js

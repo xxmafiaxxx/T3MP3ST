@@ -4918,6 +4918,7 @@ Correlating findings across agents, identifying patterns, producing actionable i
         }
 
         function saveState() {
+            try { if (typeof queueSettingsSync === 'function') queueSettingsSync(state.settings); } catch (_) {}
             localStorage.setItem('t3mp3st', JSON.stringify({
                 settings: state.settings,
                 targets: state.targets,
@@ -15345,10 +15346,16 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     throw new Error(status.error || 'Codex CLI/account auth unavailable');
                 }
                 if (status.execReady === false) {
-                    throw new Error(status.executionError || 'Codex CLI is installed but cannot run a non-interactive planning exec from the T3MP3ST backend');
+                    // Codex CLI is installed but the account exec path is not usable right now
+                    // (auth or credits) — degrade to the configured LLM planner instead of
+                    // dead-ending the button. The brief and flow stay identical.
+                    addIntel('CODEX', `Codex exec unavailable (${String(status.executionError || 'not ready').slice(0, 140)}) — falling back to the configured LLM planner`, 'warning');
+                    toast('Codex account exec unavailable — planning with the configured LLM instead', 'warning');
+                    localStorage.setItem('t3mp3st_general_provider', '');
+                } else {
+                    localStorage.setItem('t3mp3st_general_provider', 'codex');
+                    addIntel('CODEX', `Codex account backend ready (${status.version || 'version unknown'}); planning via codex exec (low reasoning)`, 'success');
                 }
-
-                localStorage.setItem('t3mp3st_general_provider', 'codex');
 
                 const directiveEl = document.getElementById('generalDirective');
                 const scopeEl = document.getElementById('generalScope');
@@ -15366,7 +15373,6 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     directiveEl.value = 'Run a multi-domain zero-day autohunt against the owned local T3MP3ST control plane and repository. Generate novel weird-machine hypotheses across web/API, agent/tool/memory boundaries, supply chain, UI trust, learning loops, and cross-domain composition. Decompose into specialist work orders with safe probes, expected signals, evidence artifacts, falsifiers, retests, and exact gate reasons.';
                 }
 
-                addIntel('CODEX', `Codex account backend available (${status.version || 'version unknown'}); no API key injected into UI`, 'success');
                 addIntel('CODEX', 'Launching low-reasoning Codex planning pass. Expected runtime: 2-4 minutes for a full autohunt plan.', 'info');
                 await generalPlanOp();
             } catch (err) {
@@ -18913,7 +18919,124 @@ ${entries}
             }
 
             renderConfigLibrary();
-            toast(`🗑️ Deleted "${config.name}"`, 'warning');
+            toast(`🗑️ Deleted "${config.name}
+        // ── Config Library: click-to-edit editor ──
+        function openConfigEditor(configId, evt) {
+            if (evt && evt.target && evt.target.closest && evt.target.closest('button')) return; // action buttons keep their own handlers
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const esc = (v) => escapeHtml(String(v == null ? '' : v));
+            const opsHtml = OPERATORS.map(o => {
+                const on = (config.operators || []).includes(o.id);
+                return '<label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:6px;cursor:pointer;font-size:11px;color:#ccc;">' +
+                    '<input type="checkbox" class="cfg-edit-op" data-op="' + o.id + '"' + (on ? ' checked' : '') + ' onchange="renderConfigEditorOps()"> ' +
+                    '<span>' + esc(o.icon || '') + ' ' + esc(o.name || o.id) + '</span></label>';
+            }).join('');
+            const html =
+                '<div style="font-size:11px;color:#888;">Saved ' + esc(new Date(config.savedAt).toLocaleString()) + ' · score ' + esc(config.score) + '% (read-only — re-benchmark to update)</div>' +
+                '<div style="margin-top:10px;display:grid;gap:8px;">' +
+                  '<label style="font-size:11px;color:#888;">NAME<input id="cfgEditName" value="' + esc(config.name) + '" style="width:100%;margin-top:3px;padding:7px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#fff;font-size:12px;"></label>' +
+                  '<label style="font-size:11px;color:#888;">MODEL<input id="cfgEditModel" value="' + esc(config.model || '') + '" placeholder="e.g. z-ai/glm-5.3-flash" style="width:100%;margin-top:3px;padding:7px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#fff;font-size:12px;"></label>' +
+                  '<div><div style="font-size:11px;color:#888;margin-bottom:4px;">OPERATORS IN THIS CONFIG</div>' +
+                  '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;">' + opsHtml + '</div></div>' +
+                  '<div><div style="font-size:11px;color:#888;margin-bottom:4px;">PER-OPERATOR SETTINGS</div><div id="cfgEditOps" style="display:grid;gap:8px;"></div></div>' +
+                '</div>' +
+                '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">' +
+                  '<button class="btn btn-primary" onclick="saveConfigEdits(\'' + configId + '\')">💾 Save Changes</button>' +
+                  '<button class="btn" onclick="duplicateConfig(\'' + configId + '\')" style="background:rgba(255,255,255,0.08);border:1px solid #333;color:#ccc;">⧉ Duplicate</button>' +
+                  '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+                '</div>';
+            openModal('⚙️ Edit Config — ' + config.name, html);
+            renderConfigEditorOps(config);
+        }
+
+        function renderConfigEditorOps(config) {
+            const container = document.getElementById('cfgEditOps');
+            if (!container) return;
+            const selected = [...document.querySelectorAll('.cfg-edit-op:checked')].map(cb => cb.getAttribute('data-op'));
+            const esc = (v) => escapeHtml(String(v == null ? '' : v));
+            container.innerHTML = selected.length === 0
+                ? '<div style="font-size:11px;color:#666;padding:8px;">No operators selected — tick at least one above.</div>'
+                : selected.map(opId => {
+                    const oc = (config.operatorConfigs || {})[opId] || {};
+                    const p = oc.params || {};
+                    const tools = Array.isArray(oc.tools) ? oc.tools.join(', ') : '';
+                    return '<div style="padding:10px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">' +
+                        '<div style="font-size:12px;font-weight:bold;color:#fff;margin-bottom:6px;">' + esc(opId) + '</div>' +
+                        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+                          '<label style="font-size:10px;color:#888;">TEMP <input id="cfgEditTemp-' + esc(opId) + '" type="number" min="0" max="1" step="0.05" value="' + (p.temperature != null ? p.temperature : 0.4) + '" style="width:70px;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                          '<label style="font-size:10px;color:#888;">MAX TOKENS <input id="cfgEditTokens-' + esc(opId) + '" type="number" min="128" step="128" value="' + (p.maxTokens != null ? p.maxTokens : 4096) + '" style="width:90px;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                          '<label style="font-size:10px;color:#888;flex:1;min-width:220px;">TOOLS (comma-separated) <input id="cfgEditTools-' + esc(opId) + '" value="' + esc(tools) + '" placeholder="empty = archetype defaults" style="width:100%;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                        '</div>' +
+                        '<label style="font-size:10px;color:#888;">SYSTEM PROMPT<textarea id="cfgEditPrompt-' + esc(opId) + '" rows="3" placeholder="empty = archetype default prompt" style="width:100%;padding:6px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#ddd;font-size:11px;font-family:inherit;resize:vertical;">' + esc(oc.systemPrompt || '') + '</textarea></label>' +
+                      '</div>';
+                  }).join('');
+        }
+
+        function saveConfigEdits(configId) {
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const name = (document.getElementById('cfgEditName') || {}).value || '';
+            if (!name.trim()) { toast('Config name cannot be empty', 'error'); return; }
+            const num = (id, def, min, max) => {
+                const el = document.getElementById(id);
+                let v = el ? parseFloat(el.value) : NaN;
+                if (!isFinite(v)) return def;
+                return Math.min(max, Math.max(min, v));
+            };
+            const selected = [...document.querySelectorAll('.cfg-edit-op:checked')].map(cb => cb.getAttribute('data-op'));
+            if (selected.length === 0) { toast('Select at least one operator', 'error'); return; }
+            config.name = name.trim();
+            const modelEl = document.getElementById('cfgEditModel');
+            if (modelEl) config.model = modelEl.value.trim() || config.model;
+            config.operators = selected;
+            config.operatorConfigs = config.operatorConfigs || {};
+            selected.forEach(opId => {
+                const existing = config.operatorConfigs[opId] || {};
+                const temp = num('cfgEditTemp-' + opId, (existing.params || {}).temperature != null ? existing.params.temperature : 0.4, 0, 1);
+                const tokens = Math.round(num('cfgEditTokens-' + opId, (existing.params || {}).maxTokens != null ? existing.params.maxTokens : 4096, 128, 200000));
+                const toolsStr = ((document.getElementById('cfgEditTools-' + opId) || {}).value || '').trim();
+                const promptEl = document.getElementById('cfgEditPrompt-' + opId);
+                const prompt = promptEl ? promptEl.value : (existing.systemPrompt || '');
+                config.operatorConfigs[opId] = {
+                    ...existing,
+                    tools: toolsStr ? toolsStr.split(',').map(t => t.trim()).filter(Boolean) : (existing.tools || []),
+                    params: { ...((existing.params) || {}), temperature: temp, maxTokens: tokens },
+                    systemPrompt: prompt.trim() || existing.systemPrompt || ''
+                };
+            });
+            config.lastEditedAt = new Date().toISOString();
+            saveConfigLibrary(library);
+            renderConfigLibrary();
+            try { updateCurrentConfigSummary(); } catch (_) {}
+            closeModal();
+            toast('💾 Saved edits to "' + config.name + '"', 'success');
+            addIntel('CONFIG', 'Edited config: ' + config.name, 'success');
+        }
+
+        function duplicateConfig(configId) {
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const copy = JSON.parse(JSON.stringify(config));
+            copy.id = 'config_' + Date.now();
+            copy.name = config.name + ' (copy)';
+            copy.savedAt = new Date().toISOString();
+            delete copy.lastEditedAt;
+            const idx = library.findIndex(c => c.id === configId);
+            library.splice(idx + 1, 0, copy);
+            if (library.length > 20) library.pop();
+            saveConfigLibrary(library);
+            renderConfigLibrary();
+            toast('⧉ Duplicated as "' + copy.name + '"', 'success');
+        }
+        window.openConfigEditor = openConfigEditor;
+        window.saveConfigEdits = saveConfigEdits;
+        window.duplicateConfig = duplicateConfig;
+        window.renderConfigEditorOps = renderConfigEditorOps;
+"`, 'warning');
         }
 
         // Render config library
@@ -18965,7 +19088,8 @@ ${entries}
                 const savedTime = new Date(config.savedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
                 return `
-                <div class="config-card" style="
+                <div class="config-card" data-config-id="${config.id}" onclick="openConfigEditor('${config.id}', event)" style="
+                    cursor: pointer;
                     background: ${isDefault ? 'linear-gradient(135deg, rgba(255,215,0,0.1), rgba(136,0,255,0.1))' : 'rgba(0,0,0,0.3)'};
                     border: 1px solid ${isDefault ? 'rgba(255,215,0,0.5)' : 'rgba(255,255,255,0.1)'};
                     border-radius: 12px;
@@ -25170,7 +25294,7 @@ Be specific and actionable. Format as structured JSON.`;
 (function(){
   const SI_KEY='t3mp3st_selfimprove_config', SI_SEEN='t3mp3st_selfimprove_lastgen';
   const DEF={ autonomy:'propose', cadence:'manual', frozen:false,
-    obsidivm:{ hunter:'live', judgeModel:'claude-sonnet-4-5', acceptThreshold:0.7, maxGens:1, targetGrade:'', target:'obsidivm', pruneAfter:3 } };
+    obsidivm:{ hunter:'stub', judgeModel:'claude-sonnet-4-5', acceptThreshold:0.7, maxGens:1, targetGrade:'', target:'all', pruneAfter:3 } };
   const base=()=>(typeof T3MP3ST_API!=='undefined'&&T3MP3ST_API.baseUrl)||'';
   function esc(s){ return String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
   function loadCfg(){ try{ const s=JSON.parse(localStorage.getItem(SI_KEY)||'{}'); return Object.assign({},DEF,s,{obsidivm:Object.assign({},DEF.obsidivm,s.obsidivm||{})}); }catch(e){ return JSON.parse(JSON.stringify(DEF)); } }
@@ -25182,7 +25306,7 @@ Be specific and actionable. Format as structured JSON.`;
     p.push('--hunter '+o.hunter); p.push('--judge-model '+o.judgeModel);
     p.push('--accept-threshold '+o.acceptThreshold); p.push('--max-gens '+o.maxGens);
     if(String(o.targetGrade).trim()) p.push('--target-grade '+o.targetGrade);
-    p.push('--target '+o.target); p.push('--prune-after '+o.pruneAfter);
+    if(o.target && o.target!=='all') p.push('--target '+o.target); p.push('--prune-after '+o.pruneAfter);
     return 'npm run obsidivm:evolve -- '+p.join(' '); }
 
   function card(title,badge,color,sub,body){
@@ -25207,7 +25331,7 @@ Be specific and actionable. Format as structured JSON.`;
       +radio('auto','Auto-apply','Only the OBSIDIVM confidence gate. Never memory, never source.')+'</div>'
       +'<div style="font-size:9px;color:#8a9;margin-bottom:10px;">Enforced today by each loop\'s own gate — memory stays human accept/reject; OBSIDIVM uses the accept-threshold below. <span style="color:#ffaa00;">Advisory for a browser-triggered exec route until Phase 2.</span></div>'
       +'<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">'
-      +'<div><div style="font-size:10px;color:#8aa;margin-bottom:4px;">Desired cadence <span style="color:#ffaa00;">· advisory — no scheduler wired yet</span></div>'
+      +'<div><div style="font-size:10px;color:#8aa;margin-bottom:4px;">Desired cadence <span style="color:var(--brand);">· scheduler wired — non-manual cadences auto-run passes</span></div>'
       +'<select onchange="siSet(\'cadence\',this.value)" style="background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#cfe;font-size:12px;padding:6px 8px;">'
       +['manual','hourly','daily','weekly'].map(v=>'<option value="'+v+'" '+(c===v?'selected':'')+'>'+v+'</option>').join('')+'</select></div>'
       +'<div style="margin-left:auto;display:flex;gap:6px;align-items:center;font-size:10px;color:#7f93a5;">🔒 Anti-fitting'
@@ -25234,9 +25358,12 @@ Be specific and actionable. Format as structured JSON.`;
       +'<code id="siObsCmd" style="flex:1;min-width:0;background:#05090f;border:1px solid rgba(var(--brand-rgb),0.2);border-radius:6px;color:#9fd;font-size:10.5px;padding:8px 10px;font-family:\'JetBrains Mono\',monospace;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;">'+esc(obsidivmCommand(CFG))+'</code>'
       +'<button onclick="siCopyCmd()" style="font-size:11px;font-weight:700;background:rgba(0,136,255,0.14);border:1px solid rgba(0,136,255,0.4);border-radius:7px;color:#5bb8ff;cursor:pointer;padding:8px 12px;white-space:nowrap;flex-shrink:0;">⧉ Copy</button></div>'
       +'<div style="display:flex;gap:8px;margin-top:10px;">'
-      +'<button '+(fz?'disabled':'')+' onclick="siRunObsidivm()" style="flex:1;font-size:12px;font-weight:700;background:'+(fz?'rgba(255,255,255,0.05)':'linear-gradient(135deg,var(--brand),#00aa66)')+';border:none;border-radius:8px;color:'+(fz?'#556':'#001a0e')+';cursor:'+(fz?'not-allowed':'pointer')+';padding:9px;">▶ Run a pass now</button>'
+      +'<button id="siRunBtn" '+(fz?'disabled':'')+' onclick="siRunObsidivm()" style="flex:1;font-size:12px;font-weight:700;background:'+(fz?'rgba(255,255,255,0.05)':'linear-gradient(135deg,var(--brand),#00aa66)')+';border:none;border-radius:8px;color:'+(fz?'#556':'#001a0e')+';cursor:'+(fz?'not-allowed':'pointer')+';padding:9px;">▶ Run a pass now</button>'
+      +'<button onclick="siStopRun()" style="font-size:11px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.2);border-radius:8px;color:#bcd;cursor:pointer;padding:9px 12px;">⏹ Stop</button>'
       +'<button onclick="siResetLineage()" style="font-size:11px;background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);border-radius:8px;color:#ff6b6b;cursor:pointer;padding:9px 14px;">↺ Reset</button></div>'
-      +'<div style="font-size:9.5px;color:#667;margin-top:6px;">▶ Copies the exact command to run in a terminal — no browser-exec route yet (honest by design).</div>'); }
+      +'<div style="display:flex;justify-content:space-between;margin-top:6px;"><div id="siRunState" style="font-size:9.5px;color:#667;">idle</div>'
+      +'<div style="font-size:9.5px;color:#667;">Runs the real obsidivm-evolve CLI on the server · live log in bench/obsidivm-evolution/run-live.log</div></div>'
+      +'<div style="font-size:9.5px;color:#667;margin-top:6px;">▶ Runs the real obsidivm-evolve CLI server-side (single-run lock, live log) · ⏹ stops it · ↺ resets the lineage.</div>'); }
 
   function memoryCard(){ return card('T3MP3ST Agent Memory','REAL','#0088ff','Distills facts from runs into proposals you accept — persistent knowledge across missions. Human-gated by design.',
     '<div id="siMemBody" style="font-size:11px;color:#7f93a5;">Loading memory…</div>'
@@ -25331,8 +25458,23 @@ Be specific and actionable. Format as structured JSON.`;
   window.siToggleFreeze=function(){ CFG.frozen=!CFG.frozen; saveCfg(CFG); renderSelfImprove(); if(window.toast) toast(CFG.frozen?'❄ Self-improvement frozen':'Self-improvement unfrozen',CFG.frozen?'warning':'info'); };
   window.siSetObs=function(k,v){ CFG.obsidivm[k]=v; saveCfg(CFG); const c=document.getElementById('siObsCmd'); if(c) c.textContent=obsidivmCommand(CFG); };
   window.siCopyCmd=function(){ const cmd=obsidivmCommand(CFG); try{ navigator.clipboard&&navigator.clipboard.writeText(cmd); }catch(e){} if(window.toast) toast('Command copied — run it in your terminal','success'); };
-  window.siRunObsidivm=function(){ if(CFG.frozen){ if(window.toast) toast('Unfreeze self-improvement first','warning'); return; } window.siCopyCmd(); };
-  window.siResetLineage=function(){ if(!confirm('Reset the OBSIDIVM lineage? Wipes accumulated tactics + generations. (Copies the reset command.)')) return; try{ navigator.clipboard&&navigator.clipboard.writeText('npm run obsidivm:evolve:reset'); }catch(e){} if(window.toast) toast('Reset command copied','info'); };
+  window.siRunObsidivm=async function(){ if(CFG.frozen){ if(window.toast) toast('Unfreeze self-improvement first','warning'); return; }
+    try{ const r=await fetch(base()+'/api/selfimprove/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(CFG.obsidivm||{})});
+      const j=await r.json().catch(()=>({}));
+      if(r.status===409){ if(window.toast) toast(j.error||'A pass is already running','warning'); siRefreshRunBtn(); return; }
+      if(!r.ok){ if(window.toast) toast(j.error||'Run failed','error'); return; }
+      if(window.toast) toast('🧬 Pass started — watch the timeline + log','success');
+      siRefreshRunBtn(); setTimeout(loadLedger,3000);
+    }catch(e){ if(window.toast) toast('Run failed: '+e.message,'error'); } };
+  window.siRefreshRunBtn=async function(){ try{ const j=await (await siFetch('/api/selfimprove/run')).json(); const btn=document.getElementById('siRunBtn'); const st=document.getElementById('siRunState');
+      if(btn){ btn.disabled=!!j.running||CFG.frozen; btn.textContent=j.running?'⏳ Pass running…':'▶ Run a pass now'; }
+      if(st) st.textContent=j.running?('running since '+(j.startedAt||'').slice(11,19)+' · hunter '+j.hunter):'idle';
+    }catch(e){} };
+  window.siStopRun=async function(){ try{ const r=await fetch(base()+'/api/selfimprove/run/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); if(window.toast) toast(r.ok?'⏹ Stop signalled':'Stop failed',r.ok?'info':'error'); setTimeout(siRefreshRunBtn,1500); }catch(e){ if(window.toast) toast('Stop failed: '+e.message,'error'); } };
+  window.siResetLineage=async function(){ if(!confirm('Reset the OBSIDIVM lineage? Wipes accumulated tactics + generations.')) return;
+    try{ const r=await fetch(base()+'/api/selfimprove/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); const j=await r.json().catch(()=>({}));
+      if(window.toast) toast(r.ok?'↺ Lineage reset':'Reset failed: '+(j.error||''),'info');
+      loadLedger(); }catch(e){ if(window.toast) toast('Reset failed: '+e.message,'error'); } };
   window.siRunReview=async function(){ try{ await fetch(base()+'/api/learning/run-review',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); if(window.toast) toast('Review pass triggered','success'); setTimeout(loadMemory,600); }catch(e){ if(window.toast) toast('Review failed: '+e.message,'error'); } };
   window.siMem=async function(id,action){ try{ await fetch(base()+'/api/memory/proposals/'+id+'/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); if(window.toast) toast('Memory '+action+'ed','success'); loadMemory(); }catch(e){ if(window.toast) toast('Failed: '+e.message,'error'); } };
   window.siDismissNotif=function(){ const m=document.getElementById('siNotif'); if(m) m.style.display='none'; };
@@ -25343,7 +25485,10 @@ Be specific and actionable. Format as structured JSON.`;
   // Also self-heals the tab: if it's the active page, re-pull the timeline + memory each tick so a
   // reconnect after an Offline transient recovers the loaders without a manual refresh.
   setTimeout(checkCompletion,2500);
+  if(document.getElementById("siRoot")) setTimeout(function(){ try{ window.renderSelfImprove(); }catch(e){} },100);
   setInterval(function(){ checkCompletion(); const p=document.getElementById('page-selfimprove'); if(p&&p.classList.contains('active')){ loadLedger(); loadMemory(); } },20000);
+  // Cadence scheduler — non-manual cadences auto-trigger a pass when the last generation is older than the interval. Respects freeze + single-run lock.
+  setInterval(async function(){ try{ CFG=loadCfg(); if(CFG.frozen||CFG.cadence==='manual') return; const rj=await (await siFetch('/api/selfimprove/run')).json(); if(rj.running) return; const led=await (await siFetch('/api/selfimprove/ledger')).json(); const gens=(led&&led.generations)||[]; if(!gens.length) return; const last=+(new Date(gens[gens.length-1].timestamp)); const ival={hourly:3600e3,daily:86400e3,weekly:604800e3}[CFG.cadence]||0; if(!ival) return; if(Date.now()-last>=ival){ if(window.toast) toast('Cadence due ('+CFG.cadence+') — starting pass','info'); window.siRunObsidivm(); } }catch(e){} },60000);
 })();
 </script>
 

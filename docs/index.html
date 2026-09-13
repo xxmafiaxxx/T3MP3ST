@@ -6050,6 +6050,7 @@ Correlating findings across agents, identifying patterns, producing actionable i
         }
 
         function saveState() {
+            try { if (typeof queueSettingsSync === 'function') queueSettingsSync(state.settings); } catch (_) {}
                         // Storage failures (quota exceeded on a fat findings list, private-mode blocks)
             // must NEVER be silent — a silent throw here reads to the operator as "settings do not save".
             try {
@@ -20796,7 +20797,124 @@ ${entries}
             }
 
             renderConfigLibrary();
-            toast(`🗑️ Deleted "${config.name}"`, 'warning');
+            toast(`🗑️ Deleted "${config.name}
+        // ── Config Library: click-to-edit editor ──
+        function openConfigEditor(configId, evt) {
+            if (evt && evt.target && evt.target.closest && evt.target.closest('button')) return; // action buttons keep their own handlers
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const esc = (v) => escapeHtml(String(v == null ? '' : v));
+            const opsHtml = OPERATORS.map(o => {
+                const on = (config.operators || []).includes(o.id);
+                return '<label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:6px;cursor:pointer;font-size:11px;color:#ccc;">' +
+                    '<input type="checkbox" class="cfg-edit-op" data-op="' + o.id + '"' + (on ? ' checked' : '') + ' onchange="renderConfigEditorOps()"> ' +
+                    '<span>' + esc(o.icon || '') + ' ' + esc(o.name || o.id) + '</span></label>';
+            }).join('');
+            const html =
+                '<div style="font-size:11px;color:#888;">Saved ' + esc(new Date(config.savedAt).toLocaleString()) + ' · score ' + esc(config.score) + '% (read-only — re-benchmark to update)</div>' +
+                '<div style="margin-top:10px;display:grid;gap:8px;">' +
+                  '<label style="font-size:11px;color:#888;">NAME<input id="cfgEditName" value="' + esc(config.name) + '" style="width:100%;margin-top:3px;padding:7px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#fff;font-size:12px;"></label>' +
+                  '<label style="font-size:11px;color:#888;">MODEL<input id="cfgEditModel" value="' + esc(config.model || '') + '" placeholder="e.g. z-ai/glm-5.3-flash" style="width:100%;margin-top:3px;padding:7px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#fff;font-size:12px;"></label>' +
+                  '<div><div style="font-size:11px;color:#888;margin-bottom:4px;">OPERATORS IN THIS CONFIG</div>' +
+                  '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;">' + opsHtml + '</div></div>' +
+                  '<div><div style="font-size:11px;color:#888;margin-bottom:4px;">PER-OPERATOR SETTINGS</div><div id="cfgEditOps" style="display:grid;gap:8px;"></div></div>' +
+                '</div>' +
+                '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">' +
+                  '<button class="btn btn-primary" onclick="saveConfigEdits(\'' + configId + '\')">💾 Save Changes</button>' +
+                  '<button class="btn" onclick="duplicateConfig(\'' + configId + '\')" style="background:rgba(255,255,255,0.08);border:1px solid #333;color:#ccc;">⧉ Duplicate</button>' +
+                  '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+                '</div>';
+            openModal('⚙️ Edit Config — ' + config.name, html);
+            renderConfigEditorOps(config);
+        }
+
+        function renderConfigEditorOps(config) {
+            const container = document.getElementById('cfgEditOps');
+            if (!container) return;
+            const selected = [...document.querySelectorAll('.cfg-edit-op:checked')].map(cb => cb.getAttribute('data-op'));
+            const esc = (v) => escapeHtml(String(v == null ? '' : v));
+            container.innerHTML = selected.length === 0
+                ? '<div style="font-size:11px;color:#666;padding:8px;">No operators selected — tick at least one above.</div>'
+                : selected.map(opId => {
+                    const oc = (config.operatorConfigs || {})[opId] || {};
+                    const p = oc.params || {};
+                    const tools = Array.isArray(oc.tools) ? oc.tools.join(', ') : '';
+                    return '<div style="padding:10px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">' +
+                        '<div style="font-size:12px;font-weight:bold;color:#fff;margin-bottom:6px;">' + esc(opId) + '</div>' +
+                        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+                          '<label style="font-size:10px;color:#888;">TEMP <input id="cfgEditTemp-' + esc(opId) + '" type="number" min="0" max="1" step="0.05" value="' + (p.temperature != null ? p.temperature : 0.4) + '" style="width:70px;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                          '<label style="font-size:10px;color:#888;">MAX TOKENS <input id="cfgEditTokens-' + esc(opId) + '" type="number" min="128" step="128" value="' + (p.maxTokens != null ? p.maxTokens : 4096) + '" style="width:90px;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                          '<label style="font-size:10px;color:#888;flex:1;min-width:220px;">TOOLS (comma-separated) <input id="cfgEditTools-' + esc(opId) + '" value="' + esc(tools) + '" placeholder="empty = archetype defaults" style="width:100%;padding:4px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:4px;color:#fff;"></label>' +
+                        '</div>' +
+                        '<label style="font-size:10px;color:#888;">SYSTEM PROMPT<textarea id="cfgEditPrompt-' + esc(opId) + '" rows="3" placeholder="empty = archetype default prompt" style="width:100%;padding:6px;background:rgba(0,0,0,0.35);border:1px solid #333;border-radius:6px;color:#ddd;font-size:11px;font-family:inherit;resize:vertical;">' + esc(oc.systemPrompt || '') + '</textarea></label>' +
+                      '</div>';
+                  }).join('');
+        }
+
+        function saveConfigEdits(configId) {
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const name = (document.getElementById('cfgEditName') || {}).value || '';
+            if (!name.trim()) { toast('Config name cannot be empty', 'error'); return; }
+            const num = (id, def, min, max) => {
+                const el = document.getElementById(id);
+                let v = el ? parseFloat(el.value) : NaN;
+                if (!isFinite(v)) return def;
+                return Math.min(max, Math.max(min, v));
+            };
+            const selected = [...document.querySelectorAll('.cfg-edit-op:checked')].map(cb => cb.getAttribute('data-op'));
+            if (selected.length === 0) { toast('Select at least one operator', 'error'); return; }
+            config.name = name.trim();
+            const modelEl = document.getElementById('cfgEditModel');
+            if (modelEl) config.model = modelEl.value.trim() || config.model;
+            config.operators = selected;
+            config.operatorConfigs = config.operatorConfigs || {};
+            selected.forEach(opId => {
+                const existing = config.operatorConfigs[opId] || {};
+                const temp = num('cfgEditTemp-' + opId, (existing.params || {}).temperature != null ? existing.params.temperature : 0.4, 0, 1);
+                const tokens = Math.round(num('cfgEditTokens-' + opId, (existing.params || {}).maxTokens != null ? existing.params.maxTokens : 4096, 128, 200000));
+                const toolsStr = ((document.getElementById('cfgEditTools-' + opId) || {}).value || '').trim();
+                const promptEl = document.getElementById('cfgEditPrompt-' + opId);
+                const prompt = promptEl ? promptEl.value : (existing.systemPrompt || '');
+                config.operatorConfigs[opId] = {
+                    ...existing,
+                    tools: toolsStr ? toolsStr.split(',').map(t => t.trim()).filter(Boolean) : (existing.tools || []),
+                    params: { ...((existing.params) || {}), temperature: temp, maxTokens: tokens },
+                    systemPrompt: prompt.trim() || existing.systemPrompt || ''
+                };
+            });
+            config.lastEditedAt = new Date().toISOString();
+            saveConfigLibrary(library);
+            renderConfigLibrary();
+            try { updateCurrentConfigSummary(); } catch (_) {}
+            closeModal();
+            toast('💾 Saved edits to "' + config.name + '"', 'success');
+            addIntel('CONFIG', 'Edited config: ' + config.name, 'success');
+        }
+
+        function duplicateConfig(configId) {
+            const library = getConfigLibrary();
+            const config = library.find(c => c.id === configId);
+            if (!config) { toast('Config not found', 'error'); return; }
+            const copy = JSON.parse(JSON.stringify(config));
+            copy.id = 'config_' + Date.now();
+            copy.name = config.name + ' (copy)';
+            copy.savedAt = new Date().toISOString();
+            delete copy.lastEditedAt;
+            const idx = library.findIndex(c => c.id === configId);
+            library.splice(idx + 1, 0, copy);
+            if (library.length > 20) library.pop();
+            saveConfigLibrary(library);
+            renderConfigLibrary();
+            toast('⧉ Duplicated as "' + copy.name + '"', 'success');
+        }
+        window.openConfigEditor = openConfigEditor;
+        window.saveConfigEdits = saveConfigEdits;
+        window.duplicateConfig = duplicateConfig;
+        window.renderConfigEditorOps = renderConfigEditorOps;
+"`, 'warning');
         }
 
         // Render config library
@@ -20848,7 +20966,8 @@ ${entries}
                 const savedTime = new Date(config.savedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
                 return `
-                <div class="config-card" style="
+                <div class="config-card" data-config-id="${config.id}" onclick="openConfigEditor('${config.id}', event)" style="
+                    cursor: pointer;
                     background: ${isDefault ? 'linear-gradient(135deg, rgba(255,215,0,0.1), rgba(136,0,255,0.1))' : 'rgba(0,0,0,0.3)'};
                     border: 1px solid ${isDefault ? 'rgba(255,215,0,0.5)' : 'rgba(255,255,255,0.1)'};
                     border-radius: 12px;
@@ -27957,11 +28076,23 @@ Be specific and actionable. Format as structured JSON.`;
             const nodes = data.nodes || [];
             const paths = data.attackPaths || [];
             const summary = data.summary || {};
+            const containerEl0 = document.getElementById('targetMapNodesContainer');
+
+            // Honest empty state: an empty evidence ledger means an empty map (no placeholder hosts).
+            if (data.empty) {
+                if (containerEl0) containerEl0.innerHTML = `<div style="grid-column:1/-1;color:var(--text-muted);font-size:11px;padding:18px 8px;text-align:center;border:1px dashed rgba(255,255,255,0.15);border-radius:6px;">🗺️ ${escapeHtml(data.message || 'No targets with captured evidence yet — run a scan to populate the attack map.')}</div>`;
+                const pc0 = document.getElementById('targetMapPathsContainer');
+                if (pc0) pc0.innerHTML = `<div style="color:var(--text-muted); padding:16px; text-align:center;">No attack storylines yet — every step here is anchored to real captured evidence.</div>`;
+                const sb0 = document.getElementById('targetMapStatsBadge'); if (sb0) sb0.textContent = '0 Nodes / 0 Links';
+                const eb0 = document.getElementById('targetMapEpssBadge'); if (eb0) eb0.textContent = 'No evidence yet';
+                const svg0 = document.getElementById('targetMapSvgCanvas'); if (svg0) svg0.innerHTML = '';
+                return;
+            }
 
             const statsBadge = document.getElementById('targetMapStatsBadge');
             if (statsBadge) statsBadge.textContent = `${nodes.length} Nodes / ${data.links?.length || 0} Links`;
             const epssBadge = document.getElementById('targetMapEpssBadge');
-            if (epssBadge) epssBadge.textContent = `${summary.correlatedCveCount || 0} Live KEV Matches (${summary.highEpssCount || 0} High EPSS)`;
+            if (epssBadge) epssBadge.textContent = `${summary.correlatedCveCount || 0} Live KEV Matches (${summary.highEpssCount || 0} High EPSS) · 🎯 MISSION: FULL ASSET COMPROMISE`;
 
             // Render Graph Columns by Tier (1: Target, 2: Service, 3: CVE/Finding, 4: Loot, 5: Objective)
             const container = document.getElementById('targetMapNodesContainer');
@@ -27989,7 +28120,9 @@ Be specific and actionable. Format as structured JSON.`;
                                     <div class="tm-node-label" title="${escapeHtml(node.label)}">${escapeHtml(node.label)}</div>
                                     <div class="tm-node-sub">
                                         <span style="font-family:monospace; color:${node.severity === 'critical' ? 'var(--danger)' : node.severity === 'high' ? 'var(--warning)' : 'var(--cyan)'};">${(node.severity || 'INFO').toUpperCase()}</span>
-                                        <span style="color:var(--brand); font-size:8.5px;">⚡ Plan ↗</span>
+                                        ${node.type === 'objective'
+                                            ? `<button type="button" onclick="event.stopPropagation();runAttackPlan('${node.targetHost}')" title="Execute the laid-out plan (surface enum + KEV exploitability probes) — objective: FULL ASSET COMPROMISE" style="margin-left:auto;font-size:8.5px;padding:2px 7px;border-radius:3px;cursor:pointer;background:rgba(0,255,136,0.18);border:1px solid var(--brand);color:var(--brand);font-weight:700;">▶ RUN</button>`
+                                            : `<span style="color:var(--brand); font-size:8.5px;">⚡ Plan ↗</span>`}
                                     </div>
                                 </div>
                             `).join('')}
@@ -28008,7 +28141,10 @@ Be specific and actionable. Format as structured JSON.`;
                         <div style="background:var(--bg-secondary); border:1px solid var(--border-color); border-left:3px solid var(--danger); border-radius:6px; padding:12px; margin-bottom:10px;">
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                                 <span style="font-weight:700; color:#fff; font-size:12px;">🗡️ Path #${pIdx+1}: ${escapeHtml(p.title)}</span>
-                                <span style="background:rgba(255,71,87,0.2); color:var(--danger); border:1px solid var(--danger); font-size:9px; padding:2px 6px; border-radius:4px;">${p.severity} · ${p.exploitability}</span>
+                                <span style="display:inline-flex;align-items:center;gap:8px;">
+                                    <span style="background:rgba(255,71,87,0.2); color:var(--danger); border:1px solid var(--danger); font-size:9px; padding:2px 6px; border-radius:4px;">${p.severity} · ${p.exploitability}</span>
+                                    ${p.targetHost ? `<button type="button" onclick="runAttackPlan('${p.targetHost}')" title="Execute this storyline's plan — objective: FULL ASSET COMPROMISE" style="font-size:9.5px;padding:3px 10px;border-radius:4px;cursor:pointer;background:rgba(0,255,136,0.18);border:1px solid var(--brand);color:var(--brand);font-weight:700;">▶ RUN</button>` : ''}
+                                </span>
                             </div>
                             <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:8px;">
                                 ${p.steps.map(s => `<div style="color:var(--text-secondary); font-size:10.5px; padding-left:8px; border-left:2px solid rgba(0,255,136,0.3);">${escapeHtml(s)}</div>`).join('')}
@@ -28070,6 +28206,29 @@ Be specific and actionable. Format as structured JSON.`;
 
             let cveHtml = '';
             if (node.cveData) {
+                const cat = node.cveData.payloads || null;
+                const payloadsHtml = cat ? `
+                    <div style="background:rgba(0,229,255,0.05); border:1px solid rgba(0,229,255,0.4); border-radius:6px; padding:12px; margin-top:6px;">
+                        <div style="font-size:11px; font-weight:700; color:var(--cyan); margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+                            <span>🧨 EXPLOIT PAYLOADS (${cat.payloads.length}) — ${cat.class}</span>
+                            <span style="font-size:9px; padding:2px 6px; border-radius:3px; ${cat.maturity === 'confirmed-poc' ? 'background:rgba(0,255,136,0.15); color:var(--brand);' : 'background:rgba(255,170,0,0.15); color:var(--warning);'}">${cat.maturity === 'confirmed-poc' ? '✅ CANONICAL POC' : '⚠️ VALIDATE IN LAB'}</span>
+                        </div>
+                        ${cat.payloads.map((p, pi) => `
+                            <div style="margin-bottom:8px; background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.07); border-radius:5px; padding:9px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                                    <b style="font-size:10.5px; color:#fff;">${escapeHtml(p.name)}</b>
+                                    <span style="display:inline-flex; gap:6px; align-items:center;">
+                                        <span style="font-size:9px; padding:1px 6px; border-radius:3px; background:rgba(168,85,247,0.15); color:var(--purple); border:1px solid rgba(168,85,247,0.35);">${escapeHtml(p.placement.toUpperCase())}</span>
+                                        <button class="btn btn-secondary sm" style="font-size:9px; padding:2px 8px;" onclick="copyTargetMapPayload('${escapeHtml(node.cveData.cveId)}', ${pi})">📋 Copy</button>
+                                    </span>
+                                </div>
+                                <pre style="margin:0; white-space:pre-wrap; word-break:break-all; font-family:'JetBrains Mono',monospace; font-size:10px; color:#2fffd2; max-height:220px; overflow:auto; user-select:all;">${escapeHtml(p.value)}</pre>
+                                ${p.notes ? `<div style="font-size:9.5px; color:var(--text-secondary); margin-top:5px; line-height:1.4;">${escapeHtml(p.notes)}</div>` : ''}
+                            </div>
+                        `).join('')}
+                        ${cat.notes ? `<div style="font-size:9.5px; color:var(--text-secondary); margin-top:4px;">ℹ️ ${escapeHtml(cat.notes)}</div>` : ''}
+                        <div style="font-size:9px; color:var(--danger); margin-top:6px; font-weight:700;">⚠️ Authorized targets only — lab and receipted scope. Canary/inert variants fire an inert marker instead of live commands.</div>
+                    </div>` : '';
                 cveHtml = `
                     <div style="background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.3); border-radius:6px; padding:12px; margin-top:6px;">
                         <div style="font-size:11px; font-weight:700; color:var(--purple); margin-bottom:6px; display:flex; justify-content:space-between;">
@@ -28080,6 +28239,7 @@ Be specific and actionable. Format as structured JSON.`;
                         ${node.cveData.knownRansomware ? '<div style="color:var(--danger); font-size:10px; font-weight:700; margin-top:4px;">⚠️ Actively weaponized in Known Ransomware Campaigns</div>' : ''}
                         ${node.cveData.cisaAction ? `<div style="font-size:10px; color:var(--text-secondary); margin-top:4px;"><b>CISA Action:</b> ${escapeHtml(node.cveData.cisaAction)}</div>` : ''}
                     </div>
+                    ${payloadsHtml}
                 `;
             }
 
@@ -28104,6 +28264,24 @@ Be specific and actionable. Format as structured JSON.`;
                     ` : ''}
                     <div style="font-size:10px; color:var(--text-secondary); margin-top:4px;">Recommended Arsenal Tool: <b style="color:var(--brand);">${escapeHtml(node.recommendedTool || 'Nuclei / Nmap')}</b></div>
                 </div>
+                ${node.type === 'objective' && Array.isArray(node.plan) ? `
+                <div style="background:rgba(0,255,136,0.05); border:1px solid var(--brand); border-radius:6px; padding:12px;">
+                    <div style="font-size:11px; font-weight:700; color:var(--brand); margin-bottom:6px;">👑 EXECUTABLE PLAN — FULL ASSET COMPROMISE (${node.plan.length} steps, evidence-anchored)</div>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        ${node.plan.map((s, i) => `
+                            <div style="display:flex; gap:8px; align-items:flex-start; font-size:10.5px; color:var(--text-primary);">
+                                <span style="color:var(--brand); font-weight:700; min-width:18px;">${i + 1}.</span>
+                                <div style="flex:1;">
+                                    <div style="color:#fff;"><b>${escapeHtml(s.title)}</b> <span style="font-size:9px; padding:1px 5px; border-radius:3px; background:rgba(0,229,255,0.12); color:var(--cyan); border:1px solid rgba(0,229,255,0.3);">${s.kind === 'probe' ? '🧪 PROBE' : '⌨️ COMMAND'}</span></div>
+                                    ${s.rationale ? `<div style="color:var(--text-muted); margin-top:2px;">${escapeHtml(s.rationale)}</div>` : ''}
+                                    ${s.command ? `<code style="display:block; margin-top:3px; padding:5px 8px; background:#03080d; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:10px; color:#2fffd2; word-break:break-all;">$ ${escapeHtml(s.command)}</code>` : ''}
+                                    ${s.checkId ? `<div style="margin-top:3px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--cyan);">probe: ${escapeHtml(s.checkId)} → ${escapeHtml(s.target || '')}</div>` : ''}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <button type="button" onclick="closeTargetMapModal();runAttackPlan('${node.targetHost}')" style="margin-top:10px; width:100%; font-size:11.5px; font-weight:700; padding:8px; border-radius:5px; cursor:pointer; background:rgba(0,255,136,0.2); border:1px solid var(--brand); color:var(--brand);">▶ EXECUTE PLAN — MISSION: FULL ASSET COMPROMISE</button>
+                </div>` : ''}
             `;
 
             let probeBtn = '';
@@ -28124,6 +28302,69 @@ Be specific and actionable. Format as structured JSON.`;
             const overlay = document.getElementById('targetMapModalOverlay');
             if (overlay) overlay.classList.remove('active');
         }
+
+        // Copy a catalog payload straight from the live map data (no attribute-escaping pitfalls).
+        function copyTargetMapPayload(cveId, payloadIdx) {
+            const node = (window._targetMapData?.nodes || []).find(n => n.cveData?.cveId === cveId && n.cveData?.payloads);
+            const p = node?.cveData?.payloads?.payloads?.[payloadIdx];
+            if (!p) return;
+            navigator.clipboard.writeText(p.value).then(() => {
+                if (typeof toast === 'function') toast(`📋 ${cveId} payload copied (${p.placement})`, 'success');
+            }).catch(() => {
+                if (typeof toast === 'function') toast('Clipboard unavailable', 'error');
+            });
+        }
+        window.copyTargetMapPayload = copyTargetMapPayload;
+
+        // ═══ OBJECTIVE PLAN RUNNER — execute the laid-out attack plan ═══
+        // One click runs the objective's evidence-anchored plan (surface enumeration +
+        // KEV exploitability probes). The receipt dance mirrors mission-start: a minted
+        // approval is auto-approved (the click IS the operator's authorization) and the
+        // run retried with the approvalId. Objective is ALWAYS full asset compromise.
+        window._attackPlanRunning = {};
+        async function runAttackPlan(targetHost) {
+            if (!targetHost) return;
+            if (window._attackPlanRunning[targetHost]) {
+                if (typeof toast === 'function') toast('Plan already running for ' + targetHost, 'warning');
+                return;
+            }
+            window._attackPlanRunning[targetHost] = true;
+            if (typeof addIntel === 'function') addIntel('TARGETMAP', `▶ Executing FULL ASSET COMPROMISE plan for ${targetHost}...`, 'info');
+            if (typeof toast === 'function') toast(`▶ Running attack plan for ${targetHost} — objective: FULL ASSET COMPROMISE`);
+            try {
+                let r = await fetch('/api/mission/target-map/run', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target: targetHost })
+                });
+                let data = await r.json();
+                if (data.approval && data.approval.id) {
+                    if (typeof addIntel === 'function') addIntel('TARGETMAP', `🔐 Receipt ${data.approval.id} minted — approving (operator click is the authorization)`, 'warning');
+                    const ap = await fetch(`/api/approvals/${data.approval.id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                    if (!ap.ok) throw new Error('Approval failed (' + ap.status + ')');
+                    r = await fetch('/api/mission/target-map/run', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ target: targetHost, approvalId: data.approval.id })
+                    });
+                    data = await r.json();
+                }
+                if (!data.success) throw new Error(data.error || 'Plan run failed');
+                (data.steps || []).forEach((s, i) => {
+                    if (typeof addIntel === 'function') {
+                        const mark = s.status === 'confirmed' ? '💥' : s.status === 'ran' ? '✅' : '❌';
+                        addIntel('TARGETMAP', `${mark} Step ${i + 1}/${data.steps.length} [${s.status.toUpperCase()}] ${s.title} (${Math.round(s.durationMs / 100) / 10}s) — ${s.detail}`, s.status === 'confirmed' ? 'success' : (s.status === 'ran' ? 'info' : 'error'));
+                    }
+                });
+                if (typeof addIntel === 'function') addIntel('TARGETMAP', `👑 PLAN COMPLETE for ${targetHost}: ${data.summary || ''}`, 'success');
+                if (typeof toast === 'function') toast(`👑 Plan complete for ${targetHost} — ${(data.steps || []).length} steps executed`, 'success');
+                refreshTargetMap();
+            } catch (err) {
+                if (typeof addIntel === 'function') addIntel('TARGETMAP', `❌ Plan run failed for ${targetHost}: ${err.message}`, 'error');
+                if (typeof toast === 'function') toast(`❌ Plan run failed: ${err.message}`, 'error');
+            } finally {
+                window._attackPlanRunning[targetHost] = false;
+            }
+        }
+        window.runAttackPlan = runAttackPlan;
 
         async function dispatchTargetMapProbe(cveId, target) {
             if (typeof toast === 'function') toast(`🚀 Dispatching active Rapid Response probe for ${cveId} on ${target}...`);

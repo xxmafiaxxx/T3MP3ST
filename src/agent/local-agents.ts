@@ -443,7 +443,7 @@ export function resolveBin(bin: string): string | undefined {
  * prompt text. cmd.exe does not treat & | < > as metacharacters inside double quotes, so quoted args
  * containing them still arrive as literals.
  */
-function spawnAgent(resolvedBin: string, args: string[], options: import('child_process').SpawnOptions): import('child_process').ChildProcess {
+export function spawnAgent(resolvedBin: string, args: string[], options: import('child_process').SpawnOptions): import('child_process').ChildProcess {
   if (!needsShell(resolvedBin)) return spawn(resolvedBin, args, { ...options, shell: false });
   const command = [resolvedBin, ...args].map(quoteWindowsArg).join(' ');
   return spawn(command, { ...options, shell: true });
@@ -456,7 +456,7 @@ function spawnAgent(resolvedBin: string, args: string[], options: import('child_
  * quote AND cmd.exe's toggle parser reads as state-neutral, so `| & < >` inside quotes stay literal.
  * Backslash runs are doubled where they precede a quote (CRT rule); cmd.exe ignores them either way.
  */
-function quoteWindowsArg(arg: string): string {
+export function quoteWindowsArg(arg: string): string {
   if (arg !== '' && !/[\s"|&<>^]/.test(arg)) return arg;
   let out = '"';
   let backslashes = 0;
@@ -474,7 +474,7 @@ function quoteWindowsArg(arg: string): string {
   return out + '\\'.repeat(backslashes * 2) + '"';
 }
 
-function needsShell(resolvedBin: string): boolean {
+export function needsShell(resolvedBin: string): boolean {
   return isWin32() && /\.(cmd|bat)$/i.test(resolvedBin);
 }
 

@@ -16,6 +16,64 @@
     try { embedded = window.self !== window.top; } catch (e) { embedded = true; }
     window.__t3mpEmbedded = embedded;
 
+    /* ---------- operator settings → server settings DB ---------- */
+    // Settings used to live ONLY in each browser's localStorage — a restart, a second
+    // browser, or a cleared cache lost them. saveState() on every page now also pushes
+    // the settings blob to the server's settings DB (debounced), and on boot this bridge
+    // merges server-saved settings back into any browser that is missing them.
+    var _settingsSyncTimer = null;
+    function queueSettingsSync(settings) {
+        if (!settings || typeof settings !== 'object') return;
+        if (_settingsSyncTimer) clearTimeout(_settingsSyncTimer);
+        _settingsSyncTimer = setTimeout(function () {
+            try {
+                fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ settings: settings, reason: 'ui.save' })
+                }).catch(function () { /* server down — local storage still holds them */ });
+            } catch (e) { /* noop */ }
+        }, 600);
+    }
+    window.queueSettingsSync = queueSettingsSync;
+
+    function restoreServerSettings() {
+        try {
+            fetch('/api/settings').then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+                var srv = d && d.settings;
+                if (!srv) return;
+                var blob = {};
+                try { blob = JSON.parse(localStorage.getItem('t3mp3st') || '{}') || {}; } catch (e) { blob = {}; }
+                blob.settings = blob.settings || {};
+                var changed = 0;
+                Object.keys(srv).forEach(function (k) {
+                    var cur = blob.settings[k];
+                    var v = srv[k];
+                    if ((cur === undefined || cur === null || cur === '') && v !== undefined && v !== null && v !== '') {
+                        blob.settings[k] = v;
+                        changed++;
+                    }
+                });
+                if (srv.proxyUrl && !localStorage.getItem('t3mp3st_proxy_url')) {
+                    localStorage.setItem('t3mp3st_proxy_url', String(srv.proxyUrl));
+                    changed++;
+                }
+                if (changed > 0) {
+                    localStorage.setItem('t3mp3st', JSON.stringify(blob));
+                    // The page's own pollers call saveState() and would write the PRE-merge
+                    // in-memory state back over the restored blob. A single reload boots the
+                    // page with the restored settings; the next pass finds nothing missing
+                    // (changed=0) so this is self-terminating, never a loop.
+                    setTimeout(function () { location.reload(); }, 50);
+                    return;
+                }
+            }).catch(function () { /* server down */ });
+        } catch (e) { /* noop */ }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(restoreServerSettings, 1500); });
+    else setTimeout(restoreServerSettings, 1500);
+
+
     /* ---------- nav routing (both modes) ---------- */
     document.addEventListener('click', function (ev) {
         if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;

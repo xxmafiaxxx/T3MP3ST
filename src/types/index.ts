@@ -294,6 +294,7 @@ export interface Credential {
   discoveredAt: number;
   validatedAt?: number;
   privilegeLevel?: 'user' | 'admin' | 'system' | 'root';
+  notes?: string;
 }
 
 // =============================================================================
