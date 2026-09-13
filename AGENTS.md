@@ -1583,3 +1583,25 @@ Unchanged and still present from the prior verification: `t3mpEmbedGuard` (shell
 - `.gitignore` + probe detritus (`src/__tests__/cve-payloads.test.ts` + `src/tools/cve-payloads.ts` + `src/tools/cve-woltlab-catalog.ts` still on disk as untracked) left as-is — next `git add` will not pick up `.fp_*`/`.b_*`/`*.stackdump`/`.bounup.html` etc. after the `.gitignore` append (`# transient probe / harvest detritus`).
 
 **Verified:** `npm run build → tsc` clean; `vm.Script` 114 inline blocks 0 fail; `GET /api/health` `ok:true` `llm:{provider:openrouter,model:z-ai/glm-5.3-flash,codexAccountMode:'/api/codex/status'}`; Codex status/probe/admiral converse/general plan all 200 live as above; no server restart needed for the docs patches (static from disk).
+
+### Follow-up 19 (2026-09-13) — Detailed GitHub PR published
+
+**Request:** "make note of all changes give a detailed PR on fithub"
+
+**Action:** committed the 35-file operator-plane layer and published **PR #218** against `elder-plinius/T3MP3ST`.
+
+- **Commit `92caa2e`** `feat: operator authorization receipts, Windows Codex spawn, Config Library + Op Admiral/General live, CVE payload & WoltLab catalog, shell tooltips & Codex AutoHunt degrade` — 35 files, +4427 / -252:
+  - `.gitignore` — `memory/` + transient probe detritus (`.fp_*`, `.b_*`, `*.stackdump`, `.bounup.html`, `.login.html`, `.memberlist.html`, `.core*.js`)
+  - `AGENTS.md` — session notes for the operator-plane work
+  - `bench/obsidivm-evolution/{current.md,ledger.json,proposals-ledger.json}` — evolution state refresh
+  - `docs/` — 14 pages Venice/Qwen 3.8 (`veniceModel` + `HF_DEFAULT_MODEL` + `disable_thinking`), `general.html` Codex AutoHunt honest degrade, `configs.html` + 14 pages `openConfigEditor`/`data-config-id`/`duplicateConfig`, 14-page `venice_parameters` + `llmTimeoutFor` 240s floor; `shell.html` 18 `title="…"` tooltips; `embed.js` settings sync
+  - `src/agent/local-agents.ts` — exported `resolveBin`/`spawnAgent`/`needsShell`/`quoteWindowsArg`
+  - `src/llm/index.ts` — `VeniceAdapter` + `CodexAdapter` shim-safe via `resolveBin`/`spawnAgent` + `stdout` null guards + `applyProviderRequestExtras`
+  - `src/server.ts` — `execVersionProbe` + 3 Codex spawn/probe sites shim-safe, `MissionAuthorization` threading (`setMissionAuthorization` on `TempestCommand` + propagation to `OperatorAgent` + `/api/mission/status`), settings DB (`GET/POST /api/settings` + `queueSettingsSync`/`restoreServerSettings`), CVE payload routes (`GET /api/cves/payloads`, WoltLab vendor mapping)
+  - `src/operators/index.ts` + `src/prompts/index.ts` — `MissionAuthorization` interface + `buildAuthorizationBlock` per-task prompt injection
+  - `src/recon/cve-correlator.ts` + `src/tools/cve-feed.ts` + `src/types/index.ts` (`Credential.notes` optional)
+  - `+ src/tools/cve-payloads.ts` (16 KEV entries) + `src/tools/cve-woltlab-catalog.ts` (53 CVEs) + `src/__tests__/cve-payloads.test.ts`
+- **Push:** `feat/threat-intel-cve-vault-dfir-suite` now 11 commits ahead of `upstream/main`.
+- **PR #218:** `https://github.com/elder-plinius/T3MP3ST/pull/218` — title `feat: Operator-authorized missions, Windows Codex spawn, Config Library + Op Admiral/General live, CVE payload & WoltLab catalog, shell tooltips & Codex AutoHunt` (open, draft:false, maintainer_can_modify:true) with full summary table + commit list + file list + implementation notes + live verification. Token-bearing scratch script deleted before push.
+- **Bench `gen-004..011` dirs remain local-untracked** (evolution ledger noise, not in PR).
+- **Verified:** `npm run build` clean, branch pushed, PR 201 created via `api.github.com`.
