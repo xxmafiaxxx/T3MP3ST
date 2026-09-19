@@ -931,8 +931,7 @@
             document.getElementById('locateStatusText').textContent = '[1/' + stages.length + '] ' + stages[0] + '… (0s)';
             const ticker = setInterval(function () {
                 const elapsed = Math.round((Date.now() - t0) / 1000);
-                const waitMs = stages.length > 1 ? 4200 : Infinity;
-                if (elapsed / 1000 > (stageIdx + 1) * (waitMs / 1000) && stageIdx < stages.length - 1) stageIdx++;
+                if (elapsed > (stageIdx + 1) * 4.5 && stageIdx < stages.length - 1) stageIdx++;
                 document.getElementById('locateStatusText').textContent =
                     '[' + (stageIdx + 1) + '/' + stages.length + '] ' + stages[stageIdx] + '… (' + elapsed + 's elapsed)';
             }, 1000);

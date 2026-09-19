@@ -11927,7 +11927,13 @@ app.post('/api/ctf/range/probe', async (req: Request, res: Response): Promise<vo
 // matches the exact '/' path and never shadows the /api/* routes above.
 app.get('/', (_req: Request, res: Response) => res.redirect('/ui/'));
 
-app.use('/ui', express.static('docs', { index: 'shell.html' }));
+app.use('/ui', express.static('docs', {
+  index: 'shell.html',
+  setHeaders: (res, path) => {
+    // Operator pages iterate fast — never let a browser serve stale HTML/JS from cache.
+    if (path.endsWith('.html') || path.endsWith('.js')) res.setHeader('Cache-Control', 'no-cache');
+  },
+}));
 
 // Stale-bookmark convenience: every operator page lives under /ui/ (the shell mount), so a
 // root-level /ctf.html-style request 404s today. 301 the known pages to their shell location.
