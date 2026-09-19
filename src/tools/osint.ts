@@ -760,12 +760,15 @@ async function osintJsonWithFallback<T>(url: string, init: RequestInit = {}, hea
 async function leakcheckDeep(query: string, kind: 'email' | 'username' | 'phone' | 'domain'): Promise<DumpRecord | null> {
   const key = getDumpKey('leakcheck');
   if (!key) return null;
-  const j = await osintJsonWithFallback<{ success?: boolean; found?: number; result?: Record<string, string>[] }>(
+  const j = await osintJsonWithFallback<{ success?: boolean; found?: number; result?: Record<string, string>[]; error?: string }>(
     `https://leakcheck.io/api/v2/query/${encodeURIComponent(query)}?type=${kind}`,
     {},
     { 'X-API-Key': key }
   );
   if (!j) return { service: 'LeakCheck v2 (keyed)', found: 0, note: 'API unreachable via egress, Tor and direct' };
+  if (j.success === false || j.error) {
+    return { service: 'LeakCheck v2 (keyed)', found: 0, note: `LeakCheck API: ${j.error || 'request rejected'}` };
+  }
   return {
     service: 'LeakCheck v2 (keyed)',
     found: j.found ?? 0,
