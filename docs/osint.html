@@ -558,6 +558,16 @@
                             </div>
                             <div class="hint-line">Free lanes always run (LeakCheck public, XposedOrNot, HIBP Pwned Passwords). Deep dump lanes (LeakCheck v2, DeHashed, Snusbase) fire automatically when the operator configures keys — status below.</div>
                             <div id="dumpLaneStatus" style="margin-top:10px;"></div>
+                            <details style="margin-top:12px;border:1px solid var(--border-color);border-radius:6px;padding:10px 14px;background:var(--bg-primary);">
+                                <summary style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);">🔑 ARM DUMP LANES — paste your keys (live, no restart)</summary>
+                                <div class="hint-line" style="margin:8px 0;">Keys are stored server-side only (masked everywhere) and arm the deep lanes instantly. Get them: <a href="https://leakcheck.io" target="_blank" rel="noopener noreferrer" style="color:var(--info)">leakcheck.io</a> · <a href="https://www.dehashed.com" target="_blank" rel="noopener noreferrer" style="color:var(--info)">dehashed.com</a> (use `email:password` as the key) · <a href="https://snusbase.com" target="_blank" rel="noopener noreferrer" style="color:var(--info)">snusbase.com</a>. Leave blank = keep current.</div>
+                                <div class="locator-form">
+                                    <div class="search-box" style="min-width:180px;"><span>LC</span><input type="password" id="keyLeakcheck" placeholder="LeakCheck v2 key" autocomplete="off"></div>
+                                    <div class="search-box" style="min-width:180px;"><span>DH</span><input type="password" id="keyDehashed" placeholder="DeHashed user:key" autocomplete="off"></div>
+                                    <div class="search-box" style="min-width:180px;"><span>SB</span><input type="password" id="keySnusbase" placeholder="Snusbase key" autocomplete="off"></div>
+                                    <button class="btn primary" onclick="saveDumpKeys()">🔑 SAVE &amp; ARM</button>
+                                </div>
+                            </details>
                             <div id="breachOut" style="margin-top:14px;"></div>
                         </div>
                     </div>
@@ -1428,10 +1438,31 @@
                 const armed = d.lanes.filter(function (l) { return l.armed; }).length;
                 document.getElementById('statKeyedLanes').textContent = armed + '/' + d.lanes.length;
                 host.innerHTML = d.lanes.map(function (l) {
-                    return '<div class="dork-item" style="margin-bottom:4px;"><span class="label">' + (l.armed ? '🟢' : '🔒') + ' ' + escapeHtml(l.service) + '</span><span style="color:var(--text-muted);font-size:10.5px;">' + escapeHtml(l.unlocks) + (l.armed ? '' : ' — set ' + escapeHtml(l.envVar)) + '</span></div>';
+                    return '<div class="dork-item" style="margin-bottom:4px;"><span class="label">' + (l.armed ? '🟢' : '🔒') + ' ' + escapeHtml(l.service) + (l.armed ? ' ARMED' : '') + '</span><span style="color:var(--text-muted);font-size:10.5px;">' + escapeHtml(l.unlocks) + (l.armed ? '' : ' — ARM DUMP LANES below (or ' + escapeHtml(l.envVar) + ')') + '</span></div>';
                 }).join('');
             } catch (e) {
                 host.innerHTML = '<div class="hint-line">dump-status unavailable: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function saveDumpKeys() {
+            const payload = {};
+            const lc = document.getElementById('keyLeakcheck').value.trim();
+            const dh = document.getElementById('keyDehashed').value.trim();
+            const sb = document.getElementById('keySnusbase').value.trim();
+            if (lc) payload.leakcheck = lc;
+            if (dh) payload.dehashed = dh;
+            if (sb) payload.snusbase = sb;
+            if (!Object.keys(payload).length) { toast('Paste at least one key first (blank = keep current)', 'error'); return; }
+            try {
+                const d = await api('/api/osint/dump-keys', payload);
+                document.getElementById('keyLeakcheck').value = '';
+                document.getElementById('keyDehashed').value = '';
+                document.getElementById('keySnusbase').value = '';
+                toast('Dump lanes armed: ' + d.applied.join(', ') + ' — live immediately', 'success');
+                loadDumpStatus();
+            } catch (e) {
+                toast(e.message, 'error');
             }
         }
 

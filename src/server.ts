@@ -61,6 +61,9 @@ import {
   ahmiaSearch,
   onionFetch,
   torStatus,
+  setDumpKey,
+  isDumpKeyService,
+  dumpKeyStatus,
   type GeoPoint,
 } from './tools/osint.js';
 import {
@@ -7685,10 +7688,38 @@ app.get('/api/osint/dump-status', (_req: Request, res: Response) => {
     { service: 'DeHashed', envVar: 'T3MP3ST_DEHASHED_KEY', unlocks: 'deep-web breach search, 40B+ records (email/username)' },
     { service: 'Snusbase', envVar: 'T3MP3ST_SNUSBASE_KEY', unlocks: 'dump database search incl. phone lookups' },
   ];
+  const armed = dumpKeyStatus();
+  const byEnv: Record<string, boolean> = {
+    'T3MP3ST_LEAKCHECK_KEY': Boolean(process.env.T3MP3ST_LEAKCHECK_KEY),
+    'T3MP3ST_DEHASHED_KEY': Boolean(process.env.T3MP3ST_DEHASHED_KEY),
+    'T3MP3ST_SNUSBASE_KEY': Boolean(process.env.T3MP3ST_SNUSBASE_KEY),
+  };
   res.json({
     free: ['LeakCheck public', 'XposedOrNot', 'HIBP Pwned Passwords (k-anonymity)'],
-    lanes: lanes.map((l) => ({ ...l, armed: Boolean((process.env as Record<string, string | undefined>)[l.envVar]) })),
+    lanes: lanes.map((l) => {
+      const svc = l.envVar === 'T3MP3ST_LEAKCHECK_KEY' ? 'leakcheck' : l.envVar === 'T3MP3ST_DEHASHED_KEY' ? 'dehashed' : 'snusbase';
+      return { ...l, armed: armed[svc as keyof typeof armed], source: armed[svc as keyof typeof armed] ? (byEnv[l.envVar] ? 'env-or-runtime' : 'runtime') : 'none' };
+    }),
   });
+});
+
+// Arm/clear the deep dump lanes at runtime (persisted to the settings DB — masked in
+// every GET; the raw key never leaves the server). Keys take effect immediately.
+app.post('/api/osint/dump-keys', (req: Request, res: Response): void => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const applied: string[] = [];
+  for (const [service, raw] of Object.entries(body)) {
+    if (!isDumpKeyService(service)) continue;
+    const key = typeof raw === 'string' ? raw.trim() : '';
+    setDumpKey(service, key || undefined);
+    applied.push(service);
+    // Persist (opaque blob key) so arming survives restarts without env edits.
+    dbSettings[`osintDumpKeys.${service}`] = key || undefined;
+  }
+  if (applied.length === 0) { res.status(400).json({ error: 'no recognized service keys in body (leakcheck | dehashed | snusbase)' }); return; }
+  saveDbSettings('osint.dump-keys.updated');
+  console.log(`[T3MP3ST][OSINT] dump-lane keys updated: ${applied.join(', ')}`);
+  res.json({ success: true, applied, armed: dumpKeyStatus() });
 });
 
 app.post('/api/osint/username-sweep', async (req: Request, res: Response): Promise<void> => {
@@ -11980,6 +12011,13 @@ async function startServer() {
 
   await loadPersistedState();
   loadDbSettings();
+  // Restore runtime dump-lane keys persisted in the settings DB (values never leave the box).
+  for (const [k, v] of Object.entries(dbSettings)) {
+    if (k.startsWith('osintDumpKeys.') && typeof v === 'string' && v.trim()) {
+      const svc = k.slice('osintDumpKeys.'.length);
+      if (isDumpKeyService(svc)) setDumpKey(svc, v);
+    }
+  }
   try { reindexCredentialsFromLedgers(); } catch { /* ignore on boot */ }
 
   // Install the outbound SOCKS5 proxy (if TEMPEST_PROXY_URL / saved settings define one)

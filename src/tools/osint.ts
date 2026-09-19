@@ -684,15 +684,88 @@ interface DumpRecord {
   note?: string;
 }
 
+// --- runtime dump-lane keys (Settings-persisted; env fallback) ----------------
+// Keys arm LeakCheck v2 / DeHashed / Snusbase instantly from the UI — no restart.
+// Stored via the server's settings DB (memory/db-settings.json, gitignored) and
+// masked in every GET. No Tor dump-site harvesters: licensed services only.
+
+type DumpKeyService = 'leakcheck' | 'dehashed' | 'snusbase';
+const DUMP_KEY_SERVICES: DumpKeyService[] = ['leakcheck', 'dehashed', 'snusbase'];
+const dumpKeys: Partial<Record<DumpKeyService, string>> = {};
+const DUMP_ENV: Record<DumpKeyService, string> = {
+  leakcheck: 'T3MP3ST_LEAKCHECK_KEY',
+  dehashed: 'T3MP3ST_DEHASHED_KEY',
+  snusbase: 'T3MP3ST_SNUSBASE_KEY',
+};
+
+export function setDumpKey(service: DumpKeyService, key: string | undefined): void {
+  if (key && key.trim()) dumpKeys[service] = key.trim();
+  else delete dumpKeys[service];
+}
+
+export function getDumpKey(service: DumpKeyService): string | undefined {
+  return dumpKeys[service] || process.env[DUMP_ENV[service]] || undefined;
+}
+
+export function dumpKeyStatus(): Record<DumpKeyService, boolean> {
+  return {
+    leakcheck: Boolean(getDumpKey('leakcheck')),
+    dehashed: Boolean(getDumpKey('dehashed')),
+    snusbase: Boolean(getDumpKey('snusbase')),
+  };
+}
+
+export function isDumpKeyService(v: string): v is DumpKeyService {
+  return (DUMP_KEY_SERVICES as string[]).includes(v);
+}
+
+/** JSON fetch with the full fallback chain (egress → Tor → direct). The dump APIs
+ *  are third-party data platforms, not mission targets — the direct leg keeps them
+ *  usable when the shared proxy exit is blocked, and it is marked/kill-switched.
+ *  Any transport whose response parses as JSON wins (API-level errors like
+ *  "invalid key" arrive as JSON too — callers interpret the payload). */
+async function osintJsonWithFallback<T>(url: string, init: RequestInit = {}, headers: Record<string, string> = {}): Promise<T | null> {
+  const tryParse = (raw: string): T | null => {
+    const t = raw.trim();
+    if (!t.startsWith('{') && !t.startsWith('[')) return null;
+    try { return JSON.parse(t) as T; } catch { return null; }
+  };
+  try {
+    const res = await osintFetch(url, { ...init, headers });
+    const j = tryParse(await res.text().catch(() => ''));
+    if (j) return j;
+  } catch { /* fall through */ }
+  const tor = await torStatus();
+  if (tor.available) {
+    try {
+      const page = await torFetchAny(url);
+      const j = tryParse(page.body);
+      if (j) return j;
+    } catch { /* fall through */ }
+  }
+  if (directAllowed()) {
+    try {
+      const res = await directFetch(url, {
+        headers: { 'user-agent': UA, accept: 'application/json', ...headers },
+        signal: AbortSignal.timeout(15_000),
+      } as never);
+      const j = tryParse(await res.text().catch(() => ''));
+      if (j) return j;
+    } catch { /* all paths failed */ }
+  }
+  return null;
+}
+
 /** LeakCheck v2 — full records (incl. password fields when the dump has them). Key-gated. */
 async function leakcheckDeep(query: string, kind: 'email' | 'username' | 'phone' | 'domain'): Promise<DumpRecord | null> {
-  const key = process.env.T3MP3ST_LEAKCHECK_KEY;
+  const key = getDumpKey('leakcheck');
   if (!key) return null;
-  const r = await osintFetch(
+  const j = await osintJsonWithFallback<{ success?: boolean; found?: number; result?: Record<string, string>[] }>(
     `https://leakcheck.io/api/v2/query/${encodeURIComponent(query)}?type=${kind}`,
-    { headers: { 'X-API-Key': key } }
+    {},
+    { 'X-API-Key': key }
   );
-  const j = (await r.json().catch(() => ({}))) as { found?: number; result?: Record<string, string>[] };
+  if (!j) return { service: 'LeakCheck v2 (keyed)', found: 0, note: 'API unreachable via egress, Tor and direct' };
   return {
     service: 'LeakCheck v2 (keyed)',
     found: j.found ?? 0,
@@ -707,16 +780,14 @@ async function leakcheckDeep(query: string, kind: 'email' | 'username' | 'phone'
 
 /** DeHashed — deep-web breach search. Key-gated (basic auth user:key). */
 async function dehashedDeep(query: string, kind: 'email' | 'username' | 'phone'): Promise<DumpRecord | null> {
-  const key = process.env.T3MP3ST_DEHASHED_KEY;
+  const key = getDumpKey('dehashed');
   if (!key) return null;
-  const r = await osintFetch(
+  const j = await osintJsonWithFallback<{ total?: number; entries?: Record<string, string | null>[] }>(
     `https://api.dehashed.com/search?query=${encodeURIComponent(`${kind}:"${query}"`)}&size=50`,
-    { headers: { authorization: `Basic ${Buffer.from(key).toString('base64')}` } }
+    {},
+    { authorization: `Basic ${Buffer.from(key).toString('base64')}` }
   );
-  const j = (await r.json().catch(() => ({}))) as {
-    total?: number;
-    entries?: Record<string, string | null>[];
-  };
+  if (!j) return { service: 'DeHashed (keyed)', found: 0, note: 'API unreachable via egress, Tor and direct' };
   const str = (v: string | null | undefined): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
   return {
     service: 'DeHashed (keyed)',
@@ -732,13 +803,14 @@ async function dehashedDeep(query: string, kind: 'email' | 'username' | 'phone')
 
 /** Snusbase — dump database. Key-gated. */
 async function snusbaseDeep(query: string, kind: 'email' | 'username' | 'phone'): Promise<DumpRecord | null> {
-  const key = process.env.T3MP3ST_SNUSBASE_KEY;
+  const key = getDumpKey('snusbase');
   if (!key) return null;
-  const r = await osintFetch(
+  const j = await osintJsonWithFallback<{ result?: Record<string, string>[] }>(
     `https://api.snusbase.com/v2/user/search?type=${kind}&term=${encodeURIComponent(query)}`,
-    { headers: { auth: key } }
+    {},
+    { auth: key }
   );
-  const j = (await r.json().catch(() => ({}))) as { result?: Record<string, string>[] };
+  if (!j) return { service: 'Snusbase (keyed)', found: 0, note: 'API unreachable via egress, Tor and direct' };
   const records = (j.result || []).slice(0, 50);
   return {
     service: 'Snusbase (keyed)',
