@@ -16,6 +16,7 @@
 
 - site:venmo.com engine dorks + venmo.com/u/<handle> public profile deep link added to personDorks/report. NO Venmo endpoint probing, NO email→account enumeration (financial-platform intrusion refused).
 
+- **Follow-up fixes (same day):** locator progress ticker had a units bug (elapsed already seconds, divided again → stuck at [1/6] for the whole 60s run — read as frozen); fixed + live-verified advancing [3/6]→[5/6]. /ui static mount now sends Cache-Control: no-cache for html/js — operator pages can never serve stale cached JS against a newer backend (the likely cause of a stale-view report).
 ### Verified
 
 - tsc 0 · build 0 · osint suite 22/22 (scoreIdentityMatch matrix incl. initials-substring partials) · live: corroboration + report assessment verified; full regression scratch/vitest-accuracy-final.log. Committed ac36146 → PR #219.
