@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ARCHETYPE_PROFILES } from '../operators/index.js';
 import { BUILTIN_TOOLS, EXTERNAL_TOOLS } from '../arsenal/index.js';
+import { OSINT_TOOLS } from '../tools/osint.js';
 import { OPERATOR_SYSTEM_PROMPTS } from '../prompts/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -12,11 +13,11 @@ import { OPERATOR_SYSTEM_PROMPTS } from '../prompts/index.js';
 // build by construction — the same discipline as test:no-fitting, applied to tools.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const REGISTERED = new Set([...BUILTIN_TOOLS, ...EXTERNAL_TOOLS].map((t) => t.name));
+const REGISTERED = new Set([...BUILTIN_TOOLS, ...EXTERNAL_TOOLS, ...OSINT_TOOLS].map((t) => t.name));
 
 describe('no phantom tools (advertised = wired)', () => {
   it('the arsenal registers a non-trivial, unique set of callable tools', () => {
-    const all = [...BUILTIN_TOOLS, ...EXTERNAL_TOOLS].map((t) => t.name);
+    const all = [...BUILTIN_TOOLS, ...EXTERNAL_TOOLS, ...OSINT_TOOLS].map((t) => t.name);
     expect(all.length).toBeGreaterThanOrEqual(20);
     expect(new Set(all).size).toBe(all.length); // no duplicate tool names
   });
@@ -47,7 +48,7 @@ describe('no phantom tools (advertised = wired)', () => {
   });
 
   it('every registered tool has a real handler (no metadata-only stubs)', () => {
-    const noHandler = [...BUILTIN_TOOLS, ...EXTERNAL_TOOLS]
+    const noHandler = [...BUILTIN_TOOLS, ...EXTERNAL_TOOLS, ...OSINT_TOOLS]
       .filter((t) => typeof t.handler !== 'function')
       .map((t) => t.name);
     expect(noHandler, `registered tools missing an executable handler: ${noHandler.join(', ')}`).toEqual([]);

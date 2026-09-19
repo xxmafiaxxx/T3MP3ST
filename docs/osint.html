@@ -1,0 +1,1489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <title>T3MP3ST — OSINT & Person Locator</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        try { var _t3mpTheme = localStorage.getItem('t3mp3st_theme'); if (_t3mpTheme && _t3mpTheme !== 'storm') document.documentElement.setAttribute('data-theme', _t3mpTheme); } catch (e) {}
+    </script>
+    <script>
+        (function () {
+            var embedded = false;
+            try { embedded = window.self !== window.top; } catch (e) { embedded = true; }
+            if (embedded && !/[?&]standalone/.test(location.search)) {
+                document.documentElement.classList.add('t3mp-embedded');
+                var s = document.createElement('style');
+                s.id = 't3mpEmbedGuard';
+                s.textContent = '.t3mp-embedded .sidebar{display:none!important}' +
+                    '.t3mp-embedded .main-content{margin-left:0!important;width:100%!important}' +
+                    '.t3mp-embedded .mobile-toggle{display:none!important}';
+                document.head.appendChild(s);
+            }
+        })();
+    </script>
+    <style>
+        :root {
+            --bg-primary: #071017;
+            --bg-secondary: #0b1822;
+            --bg-tertiary: #102534;
+            --bg-card: #0c1b25;
+            --surface: #10212d;
+            --card-bg: #0c1b25;
+            --border-color: #1e4053;
+            --border-glow: #2fffd255;
+            --text-primary: #e0e0e0;
+            --text-secondary: #9baeb8;
+            --text-muted: #6f8794;
+            --accent: #2fffd2;
+            --accent-dim: rgba(47, 255, 210, 0.12);
+            --danger: #ff4757;
+            --warning: #ffb142;
+            --success: #2ed573;
+            --info: #70a1ff;
+            --radius: 8px;
+        }
+        [data-theme="ember"] { --accent: #ffab40; --accent-dim: rgba(255,171,64,0.12); --border-glow: #ffab4055; }
+        [data-theme="crimson"] { --accent: #ff5470; --accent-dim: rgba(255,84,112,0.12); --border-glow: #ff547055; }
+        [data-theme="void"] { --accent: #b57bff; --accent-dim: rgba(181,123,255,0.12); --border-glow: #b57bff55; }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        .bg-grid {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-image:
+                linear-gradient(rgba(47, 255, 210, 0.025) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(47, 255, 210, 0.025) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none; z-index: 0;
+        }
+        .app-container { display: flex; min-height: 100vh; position: relative; z-index: 1; }
+
+        .sidebar {
+            width: 240px; background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            position: fixed; top: 0; left: 0; bottom: 0;
+            display: flex; flex-direction: column;
+            transition: transform 0.3s ease; z-index: 100;
+        }
+        .sidebar-header { padding: 18px 15px; border-bottom: 1px solid var(--border-color); }
+        .logo {
+            font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 18px;
+            color: var(--accent); display: flex; align-items: center; gap: 8px;
+            text-shadow: 0 0 10px var(--border-glow);
+        }
+        .logo-icon { font-size: 20px; }
+        .version-badge {
+            font-size: 10px; background: var(--bg-tertiary); color: var(--text-muted);
+            padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color);
+        }
+        .api-status-bar {
+            padding: 10px 15px; border-bottom: 1px solid var(--border-color);
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        }
+        .api-status-indicator { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; }
+        .api-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); animation: pulse 2s infinite; }
+        .api-dot.ok { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .api-dot.err { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .api-reconnect-btn {
+            background: none; border: 1px solid var(--border-color); color: var(--text-secondary);
+            border-radius: 4px; cursor: pointer; padding: 2px 7px; font-size: 12px;
+        }
+        .api-reconnect-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+        nav.nav-section { flex: 1; overflow-y: auto; padding: 10px; }
+        .nav-label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px;
+            color: var(--text-muted); padding: 12px 8px 6px;
+        }
+        .nav-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 10px; border-radius: 6px; color: var(--text-secondary);
+            text-decoration: none; font-size: 13px; margin-bottom: 2px;
+            border: 1px solid transparent; transition: all 0.15s;
+        }
+        .nav-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+        .nav-item.active { background: var(--accent-dim); color: var(--accent); border-color: var(--border-glow); }
+        .nav-item .icon { font-size: 16px; width: 22px; text-align: center; }
+        .nav-item .badge {
+            margin-left: auto; background: var(--danger); color: #fff; font-size: 10px;
+            padding: 1px 6px; border-radius: 10px; font-weight: 600; min-width: 18px; text-align: center;
+        }
+        .sidebar-footer { padding: 15px; border-top: 1px solid var(--border-color); }
+        .status-indicator { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); margin-bottom: 10px; font-family: 'JetBrains Mono', monospace; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); }
+        .theme-switcher { display: flex; align-items: center; gap: 8px; }
+        .ts-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+        .theme-swatch {
+            width: 16px; height: 16px; border-radius: 50%; border: 2px solid transparent;
+            cursor: pointer; transition: transform 0.15s;
+        }
+        .theme-swatch:hover { transform: scale(1.2); }
+        .theme-swatch.active { border-color: #fff; }
+
+        .main-content {
+            flex: 1; margin-left: 240px; padding: 0;
+            min-height: 100vh; width: calc(100% - 240px);
+        }
+        .header {
+            background: var(--bg-secondary); border-bottom: 1px solid var(--border-color);
+            padding: 14px 24px; display: flex; align-items: center; justify-content: space-between;
+            gap: 12px; position: sticky; top: 0; z-index: 50;
+        }
+        .header-title {
+            font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 700;
+            color: var(--text-primary); display: flex; align-items: center; gap: 10px;
+        }
+        .header-title span { color: var(--accent); }
+        .header-actions { display: flex; gap: 10px; align-items: center; }
+
+        .egress-badge {
+            display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+            padding: 5px 12px; border-radius: 20px; font-size: 11.5px; font-weight: 600;
+            font-family: 'JetBrains Mono', monospace; border: 1px solid var(--border-color);
+            background: var(--bg-tertiary); color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+        .egress-badge .egress-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+        .egress-badge.egress-proxied { border-color: var(--success); color: var(--success); }
+        .egress-badge.egress-proxied .egress-dot { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .egress-badge.egress-leak, .egress-badge.egress-error {
+            border-color: var(--danger) !important; color: #fff !important;
+            background: rgba(255, 0, 51, 0.16) !important;
+            box-shadow: 0 0 15px rgba(255,0,51,0.85), 0 0 30px rgba(255,0,51,0.45), inset 0 0 12px rgba(255,0,51,0.35);
+            animation: egressGlowPulse 1.6s infinite;
+        }
+        .egress-badge.egress-leak .egress-dot, .egress-badge.egress-error .egress-dot {
+            background: #ff0033; box-shadow: 0 0 10px #ff0033, 0 0 20px #ff0033;
+            animation: egressDotPulse 1.1s infinite;
+        }
+        @keyframes egressGlowPulse {
+            0%, 100% { box-shadow: 0 0 15px rgba(255,0,51,0.85), 0 0 30px rgba(255,0,51,0.45), inset 0 0 12px rgba(255,0,51,0.35); }
+            50% { box-shadow: 0 0 8px rgba(255,0,51,0.5), 0 0 16px rgba(255,0,51,0.25), inset 0 0 6px rgba(255,0,51,0.2); }
+        }
+        @keyframes egressDotPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.5); } }
+
+        .btn {
+            padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border-color);
+            background: var(--bg-tertiary); color: var(--text-primary);
+            font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+            font-family: 'JetBrains Mono', monospace; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn:hover { border-color: var(--accent); color: var(--accent); }
+        .btn.primary { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+        .btn.primary:hover { box-shadow: 0 0 12px var(--border-glow); }
+        .btn.danger { border-color: var(--danger); color: var(--danger); background: rgba(255,71,87,0.08); }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn a { color: inherit; text-decoration: none; }
+
+        .page-content { padding: 24px; max-width: 1400px; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 22px; }
+        .stat-card {
+            background: var(--card-bg); border: 1px solid var(--border-color);
+            border-radius: var(--radius); padding: 16px; position: relative; overflow: hidden;
+        }
+        .stat-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+        }
+        .stat-value { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700; color: var(--accent); }
+        .stat-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.8px; margin-top: 4px; }
+        .stat-card.dumped::before { background: linear-gradient(90deg, transparent, var(--danger), transparent); }
+        .stat-card.dumped .stat-value { color: var(--danger); }
+        .stat-card.lanes::before { background: linear-gradient(90deg, transparent, var(--warning), transparent); }
+        .stat-card.lanes .stat-value { color: var(--warning); }
+
+        .panel {
+            background: var(--card-bg); border: 1px solid var(--border-color);
+            border-radius: var(--radius); margin-bottom: 22px; overflow: hidden;
+        }
+        .panel-header {
+            padding: 13px 18px; border-bottom: 1px solid var(--border-color);
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            background: var(--surface);
+        }
+        .panel-title {
+            font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700;
+            color: var(--text-primary); display: flex; align-items: center; gap: 8px;
+        }
+        .panel-title .accent { color: var(--accent); }
+        .panel-body { padding: 18px; }
+
+        .locator-form { display: flex; gap: 10px; flex-wrap: wrap; }
+        .search-box {
+            flex: 1; min-width: 260px; display: flex; align-items: center; gap: 8px;
+            background: var(--bg-primary); border: 1px solid var(--border-color);
+            border-radius: 6px; padding: 8px 12px;
+        }
+        .search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 8px var(--border-glow); }
+        .search-box span { color: var(--text-muted); }
+        .search-box input, .search-box select {
+            background: none; border: none; outline: none; color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace; font-size: 13px; width: 100%;
+        }
+        .search-box input::placeholder { color: var(--text-muted); }
+
+        .hint-line { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; font-family: 'JetBrains Mono', monospace; }
+        .run-status {
+            font-size: 12px; color: var(--warning); font-family: 'JetBrains Mono', monospace;
+            margin-top: 10px; display: none; align-items: center; gap: 8px;
+        }
+        .run-status .spinner { animation: pulse 1s infinite; }
+
+        .dossier-empty {
+            text-align: center; color: var(--text-muted); padding: 40px 20px;
+            font-family: 'JetBrains Mono', monospace; font-size: 13px;
+        }
+
+        .dossier-section { margin-bottom: 20px; }
+        .dossier-section-title {
+            font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700;
+            color: var(--accent); text-transform: uppercase; letter-spacing: 1px;
+            border-bottom: 1px solid var(--border-color); padding-bottom: 6px; margin-bottom: 10px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .dossier-section-title .count {
+            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            padding: 1px 8px; border-radius: 10px; font-size: 10px; color: var(--text-secondary);
+        }
+
+        .id-row {
+            display: flex; gap: 10px; flex-wrap: wrap; font-family: 'JetBrains Mono', monospace;
+            font-size: 12px; margin-bottom: 8px;
+        }
+        .id-chip {
+            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            padding: 4px 10px; border-radius: 5px; color: var(--text-secondary);
+        }
+        .id-chip b { color: var(--text-primary); font-weight: 600; }
+
+        .presence-bar { height: 8px; background: var(--bg-primary); border-radius: 4px; overflow: hidden; border: 1px solid var(--border-color); margin: 6px 0 2px; }
+        .presence-fill { height: 100%; background: linear-gradient(90deg, var(--success), var(--warning), var(--danger)); border-radius: 4px; transition: width 0.6s; }
+
+        .social-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+        .social-card {
+            background: var(--bg-primary); border: 1px solid var(--border-color);
+            border-radius: 6px; padding: 10px 12px; transition: all 0.15s;
+        }
+        .social-card:hover { border-color: var(--accent); }
+        .social-card .site { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 13px; color: var(--text-primary); }
+        .social-card a { color: var(--accent); text-decoration: none; font-size: 11.5px; word-break: break-all; font-family: 'JetBrains Mono', monospace; }
+        .social-card a:hover { text-decoration: underline; }
+        .conf-badge { font-size: 9px; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; font-weight: 700; margin-left: 6px; }
+        .conf-high { background: rgba(46,213,115,0.15); color: var(--success); }
+        .conf-medium { background: rgba(255,177,66,0.15); color: var(--warning); }
+        .conf-low { background: rgba(255,71,87,0.15); color: var(--danger); }
+        .cat-tag { font-size: 10px; color: var(--text-muted); }
+
+        .breach-card {
+            background: var(--bg-primary); border: 1px solid var(--border-color);
+            border-left: 3px solid var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 8px;
+        }
+        .breach-card .svc { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 13px; }
+        .breach-card .found { color: var(--danger); font-size: 16px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+        .breach-card .src { font-size: 11px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; margin-top: 4px; word-break: break-all; }
+        .breach-card.keyed { border-left-color: var(--warning); }
+        .breach-card.keyed .found { color: var(--warning); }
+        .breach-card .keynote { font-size: 11px; color: var(--text-muted); font-style: italic; }
+
+        .cred-row {
+            font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--bg-primary);
+            border: 1px solid var(--border-color); border-radius: 5px; padding: 8px 12px;
+            margin-bottom: 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        }
+        .cred-row .pw { color: var(--danger); word-break: break-all; }
+        .cred-row .meta { color: var(--text-muted); font-size: 10.5px; }
+
+        .photo-strip { display: flex; gap: 10px; flex-wrap: wrap; }
+        .photo-strip img {
+            width: 80px; height: 80px; border-radius: 8px; border: 1px solid var(--border-color);
+            object-fit: cover; background: var(--bg-tertiary);
+        }
+
+        .dork-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; }
+        .dork-item {
+            display: flex; justify-content: space-between; align-items: center; gap: 8px;
+            background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 5px;
+            padding: 6px 10px; font-size: 11.5px; font-family: 'JetBrains Mono', monospace;
+        }
+        .dork-item a { color: var(--info); text-decoration: none; }
+        .dork-item a:hover { text-decoration: underline; }
+        .dork-item .label { color: var(--text-secondary); white-space: nowrap; }
+
+        .ident-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: 'JetBrains Mono', monospace; }
+        .ident-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-color); vertical-align: top; }
+        .ident-table td:first-child { color: var(--accent); white-space: nowrap; width: 1%; }
+        .ident-table td:last-child { color: var(--text-secondary); word-break: break-all; }
+
+        .tool-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+        .tool-tab {
+            padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border-color);
+            background: var(--card-bg); color: var(--text-secondary); font-size: 12px;
+            font-weight: 600; cursor: pointer; font-family: 'JetBrains Mono', monospace;
+        }
+        .tool-tab.active { background: var(--accent-dim); color: var(--accent); border-color: var(--border-glow); }
+        .tool-pane { display: none; }
+        .tool-pane.active { display: block; }
+
+        .sites-catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+        .site-pill {
+            background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 5px;
+            padding: 7px 10px; font-size: 12px; font-family: 'JetBrains Mono', monospace;
+            display: flex; justify-content: space-between; gap: 6px; align-items: center;
+        }
+        .site-pill .rel { font-size: 9px; text-transform: uppercase; padding: 1px 5px; border-radius: 3px; }
+        .rel-high { background: rgba(46,213,115,0.15); color: var(--success); }
+        .rel-medium { background: rgba(255,177,66,0.15); color: var(--warning); }
+        .rel-low { background: rgba(255,71,87,0.15); color: var(--danger); }
+
+        pre.raw-output {
+            background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px;
+            padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+            color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
+            max-height: 420px; overflow: auto;
+        }
+        pre.report-pre {
+            background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px;
+            padding: 16px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+            color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
+            max-height: 560px; overflow: auto; line-height: 1.55;
+        }
+        .found-table { width: 100%; border-collapse: collapse; font-size: 11.5px; font-family: 'JetBrains Mono', monospace; }
+        .found-table th {
+            text-align: left; color: var(--accent); border-bottom: 1px solid var(--border-glow);
+            padding: 6px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+        }
+        .found-table td { padding: 5px 8px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); word-break: break-word; vertical-align: top; }
+        .found-table tr:nth-child(even) td { background: rgba(255,255,255,0.015); }
+        .found-table td b { color: var(--text-primary); }
+        .src-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+        .src-chip { font-size: 10px; font-family: 'JetBrains Mono', monospace; padding: 2px 7px; border-radius: 3px; border: 1px solid var(--border-color); color: var(--text-muted); }
+        .src-chip.found { color: var(--success); border-color: rgba(46,213,115,0.4); background: rgba(46,213,115,0.06); }
+        .src-chip.unknown { color: var(--warning); border-color: rgba(255,177,66,0.4); }
+        .report-header {
+            display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+            border: 1px solid var(--border-glow); background: var(--accent-dim); border-radius: 6px;
+            padding: 10px 14px; margin-bottom: 14px; font-family: 'JetBrains Mono', monospace;
+        }
+        .report-header .subj { color: var(--accent); font-weight: 700; font-size: 14px; }
+
+        .toast-container { position: fixed; top: 70px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+        .toast {
+            padding: 12px 18px; border-radius: 6px; font-size: 13px; font-family: 'JetBrains Mono', monospace;
+            border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5); animation: slideIn 0.3s ease; max-width: 380px;
+        }
+        .toast.success { border-color: var(--success); }
+        .toast.error { border-color: var(--danger); }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        @media (max-width: 768px) {
+            .sidebar { transform: translateX(-100%); }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; width: 100%; }
+            .header { padding: 12px 14px; }
+            .page-content { padding: 14px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-grid"></div>
+    <button class="mobile-toggle" onclick="toggleSidebar()" style="position:fixed;top:12px;left:12px;z-index:200;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);padding:6px 10px;cursor:pointer;">☰</button>
+
+    <div class="app-container">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">⚡</div>
+                    T3MP3ST
+                    <span class="version-badge">v1.0</span>
+                </div>
+            </div>
+            <div class="api-status-bar" id="apiStatusBar">
+                <div class="api-status-indicator">
+                    <span class="api-dot" id="apiDot"></span>
+                    <span class="api-text" id="apiText">Checking...</span>
+                </div>
+                <button class="api-reconnect-btn" id="apiReconnectBtn" onclick="checkApiHealth()" title="Reconnect">↻</button>
+            </div>
+            <nav class="nav-section">
+                <div class="nav-label">Main</div>
+                <a class="nav-item" href="index.html"><span class="icon">⚔️</span> War Room</a>
+                <a class="nav-item" href="live-scan.html"><span class="icon">📡</span> Live Scan</a>
+                <a class="nav-item" href="receipts.html"><span class="icon">🧾</span> Scope Receipts</a>
+                <a class="nav-item" href="operators.html"><span class="icon">🤖</span> Operatives</a>
+                <a class="nav-item" href="evidence.html"><span class="icon">🔐</span> Evidence Vault</a>
+
+                <div class="nav-label">Ranges</div>
+                <a class="nav-item" href="obsidivm.html"><span class="icon">📈</span> OBSIDIVM</a>
+                <a class="nav-item" href="ctf.html"><span class="icon">🚩</span> CTF Range</a>
+
+                <div class="nav-label">Toolkit</div>
+                <a class="nav-item" href="arsenal.html"><span class="icon">📡</span> Arsenal</a>
+                <a class="nav-item" href="cves.html"><span class="icon">⚡</span> CVE Vault</a>
+                <a class="nav-item active" href="osint.html"><span class="icon">🕵️</span> OSINT</a>
+                <a class="nav-item" href="gps.html"><span class="icon">🛰️</span> GPS Map</a>
+                <a class="nav-item" href="dfir.html"><span class="icon">🛡️</span> DFIR Response</a>
+                <a class="nav-item" href="terminal.html"><span class="icon">💻</span> Terminal</a>
+                <a class="nav-item" href="configs.html"><span class="icon">💾</span> Config Library</a>
+
+                <div class="nav-label">Command</div>
+                <a class="nav-item" href="general.html"><span class="icon">★</span> Op Admiral</a>
+
+                <div class="nav-label">System</div>
+                <a class="nav-item" href="self-improve.html"><span class="icon">🧬</span> Self-Improvement</a>
+                <a class="nav-item" href="settings.html"><span class="icon">⚙️</span> Settings</a>
+                <a class="nav-item" href="about.html"><span class="icon">ℹ️</span> About</a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <div class="status-dot" id="connectionStatus"></div>
+                    <span id="connectionText">Initializing...</span>
+                </div>
+                <div class="theme-switcher" id="themeSwitcher">
+                    <span class="ts-label">Theme</span>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="header">
+                <div class="header-title"><span>🕵️</span> OSINT &amp; PERSON LOCATOR</div>
+                <div class="header-actions">
+                    <span id="egressIpBadge" class="egress-badge" onclick="refreshEgressIp(true)" title="Egress IP for OSINT lookups — click to re-check">
+                        <span class="egress-dot"></span>
+                        <span class="egress-label">IP:</span>
+                        <span class="egress-ip" id="egressIpValue">…</span>
+                    </span>
+                    <button class="btn" onclick="exportDossier()">📋 EXPORT DOSSIER</button>
+                </div>
+            </header>
+
+            <div class="page-content">
+                <div class="stats-grid">
+                    <div class="stat-card"><div class="stat-value" id="statSites">—</div><div class="stat-label">Social Sites In Catalog</div></div>
+                    <div class="stat-card lanes"><div class="stat-value" id="statFreeLanes">3</div><div class="stat-label">Free Breach Lanes Live</div></div>
+                    <div class="stat-card dumped"><div class="stat-value" id="statKeyedLanes">0/3</div><div class="stat-label">Deep Dump Lanes Armed</div></div>
+                    <div class="stat-card"><div class="stat-value" id="statTools">6</div><div class="stat-label">Agent-Runnable OSINT Tools</div></div>
+                </div>
+
+                <!-- ══════════════════ LOCATOR ══════════════════ -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title"><span class="accent">🎯</span> LOCATOR — FULL HUMAN LOOKUP</div>
+                        <button class="btn primary" id="locateBtn" onclick="runLocate()">▶ RUN FULL LOCATE</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="locator-form">
+                            <div class="search-box">
+                                <span>🔍</span>
+                                <input type="text" id="subjectInput" placeholder="Subject: email, @handle, phone, profile URL, domain, or full name…"
+                                       onkeydown="if(event.key==='Enter')runLocate()">
+                            </div>
+                            <div class="search-box" style="max-width:280px;min-width:200px;">
+                                <span>👤</span>
+                                <input type="text" id="nameInput" placeholder="Known real name (optional — improves dorks)">
+                            </div>
+                        </div>
+                        <div class="hint-line">Auto-detects identifier type → sweeps 60+ social sites, pulls Gravatar identity + linked accounts, checks breach/dump exposure on every identifier, routes phone country, and generates operator deep-links.</div>
+                        <div class="run-status" id="locateStatus"><span class="spinner">◈</span> <span id="locateStatusText">Running locator chain…</span></div>
+                        <div id="dossierOut"><div class="dossier-empty">No dossier yet — enter a subject above and RUN FULL LOCATE.</div></div>
+                    </div>
+                </div>
+
+                <!-- ══════════════════ TOOL PANELS ══════════════════ -->
+                <div class="tool-tabs">
+                    <button class="tool-tab active" data-pane="paneSweep" onclick="switchTool('paneSweep')">📡 USERNAME SWEEP</button>
+                    <button class="tool-tab" data-pane="paneBreach" onclick="switchTool('paneBreach')">🕳️ BREACH &amp; DUMPS</button>
+                    <button class="tool-tab" data-pane="paneDarkweb" onclick="switchTool('paneDarkweb')">🕸️ DARK WEB</button>
+                    <button class="tool-tab" data-pane="paneEmail" onclick="switchTool('paneEmail')">✉️ EMAIL INTEL</button>
+                    <button class="tool-tab" data-pane="panePhone" onclick="switchTool('panePhone')">📞 PHONE LOOKUP</button>
+                    <button class="tool-tab" data-pane="paneGeo" onclick="switchTool('paneGeo')">🗺️ GEO INTEL</button>
+                    <button class="tool-tab" data-pane="panePerms" onclick="switchTool('panePerms')">🔤 PERMUTATIONS</button>
+                    <button class="tool-tab" data-pane="paneSites" onclick="switchTool('paneSites')">🗂️ SITE CATALOG</button>
+                </div>
+
+                <div class="tool-pane active" id="paneSweep">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">📡</span> USERNAME SWEEP — SOCIAL FOOTPRINT</div>
+                            <button class="btn" onclick="runSweep()">▶ SWEEP</button>
+                        </div>
+                        <div class="panel-body">
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>@</span>
+                                    <input type="text" id="sweepUser" placeholder="Username (no @)" onkeydown="if(event.key==='Enter')runSweep()">
+                                </div>
+                            </div>
+                            <div id="sweepOut" style="margin-top:14px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-pane" id="paneBreach">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">🕳️</span> BREACH &amp; DUMP DATABASES — DARK-WEB EXPOSURE</div>
+                            <button class="btn" onclick="runBreach()">▶ CHECK EXPOSURE</button>
+                        </div>
+                        <div class="panel-body">
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>🔍</span>
+                                    <input type="text" id="breachQuery" placeholder="Email, username, phone (+E.164), or a raw password to screen…" onkeydown="if(event.key==='Enter')runBreach()">
+                                </div>
+                                <div class="search-box" style="max-width:160px;min-width:140px;">
+                                    <span>⌨</span>
+                                    <select id="breachKind" style="color:var(--text-primary);font-family:'JetBrains Mono',monospace;">
+                                        <option value="auto">auto</option>
+                                        <option value="email">email</option>
+                                        <option value="username">username</option>
+                                        <option value="phone">phone</option>
+                                        <option value="password">password</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="hint-line">Free lanes always run (LeakCheck public, XposedOrNot, HIBP Pwned Passwords). Deep dump lanes (LeakCheck v2, DeHashed, Snusbase) fire automatically when the operator configures keys — status below.</div>
+                            <div id="dumpLaneStatus" style="margin-top:10px;"></div>
+                            <div id="breachOut" style="margin-top:14px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-pane" id="paneDarkweb">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">🕸️</span> DARK WEB DIRECT — ONION SEARCH &amp; LEAK SITES</div>
+                            <span id="torStatusChip" class="hint-line" style="margin:0;">Checking Tor…</span>
+                        </div>
+                        <div class="panel-body">
+                            <div class="hint-line" style="margin:0 0 14px;">Direct, keyless lanes into public dark-web content: ransomware leak-site monitoring (the groups' own victim posts) and onion search via Ahmia. With a local Tor daemon running, search and .onion page fetches go DIRECT over the Tor circuit. No stolen-data downloads — record-level dumps stay behind the keyed lanes.</div>
+
+                            <div class="dossier-section-title">🗡️ LEAK-SITE MONITOR — IS THE TARGET ON A RANSOMWARE BLOG?</div>
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>🎯</span>
+                                    <input type="text" id="leakKeyword" placeholder="target-domain.com or Company Name" onkeydown="if(event.key==='Enter')runLeakCheck()">
+                                </div>
+                                <button class="btn danger" onclick="runLeakCheck()">▶ CHECK LEAK SITES</button>
+                            </div>
+                            <div id="leakOut" style="margin-top:12px;"></div>
+
+                            <div class="dossier-section-title" style="margin-top:22px;">🧅 ONION SEARCH (AHMIA)</div>
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>🔎</span>
+                                    <input type="text" id="onionQuery" placeholder="search terms for the onion index…" onkeydown="if(event.key==='Enter')runOnionSearch()">
+                                </div>
+                                <button class="btn" onclick="runOnionSearch()">▶ SEARCH ONION SITES</button>
+                            </div>
+                            <div id="onionOut" style="margin-top:12px;"></div>
+
+                            <div class="dossier-section-title" style="margin-top:22px;">📄 ONION PAGE FETCH <span class="count">requires Tor</span></div>
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>🧅</span>
+                                    <input type="text" id="onionUrl" placeholder="http://… Insert-your-name-here … .onion/">
+                                </div>
+                                <button class="btn" onclick="runOnionFetch()">▶ FETCH PAGE</button>
+                            </div>
+                            <div id="onionFetchOut" style="margin-top:12px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-pane" id="paneEmail">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">✉️</span> EMAIL INTELLIGENCE</div>
+                            <button class="btn" onclick="runEmail()">▶ LOOKUP</button>
+                        </div>
+                        <div class="panel-body">
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>✉</span>
+                                    <input type="text" id="emailInput" placeholder="target@example.com" onkeydown="if(event.key==='Enter')runEmail()">
+                                </div>
+                            </div>
+                            <div id="emailOut" style="margin-top:14px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-pane" id="panePhone">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">📞</span> PHONE INTELLIGENCE</div>
+                            <button class="btn" onclick="runPhone()">▶ LOOKUP</button>
+                        </div>
+                        <div class="panel-body">
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>#</span>
+                                    <input type="text" id="phoneInput" placeholder="+1 555 123 4567 / 5551234567" onkeydown="if(event.key==='Enter')runPhone()">
+                                </div>
+                            </div>
+                            <div id="phoneOut" style="margin-top:14px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-pane" id="paneGeo">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">🗺️</span> GEO INTEL — LIVE INFRASTRUCTURE MAP</div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <label class="hint-line" style="margin:0;cursor:pointer;display:flex;align-items:center;gap:5px;">
+                                    <input type="checkbox" id="geoLiveToggle" onchange="toggleGeoLive()"> LIVE (30s)
+                                </label>
+                                <button class="btn" onclick="loadMapFeed(true)">↻ REFRESH</button>
+                            </div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="hint-line" style="margin:0 0 10px;">Infrastructure geography from public IP-geolocation + OSM data: your egress/proxy exit, engagement target hosts (findings ledger), DFIR incident infrastructure, and city-level OSINT dossier signals. City-level IP geolocation only — this is asset mapping, not device positioning.</div>
+                            <div class="tool-tabs" style="margin-bottom:10px;">
+                                <button class="tool-tab active" data-layer="egress" onclick="toggleGeoLayer('egress')" style="border-color:var(--success);">🟢 EGRESS <span id="geoCountEgress">0</span></button>
+                                <button class="tool-tab active" data-layer="target" onclick="toggleGeoLayer('target')" style="border-color:var(--danger);">🔴 TARGETS <span id="geoCountTarget">0</span></button>
+                                <button class="tool-tab active" data-layer="dfir" onclick="toggleGeoLayer('dfir')" style="border-color:var(--info);">🔵 DFIR <span id="geoCountDfir">0</span></button>
+                                <button class="tool-tab active" data-layer="osint" onclick="toggleGeoLayer('osint')" style="border-color:#b57bff;">🟣 OSINT SIGNALS <span id="geoCountOsint">0</span></button>
+                            </div>
+                            <div id="geoMap" style="height:480px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary);"></div>
+                            <div class="hint-line" id="geoStatus" style="margin-top:8px;">Map idle — press REFRESH or toggle LIVE.</div>
+                            <div id="geoUnlocated" style="margin-top:8px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-pane" id="panePerms">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">🔤</span> USERNAME PERMUTATION ENGINE</div>
+                            <button class="btn" onclick="runPerms()">▶ GENERATE</button>
+                        </div>
+                        <div class="panel-body">
+                            <div class="locator-form">
+                                <div class="search-box" style="min-width:140px;"><span>F</span><input type="text" id="permFirst" placeholder="First name"></div>
+                                <div class="search-box" style="min-width:140px;"><span>L</span><input type="text" id="permLast" placeholder="Last name"></div>
+                                <div class="search-box" style="min-width:110px;"><span>M</span><input type="text" id="permMiddle" placeholder="Middle (opt)"></div>
+                                <div class="search-box" style="min-width:110px;"><span>YYYY</span><input type="text" id="permYear" placeholder="Birth year (opt)"></div>
+                            </div>
+                            <div id="permOut" style="margin-top:14px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-pane" id="paneSites">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">🗂️</span> SITE CATALOG &amp; AGENT TOOLS</div>
+                        </div>
+                        <div class="panel-body">
+                            <div id="sitesOut"><div class="dossier-empty">Loading catalog…</div></div>
+                            <div id="agentToolsOut" style="margin-top:16px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script>
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function getApiBase() {
+            if (window.T3MP3ST_API && window.T3MP3ST_API.baseUrl) return window.T3MP3ST_API.baseUrl;
+            const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            return isLocal ? (window.location.port === '3333' ? '' : 'http://' + window.location.hostname + ':3333') : '';
+        }
+
+        async function api(path, body) {
+            const res = await fetch(getApiBase() + path, {
+                method: body ? 'POST' : 'GET',
+                headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                body: body ? JSON.stringify(body) : undefined,
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+            return data;
+        }
+
+        function toast(msg, kind) {
+            const c = document.getElementById('toastContainer');
+            const t = document.createElement('div');
+            t.className = 'toast ' + (kind || '');
+            t.textContent = msg;
+            c.appendChild(t);
+            setTimeout(() => t.remove(), 5000);
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar) sidebar.classList.toggle('open');
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // THEME
+        // ═══════════════════════════════════════════════════════════════
+        const THEMES = [
+            { id: 'storm', label: 'Storm', accent: '#2fffd2' },
+            { id: 'ember', label: 'Ember', accent: '#ffab40' },
+            { id: 'crimson', label: 'Crimson', accent: '#ff5470' },
+            { id: 'void', label: 'Void', accent: '#b57bff' }
+        ];
+        function initTheme() {
+            const host = document.getElementById('themeSwitcher');
+            if (!host) return;
+            THEMES.forEach(t => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'theme-swatch';
+                b.dataset.theme = t.id;
+                b.title = t.label;
+                b.style.background = t.accent;
+                b.onclick = () => {
+                    if (t.id === 'storm') document.documentElement.removeAttribute('data-theme');
+                    else document.documentElement.setAttribute('data-theme', t.id);
+                    try { localStorage.setItem('t3mp3st_theme', t.id); } catch (e) {}
+                    document.querySelectorAll('.theme-swatch').forEach(s => s.classList.toggle('active', s.dataset.theme === t.id));
+                };
+                host.appendChild(b);
+            });
+            let cur = 'storm';
+            try { cur = localStorage.getItem('t3mp3st_theme') || 'storm'; } catch (e) {}
+            document.querySelectorAll('.theme-swatch').forEach(s => s.classList.toggle('active', s.dataset.theme === cur));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // API HEALTH + EGRESS
+        // ═══════════════════════════════════════════════════════════════
+        async function checkApiHealth() {
+            const dot = document.getElementById('apiDot');
+            const text = document.getElementById('apiText');
+            const sd = document.getElementById('connectionStatus');
+            const st = document.getElementById('connectionText');
+            try {
+                const d = await api('/api/health');
+                const ok = d && (d.ok === true || d.status === 'ok');
+                dot.className = 'api-dot ' + (ok ? 'ok' : 'err');
+                text.textContent = ok ? 'API+LLM Ready' : 'API degraded';
+                if (sd) { sd.style.background = ok ? 'var(--success)' : 'var(--danger)'; }
+                if (st) { st.textContent = ok ? 'Connected' : 'Degraded'; }
+            } catch (e) {
+                dot.className = 'api-dot err';
+                text.textContent = 'API offline';
+                if (sd) sd.style.background = 'var(--danger)';
+                if (st) st.textContent = 'Disconnected';
+            }
+        }
+
+        async function refreshEgressIp(force) {
+            const badge = document.getElementById('egressIpBadge');
+            const val = document.getElementById('egressIpValue');
+            if (!badge || !val) return;
+            const label = badge.querySelector('.egress-label');
+            try {
+                const d = await api('/api/net/ip' + (force ? '?force=1' : ''));
+                const ip = (d.exit && d.exit.ip) ? d.exit.ip : '—';
+                badge.className = 'egress-badge';
+                if (d.leak) {
+                    badge.classList.add('egress-leak');
+                    if (label) label.textContent = 'LEAK:';
+                    val.textContent = ip;
+                    badge.title = '⚠ OSINT lookups leave from your REAL IP (' + ip + ') — arm the SOCKS proxy in Settings.';
+                } else {
+                    badge.classList.add('egress-proxied');
+                    if (label) label.textContent = 'IP:';
+                    val.textContent = ip;
+                    badge.title = 'Proxied OSINT egress. Real IP hidden from lookup services.';
+                }
+            } catch (e) {
+                badge.className = 'egress-badge egress-error';
+                val.textContent = 'n/a';
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // SHARED RENDERERS
+        // ═══════════════════════════════════════════════════════════════
+        function confBadge(c) {
+            return '<span class="conf-badge conf-' + escapeHtml(c) + '">' + escapeHtml(c) + '</span>';
+        }
+        function renderSocialCard(h) {
+            return '<div class="social-card">' +
+                '<div class="site">' + escapeHtml(h.site) + confBadge(h.confidence) + ' <span class="cat-tag">(' + escapeHtml(h.category) + ')</span></div>' +
+                '<a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(h.url) + '</a>' +
+                '</div>';
+        }
+        function renderBreachCard(b) {
+            const found = b.found === 'unknown' ? '?' : b.found;
+            return '<div class="breach-card' + (b.found === 'unknown' ? ' keyed' : '') + '">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">' +
+                '<span class="svc">' + escapeHtml(b.service) + '</span><span class="found">' + found + '</span></div>' +
+                (b.fields && b.fields.length ? '<div class="src">fields: ' + escapeHtml(b.fields.join(', ')) + '</div>' : '') +
+                (b.sources && b.sources.length ? '<div class="src">' + escapeHtml(b.sources.join(' · ')) + '</div>' : '') +
+                (b.note ? '<div class="keynote">' + escapeHtml(b.note) + '</div>' : '') +
+                '</div>';
+        }
+        function renderDumpLane(lane) {
+            let out = '<div class="dossier-section-title" style="margin-top:14px;">🕳️ DUMP LANE — ' + escapeHtml(lane.kind) + ': ' + escapeHtml(lane.kind === 'password' ? '<redacted>' : lane.query) + '</div>';
+            out += lane.free.map(renderBreachCard).join('');
+            for (const d of lane.deep) {
+                if (d.status === 'key-required') {
+                    out += '<div class="breach-card keyed"><div style="display:flex;justify-content:space-between;gap:10px;"><span class="svc">' + escapeHtml(d.service) + '</span><span class="found">🔒 KEY</span></div><div class="keynote">' + escapeHtml(d.note) + '</div></div>';
+                } else {
+                    out += '<div class="breach-card keyed"><div style="display:flex;justify-content:space-between;gap:10px;"><span class="svc">' + escapeHtml(d.service) + '</span><span class="found">' + d.found + '</span></div>';
+                    if (d.records && d.records.length) {
+                        out += d.records.slice(0, 25).map(r => {
+                            const geo = [r.city, r.state, r.country].filter(Boolean).join(', ');
+                            return '<div class="cred-row"><span>' + escapeHtml(r.email || r.username || '?') + '</span>' +
+                                (r.password ? '<span class="pw">:' + escapeHtml(r.password) + '</span>' : '') +
+                                (r.hash ? '<span class="pw">:hash:' + escapeHtml(r.hash) + '</span>' : '') +
+                                (r.dob ? '<span class="meta">DOB ' + escapeHtml(r.dob) + '</span>' : '') +
+                                (r.address ? '<span class="meta">' + escapeHtml(r.address) + '</span>' : '') +
+                                (geo ? '<span class="meta">' + escapeHtml(geo) + '</span>' : '') +
+                                (r.phone ? '<span class="meta">☎ ' + escapeHtml(r.phone) + '</span>' : '') +
+                                '<span class="meta">' + escapeHtml(r.source || '') + '</span></div>';
+                        }).join('');
+                    }
+                    out += '</div>';
+                }
+            }
+            return out;
+        }
+
+        function renderScreening(s) {
+            let html = '<div class="dossier-section-title" style="margin-top:20px;">🏛️ SANCTIONS &amp; WATCHLIST SCREENING <span class="count">' + escapeHtml(s.name) + '</span></div>';
+            html += s.sources.map(function (src) {
+                const color = src.status === 'ok' ? (src.matches.length ? 'var(--danger)' : 'var(--success)') : 'var(--text-muted)';
+                let inner = '<div class="breach-card" style="border-left-color:' + color + ';">' +
+                    '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><span class="svc">' + escapeHtml(src.source) + '</span>' +
+                    '<span class="found" style="font-size:12px;color:' + color + '">' +
+                    (src.status === 'ok' ? (src.matches.length ? src.matches.length + ' MATCH(ES)' : 'clear') : src.status.toUpperCase()) +
+                    '</span></div>';
+                (src.matches || []).forEach(function (m) {
+                    inner += '<div class="src" style="color:var(--text-primary);">• ' + escapeHtml(m.name) + ' — ' + escapeHtml(m.detail) + '</div>';
+                });
+                if (src.note) inner += '<div class="keynote">' + escapeHtml(src.note) + '</div>';
+                return inner + '</div>';
+            }).join('');
+            return html;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // LOCATOR
+        // ═══════════════════════════════════════════════════════════════
+        let currentDossier = null;
+
+        async function runLocate() {
+            const subject = document.getElementById('subjectInput').value.trim();
+            const name = document.getElementById('nameInput').value.trim();
+            if (!subject && !name) { toast('Enter a subject first', 'error'); return; }
+            const btn = document.getElementById('locateBtn');
+            const status = document.getElementById('locateStatus');
+            const out = document.getElementById('dossierOut');
+            btn.disabled = true;
+            status.style.display = 'flex';
+            out.innerHTML = '<div class="dossier-empty">◈ Chain starting…</div>';
+
+            // Staged progress — the chain runs server-side in one call; these are its
+            // real stages, shown as they plausibly execute, with an honest elapsed clock.
+            const stages = [
+                'Parsing subject & identifiers',
+                'Sweeping social platforms',
+                'Pulling Gravatar identity & linked accounts',
+                'Checking breach & dump lanes',
+                'Resolving phone & geo signals',
+                'Scoring presence & building the report',
+            ];
+            let stageIdx = 0;
+            const t0 = Date.now();
+            document.getElementById('locateStatusText').textContent = '[1/' + stages.length + '] ' + stages[0] + '… (0s)';
+            const ticker = setInterval(function () {
+                const elapsed = Math.round((Date.now() - t0) / 1000);
+                const waitMs = stages.length > 1 ? 4200 : Infinity;
+                if (elapsed / 1000 > (stageIdx + 1) * (waitMs / 1000) && stageIdx < stages.length - 1) stageIdx++;
+                document.getElementById('locateStatusText').textContent =
+                    '[' + (stageIdx + 1) + '/' + stages.length + '] ' + stages[stageIdx] + '… (' + elapsed + 's elapsed)';
+            }, 1000);
+
+            try {
+                const d = await api('/api/osint/locate', { subject, name: name || undefined });
+                currentDossier = d.dossier;
+                renderDossier(d.dossier);
+                addDossierGeoPoints(d.dossier.geoPoints || []);
+                toast('Dossier assembled — ' + (d.dossier.report ? 'report built, ' : '') + d.dossier.socialAccounts.length + ' accounts, ' + (d.dossier.sourcesChecked || []).length + ' sources checked', 'success');
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+                toast(e.message, 'error');
+            } finally {
+                clearInterval(ticker);
+                btn.disabled = false;
+                status.style.display = 'none';
+            }
+        }
+
+        function renderDossier(d) {
+            const out = document.getElementById('dossierOut');
+            const f = escapeHtml;
+            let html = '';
+
+            // ── Report header ──
+            html += '<div class="report-header">' +
+                '<span class="subj">📋 ' + f(d.subject) + '</span>' +
+                '<span style="color:var(--text-secondary);font-size:11px;">presence <b style="color:var(--accent)">' + d.presenceScore + '/100</b> · ' +
+                (d.durationMs / 1000).toFixed(1) + 's · ' + new Date(d.ranAt).toLocaleTimeString() + ' · ' +
+                ((d.sourcesChecked || []).length) + ' sources checked</span></div>';
+
+            // ── DATA FOUND — every recovered record with its source ──
+            const rows = [];
+            const push = (type, point, detail, source, rel) => rows.push({ type, point, detail, source, rel });
+            Object.entries(d.parsed || {}).forEach(function (kv) { if (kv[1]) push('identifier', kv[0], String(kv[1]), 'auto-parse', '—'); });
+            if (d.name) push('identifier', 'name', d.name, 'operator input', '—');
+            (d.socialAccounts || []).forEach(function (h) { push('social account', h.site, h.url, 'public profile probe', h.confidence); });
+            if (d.emailIntel && d.emailIntel.gravatar && d.emailIntel.gravatar.exists) {
+                const g = d.emailIntel.gravatar;
+                if (g.displayName) push('identity', 'display name', g.displayName, 'Gravatar', 'high');
+                if (g.location) push('location', 'gravatar location', g.location, 'Gravatar', 'medium');
+                (g.accounts || []).forEach(function (a) { push('identity link', a.shortname, (a.username || '') + ' ' + a.url, 'Gravatar linked accounts', 'high'); });
+            }
+            (d.dumpLanes || []).forEach(function (lane) {
+                lane.free.forEach(function (b) {
+                    if (typeof b.found === 'number' && b.found > 0) push('breach', b.service, b.found + ' record(s)' + (b.sources && b.sources.length ? ' — ' + b.sources.slice(0, 4).join(', ') : ''), lane.kind + ' "' + (lane.kind === 'password' ? '<redacted>' : lane.query) + '"', 'confirmed');
+                    else if (b.found === 'unknown') push('breach', b.service, b.note || 'no answer', lane.kind + ' "' + lane.query + '"', 'unknown');
+                });
+                (lane.credentials || []).slice(0, 20).forEach(function (c) { push('credential', c.username || c.type, c.password ? ':' + c.password : (c.hash || ''), c.source || 'dump lane', 'confirmed'); });
+            });
+            (d.photos || []).forEach(function (u) { push('photo', 'avatar image', u, 'Gravatar', 'confirmed'); });
+            (d.locations || []).forEach(function (l) { push('location signal', l, '', 'public data', 'medium'); });
+            (d.identities || []).forEach(function (i) { push('identity signal', i.source, i.detail, 'cross-reference', '—'); });
+            if (d.screening) {
+                d.screening.sources.forEach(function (src) {
+                    if (src.status === 'ok' && src.matches.length) {
+                        src.matches.forEach(function (m) { push('screening hit', m.source, m.name + ' — ' + m.detail, 'legal public screening', 'confirmed'); });
+                    } else {
+                        push('screening', src.source, src.status === 'ok' ? 'no matches' : (src.note || src.status), 'screening lane', src.status);
+                    }
+                });
+            }
+
+            html += '<div class="dossier-section-title">📊 DATA FOUND <span class="count">' + rows.length + ' record(s)</span></div>';
+            if (rows.length === 0) {
+                html += '<div class="dossier-empty">0 records — every source probed is listed under SOURCES CONSULTED below.</div>';
+            } else {
+                html += '<table class="found-table"><thead><tr><th>TYPE</th><th>DATA POINT</th><th>DETAIL</th><th>SOURCE</th><th>CONF.</th></tr></thead><tbody>' +
+                    rows.map(function (r) {
+                        return '<tr><td><b>' + f(r.type) + '</b></td><td>' + f(r.point) + '</td><td>' + f(r.detail || '') + '</td><td>' + f(r.source || '') + '</td><td>' + f(r.rel || '—') + '</td></tr>';
+                    }).join('') + '</tbody></table>';
+            }
+
+            // ── DETAILED REPORT — the structured markdown audit ──
+            html += '<div class="dossier-section-title" style="margin-top:20px;">📄 DETAILED REPORT' +
+                ' <span style="margin-left:auto;display:flex;gap:8px;">' +
+                '<button class="btn" onclick="copyDossierReport()" style="padding:3px 10px;font-size:10.5px;">📋 COPY REPORT</button>' +
+                '<button class="btn" onclick="exportDossier()" style="padding:3px 10px;font-size:10.5px;">💾 EXPORT JSON</button></span></div>';
+            html += d.report
+                ? '<pre class="report-pre">' + f(d.report) + '</pre>'
+                : '<div class="dossier-empty">Report unavailable — run the locator again.</div>';
+
+            // ── SOURCES CONSULTED ──
+            const sc = d.sourcesChecked || [];
+            const grp = { found: [], absent: [], unknown: [] };
+            sc.forEach(function (s) { (grp[s.status] || grp.unknown).push(s); });
+            html += '<div class="dossier-section-title" style="margin-top:20px;">🗂️ SOURCES CONSULTED <span class="count">' + sc.length + ' probes</span>' +
+                '<span class="count" style="color:var(--success)">' + grp.found.length + ' found</span>' +
+                '<span class="count">' + grp.absent.length + ' absent</span>' +
+                '<span class="count" style="color:var(--warning)">' + grp.unknown.length + ' unknown</span></div>';
+            html += '<div class="src-chips">';
+            sc.forEach(function (s) {
+                const cls = s.status === 'found' ? 'found' : s.status === 'unknown' ? 'unknown' : '';
+                const mark = s.status === 'found' ? '✓ ' : s.status === 'unknown' ? '? ' : '';
+                html += '<span class="src-chip ' + cls + '" title="' + f(s.url || '') + '">' + mark + f(s.name) + '</span>';
+            });
+            if (sc.length === 0) html += '<span class="hint-line">no platform sweeps ran for this subject (no usable handle) — name-only locates sweep the top permutation variants</span>';
+            html += '</div>';
+
+            // ── Visual deep-dive sections ──
+            if (d.screening) html += renderScreening(d.screening);
+
+            if (d.socialAccounts && d.socialAccounts.length) {
+                html += '<div class="dossier-section-title" style="margin-top:20px;">📡 SOCIAL ACCOUNTS <span class="count">' + d.socialAccounts.length + ' found</span></div>';
+                html += '<div class="social-grid">' + d.socialAccounts.map(renderSocialCard).join('') + '</div>';
+            }
+
+            if (d.name) {
+                const sp = encodeURIComponent(d.name);
+                const slug = encodeURIComponent(d.name.replace(/\s+/g, '-'));
+                html += '<div class="dossier-section-title" style="margin-top:20px;">🏛️ PUBLIC RECORDS WORKBENCH <span class="count">browser-side — these sites block bots</span></div>' +
+                    '<div class="hint-line" style="margin:0 0 8px;">Legal public-record data (address history, age/DOB range, relatives, phones) lives here — open in YOUR browser. There is no legal keyless source for SSN-level data; stolen &quot;fullz&quot; dumps are off-limits, full stop.</div>' +
+                    '<div class="dork-list">' + [
+                        ['TruePeopleSearch — addresses · age · relatives', 'https://www.truepeoplesearch.com/results?name=' + sp],
+                        ['FastPeopleSearch — address history · phones', 'https://www.fastpeoplesearch.com/name/' + slug],
+                        ['Whitepages — addresses · phones', 'https://www.whitepages.com/name/' + slug],
+                        ["That'sThem — addresses · IP history", 'https://thatsthem.com/name/' + slug],
+                        ['Spokeo — aggregated records', 'https://www.spokeo.com/' + slug],
+                        ['LinkedIn — professional footprint', 'https://www.linkedin.com/search/results/people/?keywords=' + sp],
+                    ].map(function (l) {
+                        return '<div class="dork-item"><span class="label">' + escapeHtml(l[0]) + '</span><a href="' + l[1] + '" target="_blank" rel="noopener noreferrer">open ↗</a></div>';
+                    }).join('') + '</div>';
+            }
+
+            if (d.photos && d.photos.length) {
+                html += '<div class="dossier-section-title" style="margin-top:20px;">🖼️ PHOTOS</div><div class="photo-strip">' +
+                    d.photos.map(function (u) { return '<img src="' + escapeHtml(u) + '" alt="avatar" onerror="this.style.display=\'none\'">'; }).join('') + '</div>';
+            }
+
+            for (const lane of d.dumpLanes || []) html += renderDumpLane(lane);
+
+            if (d.phone) {
+                html += '<div class="dossier-section-title" style="margin-top:20px;">📞 PHONE <span class="count">' + escapeHtml(d.phone.e164) + '</span></div>';
+                html += '<div class="id-row"><span class="id-chip"><b>country:</b> ' + escapeHtml(d.phone.country) + '</span>' +
+                    '<span class="id-chip"><b>length:</b> ' + (d.phone.lengthValid ? 'valid' : 'UNEXPECTED') + '</span>' +
+                    (d.phone.nanp ? '<span class="id-chip"><b>NANP area:</b> ' + escapeHtml(d.phone.nanp.areaCode) + ' (valid: ' + d.phone.nanp.validAreaCode + ')</span>' : '') + '</div>';
+                html += '<div class="dork-list">' + d.phone.searchLinks.map(function (l) {
+                    return '<div class="dork-item"><span class="label">' + escapeHtml(l.label) + '</span><a href="' + escapeHtml(l.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(l.url.length > 44 ? l.url.slice(0, 44) + '…' : l.url) + ' ↗</a></div>';
+                }).join('') + '</div>';
+            }
+
+            if (d.emailIntel && d.emailIntel.gravatar && d.emailIntel.gravatar.exists) {
+                const g = d.emailIntel.gravatar;
+                html += '<div class="dossier-section-title" style="margin-top:20px;">✉️ GRAVATAR IDENTITY</div>';
+                html += '<table class="ident-table"><tbody>';
+                if (g.displayName) html += '<tr><td>display name</td><td>' + escapeHtml(g.displayName) + '</td></tr>';
+                if (g.location) html += '<tr><td>location</td><td>' + escapeHtml(g.location) + '</td></tr>';
+                if (g.about) html += '<tr><td>about</td><td>' + escapeHtml(g.about) + '</td></tr>';
+                (g.accounts || []).forEach(function (a) {
+                    html += '<tr><td>linked: ' + escapeHtml(a.shortname) + '</td><td>' + escapeHtml((a.username || '') + ' ' + a.url) + '</td></tr>';
+                });
+                html += '</tbody></table>';
+            }
+            if (d.emailIntel && d.emailIntel.domain) {
+                const dm = d.emailIntel.domain;
+                html += '<div class="dossier-section-title" style="margin-top:20px;">🌐 MAIL DOMAIN — ' + escapeHtml(dm.name) + '</div>';
+                html += '<div class="id-row"><span class="id-chip"><b>mail:</b> ' + (dm.acceptsMail ? 'yes' : 'no MX') + '</span>' +
+                    '<span class="id-chip"><b>MX:</b> ' + escapeHtml(dm.mxRecords.join(', ') || '—') + '</span>' +
+                    (dm.aRecord ? '<span class="id-chip"><b>A:</b> ' + escapeHtml(dm.aRecord) + '</span>' : '') + '</div>';
+            }
+
+            if (d.dorks && d.dorks.length) {
+                html += '<div class="dossier-section-title" style="margin-top:20px;">🔎 OPERATOR DEEP-LINKS <span class="count">' + d.dorks.length + ' dorks</span></div>';
+                html += '<div class="dork-list">' + d.dorks.map(function (l) {
+                    return '<div class="dork-item"><span class="label">' + escapeHtml(l.label) + '</span><a href="' + escapeHtml(l.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(l.url.length > 44 ? l.url.slice(0, 44) + '…' : l.url) + ' ↗</a></div>';
+                }).join('') + '</div>';
+            }
+
+            out.innerHTML = html;
+        }
+
+        function copyDossierReport() {
+            if (!currentDossier || !currentDossier.report) { toast('No report to copy — run the locator first', 'error'); return; }
+            navigator.clipboard.writeText(currentDossier.report).then(
+                function () { toast('Detailed report copied to clipboard', 'success'); },
+                function () { toast('Clipboard blocked by the browser — use EXPORT JSON', 'error'); }
+            );
+        }
+        function exportDossier() {
+            if (!currentDossier) { toast('No dossier to export — run the locator first', 'error'); return; }
+            const blob = new Blob([JSON.stringify(currentDossier, null, 2)], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'osint-dossier-' + String(currentDossier.subject).replace(/[^a-z0-9@._-]/gi, '_') + '.json';
+            a.click();
+            URL.revokeObjectURL(a.href);
+            toast('Dossier exported', 'success');
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // TOOL PANES
+        // ═══════════════════════════════════════════════════════════════
+        function switchTool(paneId) {
+            document.querySelectorAll('.tool-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.pane === paneId); });
+            document.querySelectorAll('.tool-pane').forEach(function (p) { p.classList.toggle('active', p.id === paneId); });
+            if (paneId === 'paneGeo') ensureGeoMap();
+        }
+
+        async function runSweep() {
+            const username = document.getElementById('sweepUser').value.trim();
+            const out = document.getElementById('sweepOut');
+            if (!username) { toast('Enter a username', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Sweeping ' + escapeHtml(username) + ' across the catalog…</div>';
+            try {
+                const d = await api('/api/osint/username-sweep', { username });
+                const s = d.sweep;
+                let html = '<div class="dossier-section-title">📡 ' + escapeHtml(s.username) + ' — ' + s.found.length + ' FOUND / ' + s.absent + ' absent / ' + s.unknown.length + ' unknown <span class="count">' + (s.durationMs / 1000).toFixed(1) + 's</span></div>';
+                if (s.found.length) html += '<div class="social-grid">' + s.found.map(renderSocialCard).join('') + '</div>';
+                if (s.unknown.length) html += '<div class="hint-line" style="margin-top:8px;">unknown (blocked/rate-limited): ' + escapeHtml(s.unknown.map(function (u) { return u.site; }).join(', ')) + '</div>';
+                out.innerHTML = html;
+                toast(s.found.length + ' accounts found', s.found.length ? 'success' : '');
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function runBreach() {
+            const query = document.getElementById('breachQuery').value.trim();
+            const kindSel = document.getElementById('breachKind').value;
+            const out = document.getElementById('breachOut');
+            if (!query) { toast('Enter a query', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Querying breach + dump databases…</div>';
+            try {
+                const d = await api('/api/osint/breach', { query, kind: kindSel === 'auto' ? undefined : kindSel });
+                out.innerHTML = renderDumpLane(d.result);
+                const creds = d.result.credentials || [];
+                if (creds.length) toast(creds.length + ' dump credentials recorded to the Evidence Vault', 'success');
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function runEmail() {
+            const email = document.getElementById('emailInput').value.trim();
+            const out = document.getElementById('emailOut');
+            if (!email) { toast('Enter an email', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Pulling Gravatar + breach exposure…</div>';
+            try {
+                const d = await api('/api/osint/email', { email });
+                const i = d.intel;
+                let html = '<div class="dossier-section-title">✉️ ' + escapeHtml(i.email) + '</div>';
+                html += '<div class="id-row"><span class="id-chip"><b>gravatar:</b> ' + (i.gravatar.exists ? 'EXISTS' : 'none') + '</span></div>';
+                if (i.gravatar.exists) {
+                    if (i.gravatar.displayName) html += '<div class="id-row"><span class="id-chip"><b>name:</b> ' + escapeHtml(i.gravatar.displayName) + '</span></div>';
+                    if (i.gravatar.location) html += '<div class="id-row"><span class="id-chip"><b>location:</b> ' + escapeHtml(i.gravatar.location) + '</span></div>';
+                    html += '<div class="photo-strip" style="margin-top:8px;"><img src="' + escapeHtml(i.gravatar.avatarUrl) + '" alt="gravatar"></div>';
+                    (i.gravatar.accounts || []).forEach(function (a) {
+                        html += '<div class="id-row"><span class="id-chip"><b>' + escapeHtml(a.shortname) + ':</b> ' + escapeHtml((a.username || '') + ' ' + a.url) + '</span></div>';
+                    });
+                }
+                html += i.breaches.map(renderBreachCard).join('');
+                if (i.domain) {
+                    html += '<div class="id-row" style="margin-top:10px;"><span class="id-chip"><b>domain ' + escapeHtml(i.domain.name) + ':</b> ' + (i.domain.acceptsMail ? 'mail OK' : 'no MX') + (i.domain.aRecord ? ' · A ' + escapeHtml(i.domain.aRecord) : '') + '</span></div>';
+                }
+                out.innerHTML = html;
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function runPhone() {
+            const phone = document.getElementById('phoneInput').value.trim();
+            const out = document.getElementById('phoneOut');
+            if (!phone) { toast('Enter a phone number', 'error'); return; }
+            try {
+                const d = await api('/api/osint/phone', { phone });
+                const p = d.intel;
+                let html = '<div class="dossier-section-title">📞 ' + escapeHtml(p.e164) + '</div>';
+                html += '<div class="id-row">' +
+                    '<span class="id-chip"><b>country:</b> ' + escapeHtml(p.country) + '</span>' +
+                    '<span class="id-chip"><b>digits:</b> ' + p.digits.length + ' (expected ' + (p.digits.length - p.countryCode.length) + '/' + p.expectedLength + ')</span>' +
+                    (p.nanp ? '<span class="id-chip"><b>NANP:</b> area ' + escapeHtml(p.nanp.areaCode) + ' · ' + (p.nanp.validAreaCode ? 'valid' : 'INVALID') + '</span>' : '') +
+                    '</div>';
+                html += '<div class="dork-list">' + p.searchLinks.map(function (l) {
+                    return '<div class="dork-item"><span class="label">' + escapeHtml(l.label) + '</span><a href="' + escapeHtml(l.url) + '" target="_blank" rel="noopener noreferrer">open ↗</a></div>';
+                }).join('') + '</div>';
+                out.innerHTML = html;
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function runPerms() {
+            const first = document.getElementById('permFirst').value.trim();
+            const last = document.getElementById('permLast').value.trim();
+            const middle = document.getElementById('permMiddle').value.trim();
+            const year = document.getElementById('permYear').value.trim();
+            const out = document.getElementById('permOut');
+            if (!first || !last) { toast('First and last name required', 'error'); return; }
+            try {
+                const d = await api('/api/osint/permutate', { first, last, middle: middle || undefined, birthYear: year || undefined });
+                out.innerHTML = '<div class="dossier-section-title">🔤 ' + d.count + ' PERMUTATIONS</div>' +
+                    '<pre class="raw-output">' + escapeHtml(d.permutations.join('\n')) + '</pre>' +
+                    '<div class="hint-line">Sweep them one by one in the Username Sweep pane (or hand them to a recon operator).</div>';
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // GEO INTEL — LIVE INFRASTRUCTURE MAP (Leaflet, dark tiles)
+        // ═══════════════════════════════════════════════════════════════
+        const GEO_COLORS = { egress: '#2ed573', target: '#ff4757', dfir: '#70a1ff', osint: '#b57bff' };
+        let geoMap = null;
+        let geoLayers = null;          // { kind: L.layerGroup }
+        let geoLayerOn = { egress: true, target: true, dfir: true, osint: true };
+        let geoData = { points: [] };
+        let geoLiveTimer = null;
+        let geoLoadSeq = 0;
+
+        function ensureGeoMap() {
+            if (geoMap || typeof L === 'undefined') {
+                if (geoMap) setTimeout(function () { geoMap.invalidateSize(); }, 60);
+                return;
+            }
+            geoMap = L.map('geoMap', { center: [28, 5], zoom: 2, worldCopyJump: true, zoomControl: true });
+            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+                attribution: 'Tiles &copy; Esri — Source: USGS Intermap, GIS User Community &middot; GEBCO',
+                maxZoom: 16,
+            }).addTo(geoMap);
+            geoLayers = {};
+            Object.keys(GEO_COLORS).forEach(function (kind) {
+                geoLayers[kind] = L.layerGroup();
+                if (geoLayerOn[kind]) geoLayers[kind].addTo(geoMap);
+            });
+            if (geoData.points.length) renderGeoMap();
+            else loadMapFeed(false);
+        }
+
+        function toggleGeoLayer(kind) {
+            geoLayerOn[kind] = !geoLayerOn[kind];
+            const btn = document.querySelector('.tool-tab[data-layer="' + kind + '"]');
+            if (btn) btn.classList.toggle('active', geoLayerOn[kind]);
+            if (geoMap && geoLayers) {
+                if (geoLayerOn[kind]) geoLayers[kind].addTo(geoMap);
+                else geoMap.removeLayer(geoLayers[kind]);
+            }
+        }
+
+        function toggleGeoLive() {
+            const on = document.getElementById('geoLiveToggle').checked;
+            if (geoLiveTimer) { clearInterval(geoLiveTimer); geoLiveTimer = null; }
+            if (on) {
+                ensureGeoMap();
+                loadMapFeed(true);
+                geoLiveTimer = setInterval(function () { loadMapFeed(true); }, 30000);
+                document.getElementById('geoStatus').textContent = 'LIVE tracking of infrastructure map — refreshing every 30s.';
+            } else {
+                document.getElementById('geoStatus').textContent = 'LIVE off — press REFRESH for a manual pull.';
+            }
+        }
+
+        async function loadMapFeed(force) {
+            if (typeof L === 'undefined') {
+                document.getElementById('geoStatus').textContent = 'Map library not loaded (offline?) — tiles CDN unreachable.';
+                return;
+            }
+            const seq = ++geoLoadSeq;
+            const status = document.getElementById('geoStatus');
+            status.textContent = '◈ Pulling geo feed: egress + engagement targets + DFIR infrastructure…';
+            try {
+                const d = await api('/api/osint/map-feed' + (force ? '?refresh=1' : ''));
+                if (seq !== geoLoadSeq) return; // a newer pull superseded this one
+                geoData.points = d.points || [];
+                renderGeoMap();
+                status.textContent = 'Feed ' + (d.cached ? '(cached) ' : '') + '· ' + (d.points || []).length + ' points · ' + new Date(d.generatedAt).toLocaleTimeString() + ' — ' + (d.note || '');
+            } catch (e) {
+                status.textContent = '✗ geo feed failed: ' + e.message;
+            }
+        }
+
+        function addDossierGeoPoints(geoPoints) {
+            if (!Array.isArray(geoPoints) || !geoPoints.length) return;
+            const known = new Set(geoData.points.map(function (p) { return p.key; }));
+            geoPoints.forEach(function (p) {
+                if (!known.has(p.key)) { geoData.points.push(p); known.add(p.key); }
+            });
+            if (geoMap && geoLayers) renderGeoMap();
+        }
+
+        function renderGeoMap() {
+            if (!geoMap || !geoLayers) return;
+            const counts = { egress: 0, target: 0, dfir: 0, osint: 0 };
+            Object.keys(GEO_COLORS).forEach(function (kind) { geoLayers[kind].clearLayers(); });
+            const unlocated = [];
+            let located = 0;
+            const bounds = [];
+            (geoData.points || []).forEach(function (p) {
+                counts[p.kind] = (counts[p.kind] || 0) + 1;
+                if (typeof p.lat !== 'number' || typeof p.lon !== 'number') {
+                    unlocated.push(p);
+                    return;
+                }
+                located++;
+                bounds.push([p.lat, p.lon]);
+                const m = L.circleMarker([p.lat, p.lon], {
+                    radius: 7, color: GEO_COLORS[p.kind] || '#ffffff', weight: 2,
+                    fillColor: GEO_COLORS[p.kind] || '#ffffff', fillOpacity: 0.75,
+                });
+                m.bindPopup(
+                    '<b style="color:' + (GEO_COLORS[p.kind] || '#fff') + '">' + escapeHtml(p.kind.toUpperCase()) + '</b><br>' +
+                    '<b>' + escapeHtml(p.label) + '</b><br>' +
+                    (p.detail ? escapeHtml(p.detail) + '<br>' : '') +
+                    (p.org ? '<span style="color:#9baeb8">' + escapeHtml(p.org) + '</span><br>' : '') +
+                    (p.geoNote ? '<span style="color:#ffb142">' + escapeHtml(p.geoNote) + '</span><br>' : '') +
+                    '<span style="color:#6f8794;font-size:11px">' + p.lat.toFixed(3) + ', ' + p.lon.toFixed(3) + '</span>'
+                );
+                m.addTo(geoLayers[p.kind] || geoLayers.osint);
+            });
+            document.getElementById('geoCountEgress').textContent = counts.egress || 0;
+            document.getElementById('geoCountTarget').textContent = counts.target || 0;
+            document.getElementById('geoCountDfir').textContent = counts.dfir || 0;
+            document.getElementById('geoCountOsint').textContent = counts.osint || 0;
+            document.getElementById('geoUnlocated').innerHTML = unlocated.length
+                ? '<div class="hint-line">no public geolocation (private/LAN or unresolved): ' +
+                  unlocated.map(function (p) { return escapeHtml(p.label); }).join(' · ') + '</div>'
+                : '';
+            if (bounds.length > 1) geoMap.fitBounds(L.latLngBounds(bounds).pad(0.25));
+            else if (bounds.length === 1) geoMap.setView(bounds[0], 8);
+        }
+
+        async function loadSites() {
+            const out = document.getElementById('sitesOut');
+            const toolsOut = document.getElementById('agentToolsOut');
+            try {
+                const d = await api('/api/osint/sites');
+                document.getElementById('statSites').textContent = d.count;
+                const byCat = {};
+                d.sites.forEach(function (s) { (byCat[s.category] = byCat[s.category] || []).push(s); });
+                let html = '';
+                Object.keys(byCat).sort().forEach(function (cat) {
+                    html += '<div class="dossier-section-title" style="margin-top:12px;">' + escapeHtml(cat) + ' <span class="count">' + byCat[cat].length + '</span></div>';
+                    html += '<div class="sites-catalog">' + byCat[cat].map(function (s) {
+                        return '<div class="site-pill"><span>' + escapeHtml(s.name) + '</span><span class="rel rel-' + s.reliability + '">' + s.reliability + '</span></div>';
+                    }).join('') + '</div>';
+                });
+                out.innerHTML = html;
+                toolsOut.innerHTML = '<div class="dossier-section-title">🤖 AGENT-RUNNABLE TOOLS (category: osint)</div>' +
+                    '<table class="ident-table"><tbody>' + d.tools.map(function (t) {
+                        return '<tr><td>' + escapeHtml(t.name) + '</td><td>' + escapeHtml(t.description) + '</td></tr>';
+                    }).join('') + '</tbody></table>';
+                document.getElementById('statTools').textContent = d.tools.length;
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">catalog unavailable: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function loadDumpStatus() {
+            const host = document.getElementById('dumpLaneStatus');
+            try {
+                const d = await api('/api/osint/dump-status');
+                const armed = d.lanes.filter(function (l) { return l.armed; }).length;
+                document.getElementById('statKeyedLanes').textContent = armed + '/' + d.lanes.length;
+                host.innerHTML = d.lanes.map(function (l) {
+                    return '<div class="dork-item" style="margin-bottom:4px;"><span class="label">' + (l.armed ? '🟢' : '🔒') + ' ' + escapeHtml(l.service) + '</span><span style="color:var(--text-muted);font-size:10.5px;">' + escapeHtml(l.unlocks) + (l.armed ? '' : ' — set ' + escapeHtml(l.envVar)) + '</span></div>';
+                }).join('');
+            } catch (e) {
+                host.innerHTML = '<div class="hint-line">dump-status unavailable: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // DARK WEB DIRECT — leak monitor + onion search/fetch
+        // ═══════════════════════════════════════════════════════════════
+        async function loadTorStatus() {
+            const chip = document.getElementById('torStatusChip');
+            try {
+                const d = await api('/api/osint/tor-status');
+                chip.textContent = d.tor.available ? '🟢 ' + d.tor.note : '⚫ Tor: not running — clearnet lanes only';
+                chip.style.color = d.tor.available ? 'var(--success)' : 'var(--text-muted)';
+            } catch (e) {
+                chip.textContent = '⚫ Tor status unavailable';
+            }
+        }
+
+        async function runLeakCheck() {
+            const keyword = document.getElementById('leakKeyword').value.trim();
+            const out = document.getElementById('leakOut');
+            if (!keyword) { toast('Enter a target domain or company name', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Scanning ransomware leak sites…</div>';
+            try {
+                const d = await api('/api/osint/darkweb/leak-check', { keyword });
+                const r = d.result;
+                let html = '<div class="dossier-section-title">🗡️ "' + escapeHtml(r.keyword) + '" — ' + r.found + ' victim post(s) <span class="count">' + escapeHtml(r.searched) + '</span></div>';
+                if (!r.victims.length) {
+                    html += '<div class="dossier-empty">No victim posts match this keyword — target is not currently listed.</div>';
+                } else {
+                    html += r.victims.map(function (v) {
+                        return '<div class="breach-card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+                            '<span class="svc">🗡️ ' + escapeHtml(v.victim) + (v.domain ? ' <span style="color:var(--text-muted)">(' + escapeHtml(v.domain) + ')</span>' : '') + '</span>' +
+                            '<span class="found" style="font-size:12px;color:var(--danger)">[' + escapeHtml(v.group) + ']</span></div>' +
+                            '<div class="src">' + [v.country ? 'country ' + v.country : '', v.activity || '', v.attackDate ? 'attacked ' + escapeHtml(v.attackDate.slice(0, 10)) : ''].filter(Boolean).join(' · ') + '</div>' +
+                            (v.description ? '<div class="src">' + escapeHtml(v.description) + '</div>' : '') +
+                            (v.postUrl ? '<div class="src"><a href="' + escapeHtml(v.postUrl) + '" target="_blank" rel="noopener noreferrer" style="color:var(--info)">post ↗</a></div>' : '') +
+                            '</div>';
+                    }).join('');
+                    if (r.found > r.victims.length) html += '<div class="hint-line">…and ' + (r.found - r.victims.length) + ' more (showing first 40)</div>';
+                    toast(r.found + ' leak-site posts found', 'success');
+                }
+                if (r.note) html += '<div class="hint-line">' + escapeHtml(r.note) + '</div>';
+                out.innerHTML = html;
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function runOnionSearch() {
+            const query = document.getElementById('onionQuery').value.trim();
+            const out = document.getElementById('onionOut');
+            if (!query) { toast('Enter search terms', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Searching the onion index…</div>';
+            try {
+                const d = await api('/api/osint/onion/search', { query });
+                const r = d.result;
+                let html = '<div class="dossier-section-title">🧅 "' + escapeHtml(r.query) + '" — ' + r.results.length + ' result(s) <span class="count">via ' + escapeHtml(r.via) + '</span></div>';
+                if (r.results.length) {
+                    html += r.results.map(function (x) {
+                        return '<div class="breach-card" style="border-left-color:var(--accent);"><div class="svc">' + escapeHtml(x.title) + '</div>' +
+                            '<div class="src"><a href="' + escapeHtml(x.url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">' + escapeHtml(x.url) + '</a></div>' +
+                            (x.snippet ? '<div class="src">' + escapeHtml(x.snippet) + '</div>' : '') + '</div>';
+                    }).join('');
+                } else {
+                    html += '<div class="dossier-empty">No results parsed.</div>';
+                }
+                if (r.note) html += '<div class="hint-line">' + escapeHtml(r.note) + '</div>';
+                out.innerHTML = html;
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function runOnionFetch() {
+            const url = document.getElementById('onionUrl').value.trim();
+            const out = document.getElementById('onionFetchOut');
+            if (!url) { toast('Enter a .onion URL', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Fetching through the Tor circuit…</div>';
+            try {
+                const d = await api('/api/osint/onion/fetch', { url });
+                out.innerHTML = '<div class="dossier-section-title">📄 ' + escapeHtml(d.page.url) + ' <span class="count">HTTP ' + d.page.status + '</span></div>' +
+                    '<pre class="raw-output">' + escapeHtml(d.page.body.slice(0, 6000)) + '</pre>';
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // BOOT
+        // ═══════════════════════════════════════════════════════════════
+        document.addEventListener('DOMContentLoaded', function () {
+            initTheme();
+            checkApiHealth();
+            setInterval(checkApiHealth, 30000);
+            refreshEgressIp(false);
+            loadSites();
+            loadDumpStatus();
+            loadTorStatus();
+        });
+    </script>
+    <script src="embed.js"></script>
+</body>
+</html>

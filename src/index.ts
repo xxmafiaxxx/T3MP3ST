@@ -248,6 +248,7 @@ import {
 } from './arsenal/index.js';
 import { buildAdapterTools } from './arsenal/adapter-tools.js';
 import { buildPostExTools } from './arsenal/post-ex.js';
+import { OSINT_TOOLS } from './tools/osint.js';
 import { ApprovalController, type ApprovalRequest } from './arsenal/approval.js';
 import { TOOL_ADAPTERS } from './arsenal/catalog.js';
 import { OpsecController, createBalancedOpsecConfig } from './opsec/index.js';
@@ -413,6 +414,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     const gateBuiltins = /^(1|true|yes|on)$/i.test(process.env.T3MP3ST_GATE_BUILTINS ?? '');
     this.arsenal.registerMany(gateBuiltins ? BUILTIN_TOOLS.map(stampSpicyBuiltin) : BUILTIN_TOOLS);
     this.arsenal.registerMany(EXTERNAL_TOOLS);
+    this.arsenal.registerMany(OSINT_TOOLS);
 
     // Capability approval + spicy-action warning gate. An intrusive/credential/dangerous tool is
     // INERT until it's approved. Two ways in: (1) headless — a pre-authorization allowlist up front

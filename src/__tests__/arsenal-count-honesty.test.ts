@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { TOOL_ADAPTERS, type ToolAdapter } from '../arsenal/catalog.js';
 import { BUILTIN_TOOLS, EXTERNAL_TOOLS } from '../arsenal/index.js';
+import { OSINT_TOOLS } from '../tools/osint.js';
 import {
   isMintable,
   adapterToCustomTool,
@@ -34,16 +35,16 @@ const isGated = (a: ToolAdapter) =>
   a.execution === 'catalog_only' || a.execution === 'import_only';
 
 describe('arsenal count honesty (advertised = real registered surface)', () => {
-  it('the advertised "108 tools" is the real registered surface, not a source-line count', () => {
-    const total = TOOL_ADAPTERS.length + BUILTIN_TOOLS.length + EXTERNAL_TOOLS.length;
+  it('the advertised "128 tools" is the real registered surface, not a source-line count', () => {
+    const total = TOOL_ADAPTERS.length + BUILTIN_TOOLS.length + EXTERNAL_TOOLS.length + OSINT_TOOLS.length;
     // Locks the headline to code. If the arsenal grows/shrinks, update this AND the
     // README / verify-claims headline together — that is the point of the lock.
     expect(
       total,
-      `arsenal size drifted from the advertised 109 (adapters=${TOOL_ADAPTERS.length}, ` +
-        `built-ins=${BUILTIN_TOOLS.length}, externals=${EXTERNAL_TOOLS.length}) — ` +
+      `arsenal size drifted from the advertised 128 (adapters=${TOOL_ADAPTERS.length}, ` +
+        `built-ins=${BUILTIN_TOOLS.length}, externals=${EXTERNAL_TOOLS.length}, osint=${OSINT_TOOLS.length}) — ` +
         'update the README / verify-claims headline to match',
-    ).toBe(109);
+    ).toBe(128);
     expect(total).toBeGreaterThanOrEqual(80); // stays consistent with verify-claims' `>= 80` gate
   });
 

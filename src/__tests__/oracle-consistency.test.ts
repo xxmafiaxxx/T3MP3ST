@@ -65,7 +65,9 @@ function firstVerdict(file: string): Verdict {
   return ((d.results || [{}])[0] || {}).verdict || {};
 }
 
+let solvesCache: Verdict[] | null = null;
 function committedSolves(): Verdict[] {
+  if (solvesCache) return solvesCache;
   const out: Verdict[] = [];
   for (const dir of PINNED_DIRS) {
     const abs = path.join(XBEN, dir);
@@ -75,6 +77,7 @@ function committedSolves(): Verdict[] {
       if (isScoredSolve(v)) out.push(v);
     }
   }
+  solvesCache = out;
   return out;
 }
 

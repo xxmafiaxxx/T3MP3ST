@@ -469,6 +469,85 @@ export const RAPID_RESPONSE_CATALOG: RapidResponseCheck[] = [
         timestamp: new Date().toISOString()
       };
     }
+  },
+  {
+    id: 'mirth-connect-xstream',
+    name: 'Mirth Connect XStream Deserialization RCE (CVE-2023-43208)',
+    cve: 'CVE-2023-43208',
+    category: 'rce',
+    severity: 'critical',
+    description: 'Version-based detection for Mirth Connect ≤4.4.0 (KEV-listed XStream deserialization RCE). Inert: version disclosure only, no gadget is sent.',
+    remediation: 'Upgrade Mirth Connect to >= 4.4.1 (or 4.5.x), restrict /api to trusted networks, and reset default admin credentials.',
+    run: async (baseUrl, timeoutMs = 6000) => {
+      const target = normalizeUrl(baseUrl);
+      const res = await safeProbe(`${target}/api/server/version`, { method: 'GET' }, timeoutMs);
+      const text = res.text || '';
+      const versionMatch = text.match(/"version"\s*:\s*"([0-9][0-9a-zA-Z.-]*)"/);
+      const version = versionMatch ? versionMatch[1] : '';
+      const isMirth = !!version || (res.response?.headers?.get('x-application-name') || '').toLowerCase().includes('mirth');
+      const outdated = !!version && (() => {
+        const m = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+        if (!m) return false;
+        const [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
+        return maj < 4 || (maj === 4 && (min < 4 || (min === 4 && pat === 0)));
+      })();
+      const isVulnerable = isMirth && outdated;
+      return {
+        checkId: 'mirth-connect-xstream',
+        cve: 'CVE-2023-43208',
+        target,
+        vulnerable: isVulnerable,
+        severity: 'critical',
+        statusCode: res.response?.status,
+        latencyMs: res.latencyMs,
+        details: isVulnerable
+          ? `Outdated Mirth Connect ${version} exposed unauthenticated — CVE-2023-43208 deserialization RCE range (≤4.4.0).`
+          : (isMirth ? `Mirth Connect ${version || 'unknown'} detected — not in the vulnerable range or version undetermined.` : 'Mirth Connect API not detected on this target.'),
+        proof: version ? `Mirth Connect ${version}` : undefined,
+        remediation: 'Upgrade to 4.4.1+/4.5.x; bind /api behind an admin-only proxy; never expose the Mirth API publicly.',
+        timestamp: new Date().toISOString()
+      };
+    }
+  },
+  {
+    id: 'tomcat-clear-session',
+    name: 'Tomcat Sensitive Data over Cleartext Channel (CVE-2026-34486)',
+    cve: 'CVE-2026-34486',
+    category: 'info_disclosure',
+    severity: 'high',
+    description: 'Inert verifier: confirms the session cookie is issued over plaintext http without the Secure flag (session hijack on the wire).',
+    remediation: 'Terminate TLS at the fronting proxy, force https redirects, and mark JSESSIONID Secure + HttpOnly.',
+    run: async (baseUrl, timeoutMs = 6000) => {
+      const target = normalizeUrl(baseUrl);
+      if (!target.startsWith('http://')) {
+        return {
+          checkId: 'tomcat-clear-session', cve: 'CVE-2026-34486', target, vulnerable: false,
+          severity: 'high', statusCode: 0, latencyMs: 0,
+          details: 'Target is https:// — cleartext session exposure does not apply.',
+          remediation: 'Keep TLS enforced; re-run against the http:// listener if one exists.',
+          timestamp: new Date().toISOString()
+        };
+      }
+      const res = await safeProbe(target, { method: 'GET' }, timeoutMs);
+      const setCookie = res.response?.headers?.get('set-cookie') || '';
+      const sessionCookie = /JSESSIONID\s*=/i.test(setCookie);
+      const insecure = sessionCookie && !/;\s*secure/i.test(setCookie);
+      return {
+        checkId: 'tomcat-clear-session',
+        cve: 'CVE-2026-34486',
+        target,
+        vulnerable: insecure,
+        severity: 'high',
+        statusCode: res.response?.status,
+        latencyMs: res.latencyMs,
+        details: insecure
+          ? 'Session cookie issued over plaintext http without the Secure flag — interceptable session material.'
+          : (sessionCookie ? 'Session cookie present but Secure-flagged (or https-only target).' : 'No Tomcat session cookie observed on the root path.'),
+        proof: insecure ? setCookie.slice(0, 200) : undefined,
+        remediation: 'Front Tomcat with TLS; redirect http→https; set <cookie-config><secure>true</secure></cookie-config>.',
+        timestamp: new Date().toISOString()
+      };
+    }
   }
 ];
 

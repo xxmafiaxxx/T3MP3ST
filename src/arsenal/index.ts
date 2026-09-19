@@ -3284,8 +3284,33 @@ const binaryLocationCache = new Map<string, BinaryLocation>();
 /**
  * Clear the binary location cache (useful for testing or after installing tools)
  */
+// WSL is expensive to probe (a cold distro boot can take >10s). Availability is checked ONCE and
+// cached for 10 minutes so a host without WSL never pays the per-binary 15s probe again.
+let wslAvailabilityCache: { available: boolean; checkedAt: number } | null = null;
+const WSL_AVAILABILITY_TTL_MS = 10 * 60_000;
+function wslDistro(): string {
+  return process.env.T3MP3ST_WSL_DISTRO || 'kali-linux';
+}
+async function isWslUsable(): Promise<boolean> {
+  if (wslAvailabilityCache && Date.now() - wslAvailabilityCache.checkedAt < WSL_AVAILABILITY_TTL_MS) {
+    return wslAvailabilityCache.available;
+  }
+  let available = false;
+  try {
+    // --status answers without booting the VM, so it reports "usable" on hosts whose
+    // distro can't actually start — then every per-binary `wsl -d … which` probe hangs
+    // its full timeout. Probe with a real exec instead: proves the VM can run commands.
+    await execFileAsync('wsl.exe', ['-d', wslDistro(), '-e', '/bin/true'], { timeout: 3000 });
+    available = true;
+  } catch {
+    available = false; // no WSL, distro can't boot, or the stub refuses — skip every per-binary distro probe
+  }
+  wslAvailabilityCache = { available, checkedAt: Date.now() };
+  return available;
+}
 export function clearBinaryLocationCache(): void {
   binaryLocationCache.clear();
+  wslAvailabilityCache = null;
 }
 
 /**
@@ -3314,14 +3339,20 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
   }
 
   if (process.platform === 'win32') {
-    let whereStdout = '';
-    try {
-      const res = await execFileAsync('where.exe', needed, { timeout: 6000 });
-      whereStdout = res.stdout || '';
-    } catch (err: unknown) {
-      const e = err as { stdout?: string };
-      whereStdout = (e && typeof e.stdout === 'string') ? e.stdout : '';
-    }
+    // where.exe costs ~200ms/binary when most names miss (INFO lines for each). Chunk the batch
+    // and run the chunks CONCURRENTLY so the wall-time stops scaling with the catalog size.
+    const CHUNK = 16;
+    const chunks: string[][] = [];
+    for (let i = 0; i < needed.length; i += CHUNK) chunks.push(needed.slice(i, i + CHUNK));
+    const chunkOut = await Promise.all(chunks.map((c) =>
+      execFileAsync('where.exe', c, { timeout: 6000 })
+        .then((res) => res.stdout || '')
+        .catch((err: unknown) => {
+          const e = err as { stdout?: string };
+          return (e && typeof e.stdout === 'string') ? e.stdout : '';
+        }),
+    ));
+    const whereStdout = chunkOut.join('\n');
 
     const hostFound = new Map<string, string>();
     for (const line of whereStdout.split(/\r?\n/)) {
@@ -3347,12 +3378,21 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
       }
     }
 
-    // Batch query WSL for remaining tools
+    // Batch query WSL for remaining tools. When WSL is unusable, the missing binaries are
+    // immediately cached as unavailable (they must NOT be left uncached, or every call
+    // re-pays the full where.exe sweep).
     if (missingOnHost.length > 0) {
-      const distro = process.env.T3MP3ST_WSL_DISTRO || 'kali-linux';
+      if (!(await isWslUsable())) {
+        for (const cmd of missingOnHost) {
+          const loc: BinaryLocation = { available: false, path: null, inWsl: false, cachedAt: Date.now() };
+          binaryLocationCache.set(cmd, loc);
+          result.set(cmd, loc);
+        }
+      } else {
+      const distro = wslDistro();
       let wslStdout = '';
       try {
-        const res = await execFileAsync('wsl.exe', ['-d', distro, '-e', 'which', ...missingOnHost], { timeout: 15000 });
+        const res = await execFileAsync('wsl.exe', ['-d', distro, '-e', 'which', ...missingOnHost], { timeout: 8000 });
         wslStdout = res.stdout || '';
       } catch (err: unknown) {
         const e = err as { stdout?: string };
@@ -3387,6 +3427,7 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
           binaryLocationCache.set(cmd, loc);
           result.set(cmd, loc);
         }
+      }
       }
     }
   } else {

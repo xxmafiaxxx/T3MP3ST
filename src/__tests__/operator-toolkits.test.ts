@@ -7,12 +7,14 @@
  */
 import { describe, it, expect } from 'vitest';
 import { Arsenal, BUILTIN_TOOLS, EXTERNAL_TOOLS } from '../arsenal/index.js';
+import { OSINT_TOOLS } from '../tools/osint.js';
 import { ARCHETYPE_PROFILES } from '../operators/index.js';
 
 describe('Operator role toolkits — specialized · broad · full-coverage · overlap-OK', () => {
   const arsenal = new Arsenal();
   arsenal.registerMany(BUILTIN_TOOLS);   // same population the mission does (src/index.ts)
   arsenal.registerMany(EXTERNAL_TOOLS);
+  arsenal.registerMany(OSINT_TOOLS);   // the mission registers these too (src/index.ts)
   const allNames = arsenal.getToolDefinitions().map(t => t.name);
   const archetypes = Object.keys(ARCHETYPE_PROFILES) as (keyof typeof ARCHETYPE_PROFILES)[];
 

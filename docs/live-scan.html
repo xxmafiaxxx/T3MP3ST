@@ -3504,7 +3504,7 @@
             #t3mpTourCard { width: calc(100vw - 24px); }
         }
     </style>
-</head>
+<script src="sfx.js"></script></head>
 <body>
     <div class="bg-grid"></div>
 
@@ -3563,6 +3563,12 @@
                 </a>
                 <a class="nav-item" href="cves.html" data-href="cves.html" style="text-decoration:none;">
                     <span class="icon">⚡</span> CVE Vault <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
+                </a>
+                <a class="nav-item" href="osint.html" data-href="osint.html" title="OSINT — public-source people locator: social sweeps, breach dumps, person dossiers" style="text-decoration:none;">
+                    <span class="icon">🕵️</span> OSINT <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
+                </a>
+                <a class="nav-item" href="gps.html" data-href="gps.html" title="GPS Map — public geodata screen: aircraft ADS-B, quakes, weather alerts, ISS, OSM POIs around your pin" style="text-decoration:none;">
+                    <span class="icon">🛰️</span> GPS Map <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
                 <a class="nav-item" href="dfir.html" data-href="dfir.html" style="text-decoration:none;">
                     <span class="icon">🛡️</span> DFIR Response <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
@@ -3632,6 +3638,7 @@
                         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                             <button class="btn btn-secondary btn-sm" onclick="refreshLiveScanPage()">Refresh</button>
                             <button class="btn btn-secondary btn-sm" onclick="clearLiveScanFeed()">Clear Feed</button>
+                            <button id="killAllScansBtn" class="btn btn-sm" onclick="killAllScans()" title="Kill every in-flight operator dispatch, General monitoring, and self-improve pass — hard stop" style="background:rgba(255,68,68,0.16);border:1px solid rgba(255,68,68,0.45);color:#ff6666;font-weight:800;letter-spacing:0.6px;">☠ KILL ALL SCANS</button>
                         </div>
                     </div>
 
@@ -5051,6 +5058,35 @@ Correlating findings across agents, identifying patterns, producing actionable i
             LiveScanState.events = [];
             LiveScanState.seen = new Set();
             renderLiveScanPage();
+        };
+
+        window.killAllScans = async function killAllScans() {
+            const btn = document.getElementById('killAllScansBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'KILLING…'; }
+            try {
+                // Confirm unless holding shift (power users)
+                if (!confirm('Kill ALL backend scans?\n\nThis aborts every in-flight operator dispatch, General monitoring, and any running self-improvement pass. The next mission starts clean.')) {
+                    if (btn) { btn.disabled = false; btn.textContent = '☠ KILL ALL SCANS'; }
+                    return;
+                }
+                // Hard kill server-side first
+                try { await T3MP3ST_API.post('/api/mission/kill-all', {}); } catch (_) {}
+                // Belt-and-suspenders: also hit the legacy stop endpoint and in-browser pipeline
+                try { if (typeof BackendDispatch !== 'undefined' && BackendDispatch.stopMission) await BackendDispatch.stopMission().catch(function(){}); } catch (_) {}
+                try { if (typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API.post) await T3MP3ST_API.post('/api/mission/stop', {}).catch(function(){}); } catch (_) {}
+                try { if (typeof PipelineOrchestrator !== 'undefined') PipelineOrchestrator.abortRequested = true; } catch (_) {}
+                try { if (typeof missionRunning !== 'undefined' && missionRunning) { missionRunning = false; if (typeof missionTimer !== 'undefined' && missionTimer) { clearInterval(missionTimer); missionTimer = null; } } } catch (_) {}
+                try { window.refreshLiveScanPage?.(); } catch (_) {}
+                try { if (typeof renderWarGangConsole === 'function') renderWarGangConsole(); } catch (_) {}
+                if (typeof toast === 'function') toast('All backend scans killed — hard stop complete', 'success');
+                else if (typeof addIntel === 'function') addIntel('COMMAND', 'KILL ALL — every backend dispatch aborted', 'danger');
+            } catch (e) {
+                if (typeof toast === 'function') toast('Kill failed: ' + (e && e.message ? e.message : e), 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '☠ KILL ALL SCANS'; }
+                // Refresh once more after server settles
+                setTimeout(function(){ try { window.refreshLiveScanPage?.(); } catch(_){} }, 700);
+            }
         };
 
         window.toggleLiveScanVerbose = function toggleLiveScanVerbose(taskId) {

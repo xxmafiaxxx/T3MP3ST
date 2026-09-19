@@ -106,7 +106,7 @@ describe('UI Chrome Persistence across all pages (API status & Egress IP Banner)
   const PAGES = [
     'index.html', 'live-scan.html', 'receipts.html', 'operators.html', 'evidence.html',
     'obsidivm.html', 'ctf.html', 'arsenal.html', 'cves.html', 'terminal.html',
-    'configs.html', 'general.html', 'self-improve.html', 'settings.html', 'about.html'
+    'configs.html', 'general.html', 'self-improve.html', 'settings.html', 'about.html', 'osint.html', 'gps.html'
   ];
 
   PAGES.forEach((page) => {

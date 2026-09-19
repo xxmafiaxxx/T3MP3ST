@@ -11,7 +11,9 @@ describe('Burp Suite Integration', () => {
     expect(burp?.networked).toBe(true);
   });
 
-  it('retrieves Burp Suite status via burpManager', async () => {
+  // Cold findBinaryLocation can cost ~9s when the WSL which-probe hangs its
+  // full ceiling on hosts with a broken WSL VM (cache is warm after first call).
+  it('retrieves Burp Suite status via burpManager', { timeout: 20_000 }, async () => {
     const status = await burpManager.getStatus();
     expect(status).toHaveProperty('installed');
     expect(status).toHaveProperty('listening');

@@ -44,6 +44,37 @@ import { TripwireManager, type TripwireTriggerEvent } from './tools/tripwires.js
 import { WebhookDispatcher } from './config/webhooks.js';
 import { CveFeedEngine } from './tools/cve-feed.js';
 import { getPayloadsForCve, CVE_PAYLOAD_CATALOG } from './tools/cve-payloads.js';
+import {
+  OSINT_SITES,
+  OSINT_TOOLS,
+  runUsernameSweep,
+  emailIntel,
+  phoneIntel,
+  dumpDatabaseLookup,
+  locatePerson,
+  usernamePermutations,
+  personDorks,
+  ipGeoMany,
+  geoForHost,
+  geocodeText,
+  ransomwareLeakSearch,
+  ahmiaSearch,
+  onionFetch,
+  torStatus,
+  type GeoPoint,
+} from './tools/osint.js';
+import {
+  buildBbox,
+  bboxOverlaps,
+  fetchAircraft,
+  fetchEarthquakes,
+  fetchWeatherAlerts,
+  fetchIss,
+  reverseGeocode,
+  fetchPois,
+  POI_KINDS,
+  isPoiKind,
+} from './tools/public-gps.js';
 import { CveCorrelator } from './recon/cve-correlator.js';
 import { DFIRManager, type PlaybookType, type IOCType } from './tools/dfir.js';
 import { burpManager } from './tools/burp.js';
@@ -56,7 +87,7 @@ async function execVersionProbe(bin: string, args: string[], timeoutMs: number):
   const resolved = resolveBin(bin) || bin;
   if (!needsShell(resolved)) return execFileAsync(resolved, args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 });
   const { exec } = await import('child_process');
-  const command = [resolved, ...args].map(a => (a !== '' && !/[\s"|&<>^]/.test(a)) ? a : '"' + a.replace(/(\\*?)"/g, '$1$1\\\"') + '"').join(' ');
+  const command = [resolved, ...args].map(a => (a !== '' && !/[\s"|&<>^]/.test(a)) ? a : '"' + a.replace(/(\\*?)"/g, '$1$1\\"') + '"').join(' ');
   return new Promise((resolve, reject) => {
     exec(command, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, env: process.env }, (err, stdout, stderr) => {
       if (err) { (err as any).stdout = stdout; (err as any).stderr = stderr; reject(err); }
@@ -2018,7 +2049,10 @@ function isLocalOrPrivateTarget(target: string): boolean {
 
 function isLoopbackOrLabTarget(target: string): boolean {
   const host = hostFromTarget(target);
-  return !host || ['local-lab', 'localhost', 'target.local'].includes(host) || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host.endsWith('.local');
+  // Arbitrary *.local hostnames are deliberately NOT lab targets — a hostname is
+  // attacker-influenced mission text (mDNS on the operator's LAN can resolve anything),
+  // so it mints a receipt like any public target. Sanctioned lab literals stay keyless.
+  return !host || ['local-lab', 'localhost', 'target.local'].includes(host) || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
 }
 
 function approvalIsFresh(approval: ApprovalRequest): boolean {
@@ -5690,8 +5724,18 @@ app.get(['/health', '/api/health'], (_req: Request, res: Response) => {
   });
 });
 
-app.get('/api/preflight', async (_req: Request, res: Response) => {
-  res.json(await buildPreflightReport());
+let preflightCache: { at: number; report: Record<string, unknown> } | null = null;
+app.get('/api/preflight', async (req: Request, res: Response) => {
+  // Diagnostic report — the heavy part is the tool-availability probe. Serve a 60s cache;
+  // `?refresh=1` re-derives on demand.
+  const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  if (!refresh && preflightCache && Date.now() - preflightCache.at < 60_000) {
+    res.json(preflightCache.report);
+    return;
+  }
+  const report = await buildPreflightReport();
+  preflightCache = { at: Date.now(), report };
+  res.json(report);
 });
 
 app.get('/api/mission-context/latest', (_req: Request, res: Response) => {
@@ -7616,6 +7660,434 @@ app.post('/api/tools/sploitus', async (req: Request, res: Response): Promise<voi
 });
 
 // =============================================================================
+// OSINT — PUBLIC-SOURCE PEOPLE LOOKUP, USERNAME SWEEPS, BREACH/DUMP EXPOSURE
+// These are lookups against third-party public services (the same doctrine as the
+// CVE/EPSS feed), not active probes of a target system. Operator-click = operator
+// authorization for the lookup; every run is audit-logged.
+// =============================================================================
+
+app.get('/api/osint/sites', (_req: Request, res: Response) => {
+  res.json({
+    sites: OSINT_SITES.map((s) => ({ name: s.name, category: s.category, reliability: s.reliability, notes: s.notes })),
+    count: OSINT_SITES.length,
+    tools: OSINT_TOOLS.map((t) => ({ name: t.name, description: t.description })),
+  });
+});
+
+app.get('/api/osint/dump-status', (_req: Request, res: Response) => {
+  const lanes = [
+    { service: 'LeakCheck v2', envVar: 'T3MP3ST_LEAKCHECK_KEY', unlocks: 'full dump records incl. password fields (email/username/phone/domain)' },
+    { service: 'DeHashed', envVar: 'T3MP3ST_DEHASHED_KEY', unlocks: 'deep-web breach search, 40B+ records (email/username)' },
+    { service: 'Snusbase', envVar: 'T3MP3ST_SNUSBASE_KEY', unlocks: 'dump database search incl. phone lookups' },
+  ];
+  res.json({
+    free: ['LeakCheck public', 'XposedOrNot', 'HIBP Pwned Passwords (k-anonymity)'],
+    lanes: lanes.map((l) => ({ ...l, armed: Boolean((process.env as Record<string, string | undefined>)[l.envVar]) })),
+  });
+});
+
+app.post('/api/osint/username-sweep', async (req: Request, res: Response): Promise<void> => {
+  const username = typeof req.body?.username === 'string' ? req.body.username : '';
+  const sites = typeof req.body?.sites === 'string'
+    ? req.body.sites.split(',').map((s: string) => s.trim()).filter(Boolean)
+    : undefined;
+  if (!username) { res.status(400).json({ error: 'username required' }); return; }
+  try {
+    console.log(`[T3MP3ST][OSINT] username sweep: ${username}${sites ? ` (${sites.length} sites)` : ''}`);
+    const sweep = await runUsernameSweep(username, { sites });
+    for (const hit of sweep.found.slice(0, 20)) {
+      upsertMissionFindingToLedger({
+        title: `Social Account Found — ${hit.site} (${sweep.username})`,
+        description: `Username "${sweep.username}" claimed on ${hit.site}: ${hit.url} (confidence ${hit.confidence}, probe HTTP ${hit.probeStatus ?? '?'})`,
+        severity: 'info',
+        targetId: sweep.username,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `public-profile probe ${hit.probeStatus ?? '?'} → ${hit.url}`, timestamp: Date.now(), metadata: { tool: 'osint_username_sweep' } }],
+      });
+    }
+    res.json({ success: true, sweep });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/email', async (req: Request, res: Response): Promise<void> => {
+  const email = typeof req.body?.email === 'string' ? req.body.email : '';
+  if (!email) { res.status(400).json({ error: 'email required' }); return; }
+  try {
+    console.log(`[T3MP3ST][OSINT] email intel: ${email}`);
+    const intel = await emailIntel(email);
+    for (const b of intel.breaches) {
+      if (typeof b.found === 'number' && b.found > 0) {
+        upsertMissionFindingToLedger({
+          title: `Breach Exposure — ${email} (${b.service})`,
+          description: `${b.found} exposed records${b.sources?.length ? ` from: ${b.sources.slice(0, 8).join(', ')}` : ''}${b.fields?.length ? `; fields: ${b.fields.join(', ')}` : ''}`,
+          severity: 'medium',
+          targetId: email,
+          operatorId: 'osint-panel',
+          evidence: [{ type: 'log', content: `${b.service}: ${b.found} records${b.sources?.length ? ` (${b.sources.join('; ')})` : ''}`, timestamp: Date.now(), metadata: { tool: 'osint_email_lookup' } }],
+        });
+      }
+    }
+    res.json({ success: true, intel });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/phone', (req: Request, res: Response) => {
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone : '';
+  if (!phone) { res.status(400).json({ error: 'phone required' }); return; }
+  console.log(`[T3MP3ST][OSINT] phone intel: ${phone}`);
+  try {
+    res.json({ success: true, intel: phoneIntel(phone) });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/breach', async (req: Request, res: Response): Promise<void> => {
+  const query = typeof req.body?.query === 'string' ? req.body.query : '';
+  const kindRaw = typeof req.body?.kind === 'string' ? req.body.kind : '';
+  const kind = (['email', 'username', 'phone', 'password'] as const).includes(kindRaw as any)
+    ? kindRaw as 'email' | 'username' | 'phone' | 'password'
+    : (query.includes('@') ? 'email' : 'username');
+  if (!query) { res.status(400).json({ error: 'query required' }); return; }
+  try {
+    console.log(`[T3MP3ST][OSINT] dump-database lookup (${kind}): ${kind === 'password' ? '<redacted>' : query}`);
+    const result = await dumpDatabaseLookup(query, kind);
+    for (const cred of result.credentials) {
+      recordCredentialToLedger({
+        type: cred.type,
+        username: cred.username,
+        secret: cred.secret,
+        domain: cred.domain,
+        source: cred.source,
+        notes: cred.notes,
+        discoveredAt: new Date().toISOString(),
+      });
+    }
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/permutate', (req: Request, res: Response) => {
+  const first = typeof req.body?.first === 'string' ? req.body.first : '';
+  const last = typeof req.body?.last === 'string' ? req.body.last : '';
+  if (!first || !last) { res.status(400).json({ error: 'first and last required' }); return; }
+  try {
+    const permutations = usernamePermutations(first, last, {
+      middle: typeof req.body?.middle === 'string' ? req.body.middle : undefined,
+      birthYear: typeof req.body?.birthYear === 'string' ? req.body.birthYear : undefined,
+      numbers: typeof req.body?.numbers === 'boolean' ? req.body.numbers : undefined,
+    });
+    res.json({ success: true, permutations, count: permutations.length });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/dorks', (req: Request, res: Response) => {
+  const dorks = personDorks({
+    name: typeof req.body?.name === 'string' ? req.body.name : undefined,
+    email: typeof req.body?.email === 'string' ? req.body.email : undefined,
+    username: typeof req.body?.username === 'string' ? req.body.username : undefined,
+    phone: typeof req.body?.phone === 'string' ? req.body.phone : undefined,
+    domain: typeof req.body?.domain === 'string' ? req.body.domain : undefined,
+  });
+  res.json({ success: true, dorks, count: dorks.length });
+});
+
+/** The full person-locator chain — sweeps socials, Gravatar identity, breach/dump
+ *  lanes on every identifier, phone routing, and operator deep-links. Dossier
+ *  highlights are recorded to the findings ledger; dump credentials to the
+ *  credentials ledger so the Evidence Vault picks everything up. */
+app.post('/api/osint/locate', async (req: Request, res: Response): Promise<void> => {
+  const subject = typeof req.body?.subject === 'string' ? req.body.subject.trim() : '';
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : undefined;
+  if (!subject && !name) { res.status(400).json({ error: 'subject required (email, @handle, phone, URL, domain, or name)' }); return; }
+  try {
+    console.log(`[T3MP3ST][OSINT] person locate: ${subject || name}`);
+    const dossier = await locatePerson({ subject: subject || undefined, name });
+    if (dossier.socialAccounts.length > 0) {
+      upsertMissionFindingToLedger({
+        title: `OSINT Dossier — ${dossier.subject} (${dossier.socialAccounts.length} accounts found)`,
+        description: `Presence ${dossier.presenceScore}/100.\n${dossier.socialAccounts.map((h) => `[${h.confidence}] ${h.site}: ${h.url}`).join('\n')}${dossier.identities.length ? '\n' + dossier.identities.map((i) => `${i.source}: ${i.detail}`).join('\n') : ''}`,
+        severity: dossier.socialAccounts.length >= 5 ? 'medium' : 'info',
+        targetId: dossier.subject,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `locator ran ${dossier.durationMs}ms; identifiers: ${Object.entries(dossier.parsed).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(' ')}`, timestamp: Date.now(), metadata: { tool: 'osint_person_locate' } }],
+      });
+    }
+    for (const lane of dossier.dumpLanes) {
+      for (const cred of lane.credentials) {
+        recordCredentialToLedger({
+          type: cred.type,
+          username: cred.username,
+          secret: cred.secret,
+          domain: cred.domain,
+          source: cred.source,
+          notes: cred.notes,
+          discoveredAt: new Date().toISOString(),
+        });
+      }
+      for (const f of lane.free) {
+        if (typeof f.found === 'number' && f.found > 0) {
+          upsertMissionFindingToLedger({
+            title: `Breach Exposure — ${lane.query} (${f.service})`,
+            description: `${f.found} exposed records${f.sources?.length ? ` from: ${f.sources.slice(0, 8).join(', ')}` : ''}${f.fields?.length ? `; fields: ${f.fields.join(', ')}` : ''}`,
+            severity: 'medium',
+            targetId: lane.query,
+            operatorId: 'osint-panel',
+            evidence: [{ type: 'log', content: `${f.service}: ${f.found}${f.sources?.length ? ` (${f.sources.join('; ')})` : ''}`, timestamp: Date.now(), metadata: { tool: 'osint_breach_lookup' } }],
+          });
+        }
+      }
+    }
+    res.json({ success: true, dossier });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/ip-geo', async (req: Request, res: Response): Promise<void> => {
+  const ips = Array.isArray(req.body?.ips)
+    ? req.body.ips.filter((i: unknown): i is string => typeof i === 'string')
+    : typeof req.body?.ip === 'string' ? [req.body.ip] : [];
+  if (ips.length === 0) { res.status(400).json({ error: 'ip or ips[] required' }); return; }
+  try {
+    console.log(`[T3MP3ST][OSINT] ip geolocation: ${ips.length} address(es)`);
+    const geo = await ipGeoMany(ips);
+    res.json({ success: true, geo });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/geocode', async (req: Request, res: Response): Promise<void> => {
+  const q = typeof req.body?.q === 'string' ? req.body.q : '';
+  if (!q) { res.status(400).json({ error: 'q required (place text)' }); return; }
+  const hit = await geocodeText(q);
+  res.json({ success: true, geocode: hit });
+});
+
+// --- Geo Intel Map feed — infrastructure geography, 60s cache ---
+// Egress/proxy exit + engagement target hosts (findings ledger) + DFIR incident
+// IOC/target infrastructure, geolocated through keyless public sources. This maps
+// ASSETS and ATTACK INFRASTRUCTURE — it is not and will not be a person-tracker.
+interface MapFeedCache { at: number; feed: { points: GeoPoint[]; generatedAt: number; note: string } }
+let mapFeedCache: MapFeedCache | null = null;
+
+app.get('/api/osint/map-feed', async (req: Request, res: Response): Promise<void> => {
+  const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
+  if (mapFeedCache && !refresh && Date.now() - mapFeedCache.at < 60_000) {
+    res.json({ success: true, ...mapFeedCache.feed, cached: true });
+    return;
+  }
+  try {
+    const points: GeoPoint[] = [];
+
+    // Egress / proxy exit — where our own traffic leaves from
+    try {
+      const net = await checkIp(false);
+      const exitIp = net?.exit?.ip;
+      if (exitIp) {
+        const geo = await geoForHost(String(exitIp));
+        points.push({
+          kind: 'egress', key: `egress:${exitIp}`, label: `Egress exit ${exitIp}`,
+          detail: [geo.city, geo.region, geo.country].filter(Boolean).join(', ') || geo.note,
+          lat: geo.lat, lon: geo.lon, city: geo.city, region: geo.region, country: geo.country,
+          org: geo.org, geoNote: net?.leak ? '⚠ IP LEAK — exit equals real IP' : 'proxied exit',
+        });
+      }
+    } catch { /* egress check best-effort */ }
+
+    // Engagement targets — hosts actually on record in the findings ledger, with the
+    // same host-plausibility discipline as the target map (code tokens, binary names
+    // and doctrine-fiction domains like c2.evil.com are not infrastructure).
+    const TLD_ALLOW = new Set(['com','net','org','gov','io','ai','co','app','dev','xyz','info','biz','online','site','cloud','us','uk','de','fr','nl','ru','cn','jp','br','in','edu','mil','ca','au','nz','ch','se','no','dk','fi','es','it','pt','pl','cz','at','be','ie','il','hk','sg','me','tv','fm','gg','to','cc','sh','is','eu']);
+    const plausibleHost = (h: string): boolean => {
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true;
+      if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(h) || h.length > 253 || /\.\./.test(h)) return false;
+      const tld = h.split('.').pop()!.toLowerCase();
+      if (!TLD_ALLOW.has(tld)) return false;
+      if (/(^|\.)(c2|cnc|commandcontrol|malware|evil|attacker|evilserver)\./i.test('.' + h)) return false;
+      return true;
+    };
+    const targetHosts = new Set<string>();
+    for (const f of findingsLedger.values()) {
+      const t = (f.target || '').trim();
+      if (!t) continue;
+      const host = t.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+      if (host && host !== 'unknown' && !/^[0-9a-f]{8}-[0-9a-f]{4}/i.test(host) && plausibleHost(host)) targetHosts.add(host);
+    }
+    for (const host of [...targetHosts].slice(0, 15)) {
+      const geo = await geoForHost(host).catch(() => null);
+      if (!geo) continue;
+      points.push({
+        kind: 'target', key: `target:${host}`, label: `Target ${host}`,
+        detail: geo.privateLan ? 'private LAN asset' : [geo.city, geo.region, geo.country].filter(Boolean).join(', ') || geo.note,
+        lat: geo.lat, lon: geo.lon, city: geo.city, region: geo.region, country: geo.country, org: geo.org,
+        geoNote: geo.privateLan ? 'RFC1918 — lab/LAN scope, no public geolocation' : undefined,
+      });
+    }
+
+    // DFIR incident infrastructure — target hosts + IOCs under investigation
+    try {
+      const incidents = DFIRManager.listIncidents({});
+      const dfirHosts = new Set<string>();
+      for (const inc of incidents.slice(0, 20)) {
+        if (inc.targetHost) dfirHosts.add(String(inc.targetHost));
+        for (const ioc of (inc as { iocs?: Array<{ value?: string }> }).iocs || []) {
+          if (ioc?.value && /^\d+\.\d+\.\d+\.\d+$/.test(ioc.value)) dfirHosts.add(ioc.value);
+        }
+      }
+      for (const host of [...dfirHosts].slice(0, 10)) {
+        const geo = await geoForHost(host).catch(() => null);
+        if (!geo) continue;
+        points.push({
+          kind: 'dfir', key: `dfir:${host}`, label: `DFIR ${host}`,
+          detail: geo.privateLan ? 'internal asset under investigation' : [geo.city, geo.region, geo.country].filter(Boolean).join(', ') || geo.note,
+          lat: geo.lat, lon: geo.lon, city: geo.city, region: geo.region, country: geo.country, org: geo.org,
+        });
+      }
+    } catch { /* DFIR aggregation best-effort */ }
+
+    const feed = {
+      points: points.filter((p) => typeof p.lat === 'number' && typeof p.lon === 'number')
+        .concat(points.filter((p) => typeof p.lat !== 'number')),
+      generatedAt: Date.now(),
+      note: 'Infrastructure geography: egress, engagement targets, DFIR IOCs. City-level IP geolocation only — no device/telephony positioning.',
+    };
+    mapFeedCache = { at: Date.now(), feed };
+    res.json({ success: true, ...feed });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// --- Public GPS screen — keyless open-geodata feeds (vehicles/phenomena/places) ---
+// OpenSky ADS-B, USGS quakes, NOAA alerts, ISS, Nominatim reverse, Overpass POIs.
+// Maps public environment/vehicle broadcasts ONLY — no individual resolution, no
+// fusion-to-person, no telephony positioning. Person work stays in the OSINT Locator.
+
+app.get('/api/gps/aircraft', async (req: Request, res: Response): Promise<void> => {
+  const bbox = buildBbox(req.query.lamin, req.query.lomin, req.query.lamax, req.query.lomax);
+  if (!bbox) {
+    res.status(400).json({ error: 'bbox required: lamin,lomin,lamax,lomax (numeric, ≤10° span per axis)' });
+    return;
+  }
+  const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
+  const feed = await fetchAircraft(bbox, { refresh });
+  res.json({ success: true, bbox, ...feed });
+});
+
+app.get('/api/gps/quakes', async (req: Request, res: Response): Promise<void> => {
+  const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
+  const feed = await fetchEarthquakes({ refresh });
+  const bbox = buildBbox(req.query.lamin, req.query.lomin, req.query.lamax, req.query.lomax);
+  res.json({ success: true, ...(bbox ? { ...feed, points: feed.points.filter((p) => bboxOverlaps(bbox, p.lat, p.lon)) } : feed) });
+});
+
+app.get('/api/gps/alerts', async (req: Request, res: Response): Promise<void> => {
+  const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
+  const feed = await fetchWeatherAlerts({ refresh });
+  const bbox = buildBbox(req.query.lamin, req.query.lomin, req.query.lamax, req.query.lomax);
+  res.json({ success: true, ...(bbox ? { ...feed, points: feed.points.filter((p) => bboxOverlaps(bbox, p.lat, p.lon)) } : feed) });
+});
+
+app.get('/api/gps/iss', async (req: Request, res: Response): Promise<void> => {
+  const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
+  res.json({ success: true, ...(await fetchIss({ refresh })) });
+});
+
+app.get('/api/gps/reverse', async (req: Request, res: Response): Promise<void> => {
+  const lat = parseFloat(String(req.query.lat ?? ''));
+  const lon = parseFloat(String(req.query.lon ?? ''));
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    res.status(400).json({ error: 'lat and lon required (numeric)' });
+    return;
+  }
+  const hit = await reverseGeocode(lat, lon);
+  res.json({ success: true, pin: hit ? { lat, lon, ...hit } : { lat, lon, label: null } });
+});
+
+app.get('/api/gps/poi', async (req: Request, res: Response): Promise<void> => {
+  const lat = parseFloat(String(req.query.lat ?? ''));
+  const lon = parseFloat(String(req.query.lon ?? ''));
+  const radius = parseFloat(String(req.query.radius ?? '500'));
+  const kind = req.query.kind;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    res.status(400).json({ error: 'lat and lon required (numeric)' });
+    return;
+  }
+  if (!isPoiKind(kind)) {
+    res.status(400).json({ error: `kind must be one of: ${POI_KINDS.join(', ')}` });
+    return;
+  }
+  const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
+  const feed = await fetchPois(lat, lon, Number.isFinite(radius) ? radius : 500, kind, { refresh });
+  res.json({ success: true, ...feed });
+});
+
+// --- Dark web direct — leak-site monitor + onion search/fetch (keyless lanes) ---
+
+app.get('/api/osint/tor-status', async (_req: Request, res: Response): Promise<void> => {
+  res.json({ success: true, tor: await torStatus() });
+});
+
+app.post('/api/osint/darkweb/leak-check', async (req: Request, res: Response): Promise<void> => {
+  const keyword = typeof req.body?.keyword === 'string' ? req.body.keyword : '';
+  if (!keyword) { res.status(400).json({ error: 'keyword required (target domain or company name)' }); return; }
+  try {
+    console.log(`[T3MP3ST][OSINT] leak-site monitor: ${keyword}`);
+    const result = await ransomwareLeakSearch(keyword);
+    for (const v of result.victims.slice(0, 10)) {
+      upsertMissionFindingToLedger({
+        title: `Leak-Site Victim Post — ${v.victim} (${v.group})`,
+        description: `${v.victim}${v.domain ? ` (${v.domain})` : ''} listed by ransomware group ${v.group}${v.attackDate ? `, attacked ${v.attackDate.slice(0, 10)}` : ''}${v.description ? ` — ${v.description}` : ''}${v.postUrl ? ` Post: ${v.postUrl}` : ''}`,
+        severity: 'medium',
+        targetId: v.domain || keyword,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `ransomware.live ${result.searched}: ${v.group} → ${v.postUrl || 'no post URL'}`, timestamp: Date.now(), metadata: { tool: 'osint_darkweb_leak_monitor' } }],
+      });
+    }
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/onion/search', async (req: Request, res: Response): Promise<void> => {
+  const query = typeof req.body?.query === 'string' ? req.body.query : '';
+  if (!query) { res.status(400).json({ error: 'query required' }); return; }
+  try {
+    console.log(`[T3MP3ST][OSINT] onion search: ${query}`);
+    res.json({ success: true, result: await ahmiaSearch(query) });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/onion/fetch', async (req: Request, res: Response): Promise<void> => {
+  const url = typeof req.body?.url === 'string' ? req.body.url : '';
+  if (!url) { res.status(400).json({ error: 'url required (.onion)' }); return; }
+  if (!/^https?:\/\/[a-z2-7]{16,56}\.onion(\/|$)/i.test(url.trim())) {
+    res.status(400).json({ error: 'only .onion hidden-service URLs are fetchable through this lane' });
+    return;
+  }
+  try {
+    console.log(`[T3MP3ST][OSINT] onion fetch: ${url.slice(0, 60)}`);
+    const page = await onionFetch(url);
+    res.json({ success: true, page: { ...page, body: page.body.slice(0, 20_000) } });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// =============================================================================
 // CVE THREAT INTELLIGENCE VAULT & CISA KEV FEEDS
 // =============================================================================
 
@@ -8851,9 +9323,20 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
   // SECURITY NOTE: apiKey is read from the request body (Authorization header is
   // preferred). Kept body-accepted for the same-origin UI; only reachable from
   // the local operator (loopback bind + origin guard). Header move is out of scope.
-  const missionLLMConfig = baseUrl === undefined
-    ? resolveGeneralLLMConfig(provider, model, apiKey)
-    : resolveGeneralLLMConfig(provider, model, apiKey, baseUrl);
+  // resolveGeneralLLMConfig THROWS on a missing key / malformed local baseUrl. Express 4 does not
+  // catch rejections from async handlers — an uncaught throw here left the client hanging forever
+  // (unhandledRejection, no response). Map the expected errors to their proper 4xx responses.
+  let missionLLMConfig;
+  try {
+    missionLLMConfig = baseUrl === undefined
+      ? resolveGeneralLLMConfig(provider, model, apiKey)
+      : resolveGeneralLLMConfig(provider, model, apiKey, baseUrl);
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    const status = /API key required|Unknown provider/.test(msg) ? 400 : 500;
+    res.status(status).json({ error: msg });
+    return;
+  }
   const effectiveKey = missionLLMConfig.apiKey;
   if (providerNeedsApiKey(missionLLMConfig.provider) && !effectiveKey) {
     res.status(400).json({ error: 'API key required — pass apiKey, configure one on the server, or connect a supported local agent' });
@@ -9108,6 +9591,43 @@ app.post('/api/mission/stop', (_req: Request, res: Response) => {
   if (activeGeneral) activeGeneral.stopMonitoring();
   broadcastEvent('mission:stopped', { timestamp: Date.now() });
   res.json({ success: true, message: 'Mission stopped' });
+});
+
+/**
+ * POST /api/mission/kill-all — Kill ALL backend tasks (hard stop)
+ * Idempotent: always succeeds. Stops the active TempestCommand (every
+ * in-flight operator dispatch + tick + stall), the OpGeneral monitoring
+ * interval, and any running self-improvement evolve child process. Every
+ * in-flight scan is aborted; the next mission starts clean.
+ */
+app.post('/api/mission/kill-all', (_req: Request, res: Response) => {
+  let killedMission = false;
+  let killedGeneral = false;
+  let killedSelfImprove = false;
+
+  const cmd = getTempestCommand();
+  if (cmd) {
+    try { cmd.stop(); killedMission = true; } catch { /* ignore */ }
+  }
+  if (activeGeneral) {
+    try { activeGeneral.stopMonitoring(); killedGeneral = true; } catch { /* ignore */ }
+  }
+  if (siRun && siRun.proc.exitCode === null && !siRun.proc.killed) {
+    try {
+      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(siRun.proc.pid), '/T', '/F']);
+      else siRun.proc.kill('SIGTERM');
+      killedSelfImprove = true;
+    } catch { /* ignore */ }
+  }
+
+  broadcastEvent('mission:killed', { timestamp: Date.now(), killedMission, killedGeneral, killedSelfImprove });
+  // Also emit stopped so existing listeners (war room, live scan) reset.
+  broadcastEvent('mission:stopped', { timestamp: Date.now() });
+  res.json({
+    success: true,
+    message: 'All backend tasks killed',
+    killed: { mission: killedMission, general: killedGeneral, selfImprove: killedSelfImprove },
+  });
 });
 
 /**
@@ -10854,9 +11374,18 @@ async function requireLiveLocalAgent(model: string | undefined): Promise<{ ok: t
 }
 
 // GET /api/agents/local/detect — which agents are installed / authed / ready (no tokens spent)
-app.get('/api/agents/local/detect', async (_req: Request, res: Response): Promise<void> => {
+let localAgentDetectCache: { at: number; agents: Awaited<ReturnType<typeof detectLocalAgents>> } | null = null;
+app.get('/api/agents/local/detect', async (req: Request, res: Response): Promise<void> => {
   try {
+    // Each uncached detect re-probes every agent CLI (resolveBin + version + auth) — ~10s wall on
+    // this box. The Settings UI polls the route, so serve a 60s cache; `?refresh=1` forces a re-probe.
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    if (!refresh && localAgentDetectCache && Date.now() - localAgentDetectCache.at < 60_000) {
+      res.json({ agents: localAgentDetectCache.agents, connected: Array.from(connectedLocalAgents.keys()), cached: true });
+      return;
+    }
     const agents = await detectLocalAgents();
+    localAgentDetectCache = { at: Date.now(), agents };
     res.json({ agents, connected: Array.from(connectedLocalAgents.keys()) });
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) });
@@ -11107,7 +11636,11 @@ async function ctfRangeContainersFromDocker(): Promise<CtfRangeContainer[]> {
         console.warn('[ctf] docker ps failed twice, serving stale cache:', (e as Error).message?.slice(0, 300));
         return ctfContainersCache.list;
       }
-      throw e;
+      // Docker down / pipe unavailable is an EXPECTED state (Docker Desktop not started yet),
+      // not a server error — degrade to an empty range instead of 500-ing the dashboard.
+      console.warn('[ctf] docker ps unavailable — serving empty range:', (e as Error).message?.slice(0, 200));
+      ctfContainersCache = { at: Date.now(), list: [] };
+      return [];
     }
   }
   throw new Error('unreachable');
@@ -11357,6 +11890,19 @@ app.get('/', (_req: Request, res: Response) => res.redirect('/ui/'));
 
 app.use('/ui', express.static('docs', { index: 'shell.html' }));
 
+// Stale-bookmark convenience: every operator page lives under /ui/ (the shell mount), so a
+// root-level /ctf.html-style request 404s today. 301 the known pages to their shell location.
+const DOC_PAGES = new Set([
+  'about.html', 'arsenal.html', 'configs.html', 'ctf.html', 'cves.html', 'dfir.html',
+  'evidence.html', 'general.html', 'index.html', 'live-scan.html', 'obsidivm.html',
+  'operators.html', 'osint.html', 'gps.html', 'receipts.html', 'self-improve.html', 'settings.html', 'terminal.html', 'shell.html',
+]);
+app.get('/:page', (req: Request, res: Response, next: NextFunction) => {
+  const page = String(req.params.page || '');
+  if (DOC_PAGES.has(page)) return res.redirect(301, `/ui/${page}`);
+  next();
+});
+
 // =============================================================================
 // ERROR HANDLING
 // =============================================================================
@@ -11429,6 +11975,13 @@ async function startServer() {
     console.log(`[T3MP3ST] Web UI available at http://${HOST}:${PORT}/ui`);
     // Fire-and-forget: real env-injected keys land in the gitignored .env on boot.
     void persistEnvKeysToEnvFile();
+    // Fire-and-forget: pre-warm the binary-location cache so the first /api/arsenal/status
+    // (and every tool call) hits a warm cache instead of paying the ~6s cold where.exe sweep.
+    void import('./arsenal/index.js').then(({ findBinaryLocations }) =>
+      findBinaryLocations([...new Set(TOOL_ADAPTERS.map(a => a.binary))])
+        .then((m) => console.log(`[T3MP3ST] Binary cache pre-warmed (${m.size} binaries)`))
+        .catch(() => { /* cache stays cold; endpoints degrade to the probe path */ }),
+    );
     if (!HOST_IS_LOOPBACK) {
       console.warn('');
       console.warn(`  ⚠️  EXPOSURE WARNING: bound to NON-LOOPBACK host "${HOST}". This API executes`);

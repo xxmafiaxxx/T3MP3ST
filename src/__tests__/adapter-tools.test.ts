@@ -59,7 +59,11 @@ describe('report-file workspace', () => {
   it('uses a private 0700 directory and cleanup removes the complete workspace', async () => {
     const workspace = await createPrivateReportWorkspace('garak');
     const dir = dirname(workspace.reportBase);
-    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32') {
+      // Windows does not honor POSIX mode bits on mkdir (0o700 arrives as 0o666); the privacy
+      // invariant is asserted on POSIX hosts, the cleanup invariant everywhere.
+      expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    }
     expect(dir).not.toBe('/tmp');
 
     await workspace.cleanup();

@@ -164,6 +164,21 @@
       "accepted": 0,
       "delta_from_prev": 0,
       "action": "kept"
+    },
+    {
+      "gen": 12,
+      "timestamp": "2026-09-15T08:35:50.931Z",
+      "hunter": "stub",
+      "model": "claude-opus-4-7",
+      "score": 80.67,
+      "grade": "B+",
+      "found": 12,
+      "expected": 16,
+      "misses": 4,
+      "proposals": 4,
+      "accepted": 0,
+      "delta_from_prev": 0,
+      "action": "kept"
     }
   ]
 }

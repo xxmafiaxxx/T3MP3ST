@@ -9,12 +9,12 @@
     'use strict';
     var THEME_KEY = 't3mp3st_theme';
     var PAGES = ['index.html', 'live-scan.html', 'receipts.html', 'operators.html', 'evidence.html',
-        'obsidivm.html', 'ctf.html', 'arsenal.html', 'cves.html', 'dfir.html', 'terminal.html', 'configs.html',
+        'obsidivm.html', 'ctf.html', 'arsenal.html', 'cves.html', 'osint.html', 'gps.html', 'dfir.html', 'terminal.html', 'configs.html',
         'general.html', 'self-improve.html', 'settings.html', 'about.html'];
     var TITLES = {
         'index.html': 'War Room', 'live-scan.html': 'Live Scan', 'receipts.html': 'Scope Receipts',
         'operators.html': 'Operatives', 'evidence.html': 'Evidence Vault', 'obsidivm.html': 'OBSIDIVM',
-        'ctf.html': 'CTF Range', 'arsenal.html': 'Arsenal', 'cves.html': 'CVE Vault', 'dfir.html': 'DFIR Response',
+        'ctf.html': 'CTF Range', 'arsenal.html': 'Arsenal', 'cves.html': 'CVE Vault', 'osint.html': 'OSINT Locator', 'gps.html': 'GPS Map', 'dfir.html': 'DFIR Response',
         'terminal.html': 'Terminal', 'configs.html': 'Config Library', 'general.html': 'Op Admiral',
         'self-improve.html': 'Self-Improvement', 'settings.html': 'Settings', 'about.html': 'About'
     };
