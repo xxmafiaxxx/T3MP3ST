@@ -483,7 +483,7 @@
                 <div class="panel">
                     <div class="panel-header">
                         <div class="panel-title"><span class="accent">🎯</span> LOCATOR — FULL HUMAN LOOKUP</div>
-                        <button class="btn primary" id="locateBtn" onclick="runLocate()">▶ RUN FULL LOCATE</button>
+                        <button class="btn primary" id="locateBtn" onclick="locateBtnClick()">▶ RUN FULL LOCATE</button>
                     </div>
                     <div class="panel-body">
                         <div class="locator-form">
@@ -719,11 +719,12 @@
             return isLocal ? (window.location.port === '3333' ? '' : 'http://' + window.location.hostname + ':3333') : '';
         }
 
-        async function api(path, body) {
+        async function api(path, body, signal) {
             const res = await fetch(getApiBase() + path, {
                 method: body ? 'POST' : 'GET',
                 headers: body ? { 'Content-Type': 'application/json' } : undefined,
                 body: body ? JSON.stringify(body) : undefined,
+                signal,
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
@@ -905,6 +906,22 @@
         // ═══════════════════════════════════════════════════════════════
         let currentDossier = null;
 
+        // Interactive run control: the button is RUN while idle and STOP while the
+        // chain is in flight — clicking it mid-run aborts the request client-side.
+        let locateAbort = null;
+
+        function locateBtnClick() {
+            if (locateAbort) { locateAbort.abort(); return; }
+            runLocate();
+        }
+
+        function setLocateButton(running) {
+            const btn = document.getElementById('locateBtn');
+            btn.classList.toggle('danger', running);
+            btn.classList.toggle('primary', !running);
+            btn.innerHTML = running ? '⏹ STOP SCAN' : '▶ RUN FULL LOCATE';
+        }
+
         async function runLocate() {
             const subject = document.getElementById('subjectInput').value.trim();
             const name = document.getElementById('nameInput').value.trim();
@@ -912,7 +929,8 @@
             const btn = document.getElementById('locateBtn');
             const status = document.getElementById('locateStatus');
             const out = document.getElementById('dossierOut');
-            btn.disabled = true;
+            locateAbort = new AbortController();
+            setLocateButton(true);
             status.style.display = 'flex';
             out.innerHTML = '<div class="dossier-empty">◈ Chain starting…</div>';
 
@@ -937,17 +955,24 @@
             }, 1000);
 
             try {
-                const d = await api('/api/osint/locate', { subject, name: name || undefined });
+                const d = await api('/api/osint/locate', { subject, name: name || undefined }, locateAbort.signal);
                 currentDossier = d.dossier;
                 renderDossier(d.dossier);
                 addDossierGeoPoints(d.dossier.geoPoints || []);
                 toast('Dossier assembled — ' + (d.dossier.report ? 'report built, ' : '') + d.dossier.socialAccounts.length + ' accounts, ' + (d.dossier.sourcesChecked || []).length + ' sources checked', 'success');
             } catch (e) {
-                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
-                toast(e.message, 'error');
+                if (e.name === 'AbortError') {
+                    out.innerHTML = '<div class="dossier-empty" style="color:var(--warning);">⏹ Scan stopped by operator' +
+                        (subject || name ? ' — "' + escapeHtml(subject || name) + '" partial results discarded. Server probes wind down in the background.' : '') + '</div>';
+                    toast('Scan stopped', 'error');
+                } else {
+                    out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+                    toast(e.message, 'error');
+                }
             } finally {
                 clearInterval(ticker);
-                btn.disabled = false;
+                locateAbort = null;
+                setLocateButton(false);
                 status.style.display = 'none';
             }
         }
