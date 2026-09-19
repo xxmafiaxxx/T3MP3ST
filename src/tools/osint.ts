@@ -192,6 +192,11 @@ export interface ProfileHint {
   displayName?: string;
   bio?: string;
   imageUrl?: string;
+  /** Public contact/location fields the platform exposes on the profile itself. */
+  email?: string;
+  blog?: string;
+  twitter?: string;
+  location?: string;
 }
 
 export interface UsernameHit {
@@ -215,7 +220,16 @@ const PROFILE_APIS: Record<string, (u: string) => { url: string; parse: (j: unkn
     url: `https://api.github.com/users/${encodeURIComponent(u)}`,
     parse: (j) => {
       const r = j as Record<string, string | null>;
-      return r?.name || r?.avatar_url ? { displayName: (r.name as string) || undefined, bio: (r.bio as string) || undefined, imageUrl: (r.avatar_url as string) || undefined } : null;
+      if (!r || (!r.name && !r.avatar_url && !r.email)) return null;
+      return {
+        displayName: (r.name as string) || undefined,
+        bio: (r.bio as string) || undefined,
+        imageUrl: (r.avatar_url as string) || undefined,
+        email: (r.email as string) || undefined,
+        blog: (r.blog as string) || undefined,
+        twitter: (r.twitter_username as string) ? `https://x.com/${r.twitter_username}` : undefined,
+        location: (r.location as string) || undefined,
+      };
     },
   }),
   Reddit: (u) => ({
@@ -283,21 +297,28 @@ async function corroborate(siteName: string, username: string): Promise<ProfileH
 }
 
 /** Corroborate a claimed handle against the subject's known name. Pure function.
- *  'name-match'      = profile display name/bio contains the subject's name tokens
- *  'name-mismatch'   = profile has a different display name (someone else owns the handle)
- *  'handle-only'     = no name hints, or profile carries no name to compare */
+ *  'name-match'    = display name/bio carries the subject's LAST name (full or
+ *                    substring — initials-style 'jsmith' counts), or the full name.
+ *  'name-mismatch' = profile has a display name that does NOT carry the last name
+ *                    (e.g. subject 'Raul Glasgow', profile 'Raul Gutierrez' — a
+ *                    first-name-only overlap is a DIFFERENT person, never a match).
+ *  'handle-only'   = no name hints, ambiguous initial-only, or no name to compare. */
 export function scoreIdentityMatch(hints: { name?: string }, profile?: ProfileHint | null): IdentityMatch {
   const hintName = (hints.name || '').toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!hintName || !hintName.includes(' ')) return 'handle-only'; // need a real full name to corroborate
   const hTokens = hintName.split(' ').filter((t) => t.length > 1);
+  const lastName = hTokens[hTokens.length - 1];
   const dn = (profile?.displayName || '').toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
   const dTokens = dn ? dn.split(' ').filter((t) => t.length > 1) : [];
+  const sub = (a: string, b: string) => a.includes(b) || b.includes(a);
+
   if (dTokens.length > 0) {
-    // Substring-aware overlap: 'jsmith' contains 'smith' — initials-style display
-    // names count as partial matches (the report still shows the display name).
-    const overlap = hTokens.filter((t) => dTokens.some((d) => d.includes(t) || t.includes(d))).length;
-    if (hTokens.length > 0 && hTokens.every((t) => dTokens.includes(t))) return 'name-match';
-    if (overlap > 0) return 'name-match'; // partial (initials/hyphenated/maiden) — detail shows the display name
+    if (hTokens.every((t) => dTokens.includes(t))) return 'name-match';
+    // Last name present (exact, or substring of/into a real name fragment ≥3 chars —
+    // initials like 't' never substring-match).
+    if (dTokens.some((d) => d === lastName || (d.length >= 3 && (d.includes(lastName) || lastName.includes(d))))) return 'name-match';
+    const firstOverlap = hTokens.slice(0, -1).some((t) => dTokens.some((d) => sub(d, t)));
+    if (firstOverlap) return 'name-mismatch'; // shares a first name only — different person (initial-only ambiguity excluded too)
     return 'name-mismatch';
   }
   const bio = (profile?.bio || '').toLowerCase();
@@ -1055,6 +1076,9 @@ export interface OsintDossier {
   parsed: { email?: string; username?: string; phone?: string; domain?: string; url?: string };
   name?: string;
   socialAccounts: UsernameHit[];
+  /** Profile-corroborated mismatches (a different person owns the handle) — excluded
+   *  from results/presence and reported separately so they never pollute the dossier. */
+  excludedAccounts: UsernameHit[];
   gravatar?: GravatarProfile;
   emailIntel?: EmailIntelResult;
   phone?: PhoneIntelResult;
@@ -1476,12 +1500,12 @@ export function buildDossierReport(d: OsintDossier): string {
   for (const [k, v] of ids) L.push(`- **${k}:** ${v}`);
   // Subject assessment — corroboration up front, not buried in a list.
   const matched = d.socialAccounts.filter((h) => h.identity === 'name-match');
-  const mismatched = d.socialAccounts.filter((h) => h.identity === 'name-mismatch');
+  const mismatched = d.excludedAccounts || [];
   if (d.name || d.socialAccounts.length > 0) {
     L.push('');
     if (matched.length > 0) {
       const strongest = matched[0];
-      L.push(`- **assessment:** ${matched.length} account(s) corroborate the subject's name — strongest signal: ${strongest.site} ("${strongest.profile?.displayName || 'name match'}"). ${mismatched.length} handle(s) belong to different people and are flagged.`);
+      L.push(`- **assessment:** ${matched.length} account(s) corroborate the subject's name — strongest signal: ${strongest.site} ("${strongest.profile?.displayName || 'name match'}"). ${mismatched.length} handle(s) belonged to different people and were EXCLUDED from these results.`);
     } else if (d.socialAccounts.length > 0) {
       L.push(`- **assessment:** ${d.socialAccounts.length} handle(s) claimed but NONE corroborated against a name — treat every hit as unverified (same handle ≠ same person).`);
     } else {
@@ -1490,11 +1514,17 @@ export function buildDossierReport(d: OsintDossier): string {
   }
   L.push('');
 
-  L.push(`## 2. SOCIAL FOOTPRINT — ${d.socialAccounts.length} claimed account(s)`);
+  L.push(`## 2. SOCIAL FOOTPRINT — ${d.socialAccounts.length} account(s) for this subject`);
   if (d.socialAccounts.length === 0) L.push('- no public profiles found for the handles swept');
   for (const h of d.socialAccounts) {
-    const ident = h.identity === 'name-match' ? '✓ IDENTITY MATCH' : h.identity === 'name-mismatch' ? '≠ NAME MISMATCH (likely someone else)' : 'handle-only';
-    L.push(`- [${h.confidence}] **${h.site}** — ${h.url}${h.profile?.displayName ? ` — "${h.profile.displayName}"` : ''} _(${ident})_`);
+    const ident = h.identity === 'name-match' ? '✓ IDENTITY MATCH' : 'handle-only';
+    const contacts = [h.profile?.email, h.profile?.blog, h.profile?.twitter, h.profile?.location].filter(Boolean).join(' · ');
+    L.push(`- [${h.confidence}] **${h.site}** — ${h.url}${h.profile?.displayName ? ` — "${h.profile.displayName}"` : ''} _(${ident})_${contacts ? `\n  - contact/location: ${contacts}` : ''}`);
+  }
+  if (mismatched.length > 0) {
+    L.push('');
+    L.push(`### EXCLUDED — different people (${mismatched.length}, not part of this dossier)`);
+    for (const h of mismatched) L.push(`- ${h.site}: ${h.url}${h.profile?.displayName ? ` — owned by "${h.profile.displayName}"` : ''}`);
   }
   L.push('');
 
@@ -1641,6 +1671,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     photos,
     locations,
     geoPoints: [],
+    excludedAccounts: [],
     sourcesChecked,
     report: '',
     identities,
@@ -1674,16 +1705,20 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
         try {
           perms = usernamePermutations(words[0], words[words.length - 1], { max: 12 });
         } catch { return; }
-        for (const perm of perms) {
-          const sweep = await runUsernameSweep(perm, { limit: 25, hints: { name: parsedInput.name } }).catch(() => null);
-          if (sweep) {
-            mergeChecked(sweep.details, perm);
+        // Parallel in chunks of 3 — serial perms made name locates take 3 minutes.
+        for (let i = 0; i < perms.length; i += 3) {
+          const chunk = perms.slice(i, i + 3);
+          const sweeps = await Promise.all(
+            chunk.map((perm) => runUsernameSweep(perm, { limit: 20, hints: { name: parsedInput.name } }).catch(() => null))
+          );
+          for (const sweep of sweeps) {
+            if (!sweep) continue;
+            mergeChecked(sweep.details, sweep.username);
             for (const hit of sweep.found) {
-              socialAccounts.push({ ...hit, site: `${hit.site} [${perm}]` });
-              identities.push({ source: hit.site, detail: `handle "${perm}" (from name) claimed: ${hit.url}` });
+              socialAccounts.push({ ...hit, site: `${hit.site} [${sweep.username}]` });
+              identities.push({ source: hit.site, detail: `handle "${sweep.username}" (from name) claimed: ${hit.url}` });
             }
           }
-          await new Promise((r) => setTimeout(r, 150));
         }
       })()
     );
@@ -1758,16 +1793,33 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     }
   }
 
-  // Dedupe accounts (perm/secondary sweeps can double-hit), then score presence —
-  // corroborated (name-matched) accounts weigh double; clear mismatches don't count.
+  // Dedupe accounts (perm/secondary sweeps can double-hit), then SPLIT: corroborated
+  // mismatches (a different person owns the handle) are excluded from the dossier's
+  // results entirely — they get their own disclosure section, never mixed into hits.
   const seenUrls = new Set<string>();
   const uniqueAccounts = socialAccounts.filter((h) => (seenUrls.has(h.url) ? false : (seenUrls.add(h.url), true)));
+  const excluded = uniqueAccounts.filter((h) => h.identity === 'name-mismatch');
+  const kept = uniqueAccounts.filter((h) => h.identity !== 'name-mismatch');
+  dossier.excludedAccounts = excluded.sort((a, b) => a.site.localeCompare(b.site));
+
+  // Profile enrichment: public contact/location fields the platforms expose.
+  for (const h of kept) {
+    const p = h.profile;
+    if (!p) continue;
+    if (p.email && !emails.includes(p.email.toLowerCase())) {
+      emails.push(p.email.toLowerCase());
+      identities.push({ source: h.site, detail: `public email on profile: ${p.email.toLowerCase()}` });
+    }
+    if (p.blog) identities.push({ source: h.site, detail: `profile blog: ${p.blog}` });
+    if (p.twitter) identities.push({ source: h.site, detail: `profile twitter: ${p.twitter}` });
+    if (p.location && !locations.includes(p.location)) locations.push(`${p.location} (self-declared on ${h.site})`);
+    if (p.imageUrl && !photos.includes(p.imageUrl)) photos.push(p.imageUrl);
+  }
+
   const weight = (h: UsernameHit) =>
     (h.confidence === 'high' ? 2 : h.confidence === 'medium' ? 1 : 0.5) +
-    (h.identity === 'name-match' ? 2 : h.identity === 'name-mismatch' ? -1.5 : 0);
-  const foundWeight = uniqueAccounts
-    .filter((h) => h.identity !== 'name-mismatch')
-    .reduce((acc, h) => acc + Math.max(weight(h), 0), 0);
+    (h.identity === 'name-match' ? 2 : 0);
+  const foundWeight = kept.reduce((acc, h) => acc + Math.max(weight(h), 0), 0);
   dossier.presenceScore = Math.min(100, Math.round((foundWeight / 40) * 100));
 
   // City-level public signals (Gravatar location text, NANP area notes) → map points.
@@ -1787,7 +1839,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     }
   }
 
-  dossier.socialAccounts = uniqueAccounts.sort((a, b) => weight(b) - weight(a));
+  dossier.socialAccounts = kept.sort((a, b) => weight(b) - weight(a));
   dossier.dorks = personDorks({
     name: dossier.name,
     email,

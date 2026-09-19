@@ -835,15 +835,19 @@
         function renderSocialCard(h) {
             const ident = h.identity === 'name-match'
                 ? '<span class="conf-badge conf-high">✓ IDENTITY MATCH</span>'
-                : h.identity === 'name-mismatch'
-                    ? '<span class="conf-badge conf-medium">≠ DIFFERENT PERSON</span>'
-                    : '';
+                : '';
             const dn = h.profile && h.profile.displayName ? '<div style="color:var(--text-primary);font-size:11.5px;margin-top:3px;">as "' + escapeHtml(h.profile.displayName) + '"</div>' : '';
-            const style = h.identity === 'name-mismatch' ? 'opacity:0.55;' : h.identity === 'name-match' ? 'border-color:var(--success);' : '';
+            const contacts = [];
+            if (h.profile && h.profile.email) contacts.push('✉ ' + escapeHtml(h.profile.email));
+            if (h.profile && h.profile.location) contacts.push('📍 ' + escapeHtml(h.profile.location));
+            if (h.profile && h.profile.blog) contacts.push('<a href="' + escapeHtml(h.profile.blog) + '" target="_blank" rel="noopener noreferrer" style="color:var(--info)">blog ↗</a>');
+            if (h.profile && h.profile.twitter) contacts.push('<a href="' + escapeHtml(h.profile.twitter) + '" target="_blank" rel="noopener noreferrer" style="color:var(--info)">X ↗</a>');
+            const style = h.identity === 'name-match' ? 'border-color:var(--success);' : '';
             return '<div class="social-card" style="' + style + '">' +
                 '<div class="site">' + escapeHtml(h.site) + confBadge(h.confidence) + ident + ' <span class="cat-tag">(' + escapeHtml(h.category) + ')</span></div>' +
                 dn +
                 '<a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(h.url) + '</a>' +
+                (contacts.length ? '<div style="margin-top:4px;font-size:11px;color:var(--text-secondary);display:flex;gap:10px;flex-wrap:wrap;">' + contacts.join('') + '</div>' : '') +
                 '</div>';
         }
         function renderBreachCard(b) {
@@ -1029,10 +1033,11 @@
             if (rows.length === 0) {
                 html += '<div class="dossier-empty">0 records — every source probed is listed under SOURCES CONSULTED below.</div>';
             } else {
-                html += '<table class="found-table"><thead><tr><th>TYPE</th><th>DATA POINT</th><th>DETAIL</th><th>SOURCE</th><th>CONF.</th></tr></thead><tbody>' +
+                html += '<div style="max-height:460px;overflow-y:auto;border:1px solid var(--border-color);border-radius:6px;">' +
+                    '<table class="found-table"><thead style="position:sticky;top:0;background:var(--bg-card);z-index:2;"><tr><th>TYPE</th><th>DATA POINT</th><th>DETAIL</th><th>SOURCE</th><th>CONF.</th></tr></thead><tbody>' +
                     rows.map(function (r) {
                         return '<tr><td><b>' + f(r.type) + '</b></td><td>' + f(r.point) + '</td><td>' + f(r.detail || '') + '</td><td>' + f(r.source || '') + '</td><td>' + f(r.rel || '—') + '</td></tr>';
-                    }).join('') + '</tbody></table>';
+                    }).join('') + '</tbody></table></div>';
             }
 
             // ── DETAILED REPORT — the structured markdown audit ──
@@ -1065,8 +1070,15 @@
             if (d.screening) html += renderScreening(d.screening);
 
             if (d.socialAccounts && d.socialAccounts.length) {
-                html += '<div class="dossier-section-title" style="margin-top:20px;">📡 SOCIAL ACCOUNTS <span class="count">' + d.socialAccounts.length + ' found</span></div>';
+                html += '<div class="dossier-section-title" style="margin-top:20px;">📡 SOCIAL ACCOUNTS <span class="count">' + d.socialAccounts.length + ' for this subject</span></div>';
                 html += '<div class="social-grid">' + d.socialAccounts.map(renderSocialCard).join('') + '</div>';
+            }
+
+            if (d.excludedAccounts && d.excludedAccounts.length) {
+                html += '<details style="margin-top:16px;border:1px solid var(--border-color);border-radius:6px;padding:10px 14px;background:var(--bg-primary);">' +
+                    '<summary style="cursor:pointer;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--text-muted);">≠ EXCLUDED — ' + d.excludedAccounts.length +
+                    ' handle(s) belong to different people (verified via profile names) — click to inspect</summary>' +
+                    '<div class="social-grid" style="margin-top:10px;opacity:0.55;">' + d.excludedAccounts.map(renderSocialCard).join('') + '</div></details>';
             }
 
             if (d.name) {

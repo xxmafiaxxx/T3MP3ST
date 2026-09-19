@@ -266,10 +266,12 @@ describe('identity corroboration', () => {
   it('matches subject names against profile display names', async () => {
     const { scoreIdentityMatch } = await import('../tools/osint.js');
     expect(scoreIdentityMatch({ name: 'Linus Torvalds' }, { displayName: 'Linus Torvalds' })).toBe('name-match');
-    expect(scoreIdentityMatch({ name: 'Linus Torvalds' }, { displayName: 'Linus T.' })).toBe('name-match');
+    expect(scoreIdentityMatch({ name: 'Linus Torvalds' }, { displayName: 'Linus T.' })).toBe('name-mismatch'); // initial-only is ambiguous → never attributed to the subject
+    expect(scoreIdentityMatch({ name: 'Linus Torvalds' }, { displayName: 'torvalds' })).toBe('name-match'); // last-name substring (handle-style)
     expect(scoreIdentityMatch({ name: 'Linus Torvalds' }, { displayName: 'bio: written by Linus Torvalds' })).toBe('name-match');
     expect(scoreIdentityMatch({ name: 'John Smith' }, { displayName: 'Alice Chains' })).toBe('name-mismatch');
-    expect(scoreIdentityMatch({ name: 'John Smith' }, { displayName: 'JSmith Gaming' })).toBe('name-match'); // initials-style partial
+    expect(scoreIdentityMatch({ name: 'John Smith' }, { displayName: 'JSmith Gaming' })).toBe('name-match'); // initials-style: carries the last name
+    expect(scoreIdentityMatch({ name: 'Raul Glasgow' }, { displayName: 'Raul Gutierrez' })).toBe('name-mismatch'); // first-name-only overlap = DIFFERENT person
     expect(scoreIdentityMatch({ name: 'John Smith' }, null)).toBe('handle-only');
     expect(scoreIdentityMatch({}, { displayName: 'Linus Torvalds' })).toBe('handle-only'); // no hints, no claims
     expect(scoreIdentityMatch({ name: 'john smith' }, { displayName: '  John   Smith  ' })).toBe('name-match'); // normalization
