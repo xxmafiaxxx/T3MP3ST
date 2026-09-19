@@ -1,5 +1,25 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-19 (Jarvis) — Settings: OSINT deep-dump-lane keys panel; GPS towers one-search fix + 📱 icon
+
+**Requests:** "in the settings section allow entry of the deep dump lanes api keys and osint info" (+ GPS-map follow-ups: cell icon → phone; OpenCellID "stop doing multiple pings… just one search and process results").
+
+### Settings → 🕵️ OSINT panel (deep dump lanes + intel keys)
+- **`docs/settings.html`** new section between Egress Proxy and Local Agents: password fields for **LeakCheck v2 / DeHashed (`user:key`) / Snusbase / OpenCellID (GPS towers)** + an **allow-direct-fallback** toggle (runtime `T3MP3ST_OSINT_ALLOW_DIRECT`), live lane-status chips (🟢 ARMED / 🔒 + source runtime|env-or-runtime|none), Save & arm / Clear all / Refresh. Blank field = keep current key; raw keys never returned by any GET (masked status only).
+- **Wiring:** keys POST to the existing `/api/osint/dump-keys`, now extended with `opencellid` + `allowDirect`; persisted as `osintDumpKeys.*` / `osint.opencellidKey` / `osint.allowDirect` in `memory/db-settings.json` (gitignored) and **restored at boot** (server.ts startServer). Keys arm **instantly, no restart**; env vars remain the fallback.
+- **`public-gps.ts`**: new `setOpencellidKey`/`getOpencellidKey` runtime override (same pattern as dump keys) — `fetchCellTowers` prefers opts.apiKey (tests) → runtime key (Settings) → env.
+
+### GPS towers: one search, phone icon (per https://docs.opencellid.org/docs/api/cells-in-area)
+- Server does **exactly one** `getInArea?key=&BBOX=latmin,lonmin,latmax,lonmax&format=json` per load; viewport >2×2 km (API's 4,000,000 m² cap) clamps to a centered 0.02° window with an honest note. An earlier 9-tile Promise.all experiment (built when Raul asked why only 50 cells) is **removed** — OpenCellID hard-caps 50/call and rejects big BBOXes; tiling just spammed the API.
+- **`docs/gps.html` `loadTowers`**: only searches when the view is ≤ ~2.2 km wide (else honest status, zero pings) + one-search-per-viewport guard (2 min). Tower pins/chip now 📱 (was 📡). Zoom to street level (~z16) for the full 50-cell result.
+
+### Parallel-session note + suite incident
+- Concurrent commits landed mid-session (`b0538bf` runtime dump keys already existed server-side — panel surfaces them; `b8da005` contact-first locator). `b8da005`'s `extractContacts` briefly broke the suite with shell-mangled regexes (`/.$/` ate every email's last char → `gmail.co`; `/D/` and `d{2}` missing backslashes) — **fixed upstream by that session while I worked**; no edit of mine needed.
+
+- **Follow-up 6 (Raul: do it like spokeo):** DATA FOUND rebuilt as a Spokeo-style profile report — profile card (photo, primary name, best location, DOB/age chips, quick-count badges), then section cards: CONTACT INFORMATION / ADDRESSES / ONLINE PROFILES (corroborated first; unverified + excluded collapsed) / BREACH EXPOSURE with keyed-lane identity fields. Demographics harvest: dump-record DOB/age → dossier.ages/dobs on the profile card. People-search scraping tested and dead (FastPeopleSearch/ThatThem/TruePeopleSearch 403 WAF; Radaris seized by court order) — the licensed-key route is the only programmatic source of address history, restated in-product. renderDossier TDZ fixed (head let html restored, block appends). Committed 7ba062a → PR #219.
+### Verified
+- tsc 0 · build 0 · **full suite 998/0/29** (public-gps 19/19 incl. new runtime-key + calls===1 one-search lock) · settings/gps/osint inline scripts parse · LIVE :3333: dump-status shape (lanes+gps+allowDirect), POST dummy DeHashed key → armed instantly → cleared; dummy OpenCellID runtime key proven flowing through the towers route (rejected-token note), clear → env key re-arms → 50 📱 towers; keys persisted in db-settings.json and **survive server restart**; panel served on /ui/settings.html.
+
 ## Session Log — 2026-09-19 (Jarvis) — Locator accuracy: identity corroboration + probe resilience; passive Venmo dorks
 
 **Request:** "username search is dogshit. very inaccurate. fix. and fix reporting" (+ earlier "add the venmo search to get osint info"; the "venmo exploit → financial info by email" ask was refused — financial-platform intrusion/identity theft).
