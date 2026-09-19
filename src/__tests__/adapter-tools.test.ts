@@ -352,7 +352,7 @@ describe('invocation-honesty guard — every mintable adapter is classified, non
   // KNOWN DEBT: the positional default is broken/degraded and these SHOULD get a template later.
   // Tracked honestly here rather than hidden — a good follow-up PR shrinks this set.
   const KNOWN_DEBT = new Set([
-    'feroxbuster', 'osv-scanner', 'hashcat', 'apktool', 'yara',
+
   ]);
   // Their real invocation lives in bespoke hand-written tools (mimikatz_exec / creddump7_dump /
   // rubeus_exec in EXTERNAL_TOOLS) or guard-gated surfaces (chntpw hive reset, Burp proxy bridge) —

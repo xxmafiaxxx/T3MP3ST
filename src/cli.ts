@@ -608,7 +608,7 @@ const program = new Command();
 program
   .name('t3mp3st')
   .description('T3MP3ST - Tactical Execution Multi-agent Platform for Elite Security Testing')
-  .version('1.0.0');
+  .version('1.5.0');
 
 program
   .command('interactive', { isDefault: true })
