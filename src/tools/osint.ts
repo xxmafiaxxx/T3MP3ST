@@ -1151,11 +1151,14 @@ export interface OsintDossier {
   /** Profile-corroborated mismatches (a different person owns the handle) — excluded
    *  from results/presence and reported separately so they never pollute the dossier. */
   excludedAccounts: UsernameHit[];
+  /** Contact core — the primary locator output. */
+  emails: string[];
+  phones: string[];
+  addresses: string[];
   gravatar?: GravatarProfile;
   emailIntel?: EmailIntelResult;
   phone?: PhoneIntelResult;
   dumpLanes: DumpLaneResult[];
-  emails: string[];
   photos: string[];
   locations: string[];
   /** City-level public location signals geocoded for the Geo Intel Map (OSINT layer). */
@@ -1586,7 +1589,28 @@ export function buildDossierReport(d: OsintDossier): string {
   }
   L.push('');
 
-  L.push(`## 2. SOCIAL FOOTPRINT — ${d.socialAccounts.length} account(s) for this subject`);
+  L.push(`## 2. CONTACT — EMAILS · PHONES · ADDRESSES`);
+  if (d.emails.length > 0) {
+    L.push(`- **emails (${d.emails.length}):**`);
+    for (const e of d.emails) L.push(`  - ${e}`);
+  } else {
+    L.push('- **emails:** none recovered — arm the dump-lane keys (DeHashed/LeakCheck v2) or check the public-records workbench');
+  }
+  if (d.phones.length > 0) {
+    L.push(`- **phones (${d.phones.length}):**`);
+    for (const p of d.phones) L.push(`  - ${p}`);
+  } else {
+    L.push('- **phones:** none recovered — same levers (keyed dump records carry phone fields; public-records links below)');
+  }
+  if (d.addresses.length > 0) {
+    L.push(`- **addresses (${d.addresses.length}):**`);
+    for (const a of d.addresses) L.push(`  - ${a}`);
+  } else {
+    L.push('- **addresses:** none in keyed dump records — address history lives in the public-records workbench (browser) and keyed dump records');
+  }
+  L.push('');
+
+  L.push(`## 3. SOCIAL FOOTPRINT — ${d.socialAccounts.length} account(s) for this subject (swept from the contact/identifier results above)`);
   if (d.socialAccounts.length === 0) L.push('- no public profiles found for the handles swept');
   for (const h of d.socialAccounts) {
     const ident = h.identity === 'name-match' ? '✓ IDENTITY MATCH' : 'handle-only';
@@ -1600,7 +1624,7 @@ export function buildDossierReport(d: OsintDossier): string {
   }
   L.push('');
 
-  L.push('## 3. BREACH / DUMP EXPOSURE');
+  L.push('## 4. BREACH / DUMP EXPOSURE');
   let breach = false;
   for (const lane of d.dumpLanes) {
     for (const f of lane.free) {
@@ -1622,7 +1646,7 @@ export function buildDossierReport(d: OsintDossier): string {
   if (!breach) L.push('- no breach lanes ran for this subject (no email/username/phone identifier present)');
   L.push('');
 
-  L.push('## 4. IDENTITY SIGNALS');
+  L.push('## 5. IDENTITY SIGNALS');
   let ident = false;
   if (d.emailIntel?.gravatar?.exists) {
     const g = d.emailIntel.gravatar;
@@ -1636,13 +1660,13 @@ export function buildDossierReport(d: OsintDossier): string {
   if (!ident) L.push('- none');
   L.push('');
 
-  L.push('## 5. LOCATION SIGNALS (city-level, public data only)');
+  L.push('## 6. LOCATION SIGNALS (city-level, public data only)');
   if (d.locations.length === 0) L.push('- none');
   for (const loc of d.locations) L.push(`- ${loc}`);
   L.push('');
 
   if (d.screening) {
-    L.push(`## 5b. SANCTIONS / WATCHLIST SCREENING — ${d.screening.name}`);
+    L.push(`## 6b. SANCTIONS / WATCHLIST SCREENING — ${d.screening.name}`);
     for (const s of d.screening.sources) {
       if (s.status === 'ok' && s.matches.length > 0) {
         L.push(`- **${s.source}: ${s.matches.length} MATCH(ES)**${s.via ? ` (via ${s.via})` : ''}`);
@@ -1659,7 +1683,7 @@ export function buildDossierReport(d: OsintDossier): string {
   const found = d.sourcesChecked.filter((s) => s.status === 'found');
   const absent = d.sourcesChecked.filter((s) => s.status === 'absent');
   const unknownS = d.sourcesChecked.filter((s) => s.status === 'unknown');
-  L.push(`## 6. SOURCES CONSULTED — ${d.sourcesChecked.length} platform probe(s)`);
+  L.push(`## 7. SOURCES CONSULTED — ${d.sourcesChecked.length} platform probe(s)`);
   L.push(`- **found (${found.length}):** ${found.map((s) => s.name).join(', ') || '—'}`);
   L.push(`- **checked, no profile (${absent.length}):** ${absent.length > 0 ? absent.map((s) => s.name).join(', ') : '—'}`);
   L.push(`- **unknown — blocked or rate-limited (${unknownS.length}):** ${unknownS.map((s) => s.name).join(', ') || '—'}`);
@@ -1670,7 +1694,7 @@ export function buildDossierReport(d: OsintDossier): string {
     const personName = d.name;
     const slug = personName.replace(/\s+/g, '-');
     const sp = personName.replace(/\s+/g, '+');
-    L.push(`## 6b. PUBLIC RECORDS WORKBENCH — ${personName}`);
+    L.push(`## 7b. PUBLIC RECORDS WORKBENCH — ${personName}`);
     L.push('These hold legal public-record data (address history, age/DOB range, relatives, phones). They WAF-block server-side access — open them in YOUR browser:');
     L.push(`- TruePeopleSearch: https://www.truepeoplesearch.com/results?name=${sp}`);
     L.push(`- FastPeopleSearch: https://www.fastpeoplesearch.com/name/${slug}`);
@@ -1684,7 +1708,7 @@ export function buildDossierReport(d: OsintDossier): string {
     L.push('');
   }
 
-  L.push('## 7. RECOMMENDED NEXT STEPS');
+  L.push('## 8. RECOMMENDED NEXT STEPS');
   const steps: string[] = [];
   if (d.socialAccounts.length > 0) steps.push('Review the highest-confidence profiles first; screenshots + archive before engaging.');
   if (d.photos.length > 0) steps.push('Reverse-image search the recovered avatar(s) for cross-platform matches.');
@@ -1714,7 +1738,9 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
 
   const socialAccounts: UsernameHit[] = [];
   const dumpLanes: DumpLaneResult[] = [];
-  const emails: string[] = email ? [email] : [];
+  const emails: string[] = email ? [email.toLowerCase()] : [];
+  const phones: string[] = phone ? [phone.trim()] : [];
+  const addresses: string[] = [];
   const photos: string[] = [];
   const locations: string[] = [];
   const identities: { source: string; detail: string }[] = [];
@@ -1738,12 +1764,14 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     parsed: { email, username: username || undefined, phone, domain },
     name: parsedInput.name,
     socialAccounts: [],
+    excludedAccounts: [],
     dumpLanes,
     emails,
+    phones,
+    addresses,
     photos,
     locations,
     geoPoints: [],
-    excludedAccounts: [],
     sourcesChecked,
     report: '',
     identities,
@@ -1753,48 +1781,13 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     durationMs: 0,
   };
 
-  // --- parallel wave 1: everything keyed off the primary identifiers ---
+  // ─────────────────────────────────────────────────────────────────
+  // WAVE 1 — IDENTITY CORE: contact data first (emails, phones, addresses,
+  // breach/dump exposure, screening). Socials are deliberately LAST and
+  // derive from whatever wave 1 confirms.
+  // ─────────────────────────────────────────────────────────────────
   const jobs: Promise<void>[] = [];
 
-  if (username) {
-    jobs.push(
-      runUsernameSweep(username, { hints: { name: parsedInput.name } }).then((sweep) => {
-        mergeChecked(sweep.details);
-        socialAccounts.push(...sweep.found);
-        for (const hit of sweep.found) {
-          identities.push({ source: hit.site, detail: `username "${username}" claimed: ${hit.url}` });
-        }
-      }).catch(() => undefined)
-    );
-  } else if (parsedInput.name && !email && !phone && !domain) {
-    // Name-only subject: hunt handle variants of the real name across the
-    // high-reliability subset of the catalog (the whole point of a name lookup).
-    jobs.push(
-      (async () => {
-        const words = (parsedInput.name || '').trim().split(/\s+/).filter(Boolean);
-        if (words.length < 2) return;
-        let perms: string[] = [];
-        try {
-          perms = usernamePermutations(words[0], words[words.length - 1], { max: 12 });
-        } catch { return; }
-        // Parallel in chunks of 3 — serial perms made name locates take 3 minutes.
-        for (let i = 0; i < perms.length; i += 3) {
-          const chunk = perms.slice(i, i + 3);
-          const sweeps = await Promise.all(
-            chunk.map((perm) => runUsernameSweep(perm, { limit: 20, hints: { name: parsedInput.name } }).catch(() => null))
-          );
-          for (const sweep of sweeps) {
-            if (!sweep) continue;
-            mergeChecked(sweep.details, sweep.username);
-            for (const hit of sweep.found) {
-              socialAccounts.push({ ...hit, site: `${hit.site} [${sweep.username}]` });
-              identities.push({ source: hit.site, detail: `handle "${sweep.username}" (from name) claimed: ${hit.url}` });
-            }
-          }
-        }
-      })()
-    );
-  }
   if (email) {
     jobs.push(
       emailIntel(email).then((intel) => {
@@ -1804,9 +1797,6 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
           photos.push(intel.gravatar.avatarUrl);
           if (intel.gravatar.displayName) identities.push({ source: 'Gravatar', detail: `display name: ${intel.gravatar.displayName}` });
           if (intel.gravatar.location) locations.push(intel.gravatar.location);
-          for (const acct of intel.gravatar.accounts || []) {
-            identities.push({ source: `Gravatar→${acct.shortname}`, detail: `${acct.username || ''} ${acct.url}`.trim() });
-          }
         }
       }).catch(() => undefined)
     );
@@ -1846,20 +1836,97 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
 
   await Promise.all(jobs);
 
-  // Gravatar accounts linked to OTHER usernames become sweep candidates.
-  const extraHandles = new Set<string>();
-  for (const acct of dossier.gravatar?.accounts || []) {
-    if (acct.username) extraHandles.add(acct.username);
+  // Wave 1 harvest: dump records carry the subject's other identifiers — other email
+  // addresses, phone numbers, street addresses, and usernames. These are the locator's
+  // primary output and drive wave 2.
+  const derivedHandles: { handle: string; source: string }[] = [];
+  for (const lane of dumpLanes) {
+    for (const dep of lane.deep) {
+      if ('status' in dep) continue;
+      for (const r of dep.records || []) {
+        if (r.email && !emails.includes(r.email.toLowerCase())) {
+          emails.push(r.email.toLowerCase());
+          identities.push({ source: dep.service, detail: `email in dump records: ${r.email.toLowerCase()}` });
+        }
+        if (r.phone && !phones.includes(r.phone)) {
+          phones.push(r.phone);
+          identities.push({ source: dep.service, detail: `phone in dump records: ${r.phone}` });
+        }
+        const addr = [r.address, r.city, r.state, r.country].filter(Boolean).join(', ');
+        if (r.address && !addresses.some((a) => a.includes(r.address!))) {
+          addresses.push(addr);
+          identities.push({ source: dep.service, detail: `address in dump records: ${addr}` });
+        }
+        const u = validateUsername(r.username || '');
+        if (u && !derivedHandles.some((c) => c.handle === u)) derivedHandles.push({ handle: u, source: dep.service });
+      }
+    }
   }
-  if (extraHandles.size > 0 && extraHandles.size <= 3) {
-    for (const handle of extraHandles) {
-      if (handle.toLowerCase() === (username || '').toLowerCase()) continue;
-      const sweep = await runUsernameSweep(handle, { limit: 20, hints: { name: parsedInput.name } }).catch(() => null);
-      if (sweep) {
-        mergeChecked(sweep.details, handle);
-        for (const hit of sweep.found) {
-          identities.push({ source: `${hit.site} (via Gravatar→${handle})`, detail: hit.url });
-          socialAccounts.push({ ...hit, site: `${hit.site} [${handle}]` });
+
+  // ─────────────────────────────────────────────────────────────────
+  // WAVE 2 — SOCIAL FOOTPRINT, derived from the identity core. Handle
+  // priority: explicit subject handle → email local-part → dump-record
+  // usernames → Gravatar linked usernames → name permutations (last).
+  // ─────────────────────────────────────────────────────────────────
+  const candidates: { handle: string; source: string; primary: boolean }[] = [];
+  if (username) candidates.push({ handle: username, source: 'subject handle', primary: true });
+  if (email && email.split('@')[0] !== username) {
+    const lp = validateUsername(email.split('@')[0]);
+    if (lp) candidates.push({ handle: lp, source: 'email local-part', primary: false });
+  }
+  for (const dh of derivedHandles) {
+    if (!candidates.some((c) => c.handle.toLowerCase() === dh.handle.toLowerCase())) {
+      candidates.push({ handle: dh.handle, source: dh.source, primary: false });
+    }
+  }
+  for (const acct of dossier.gravatar?.accounts || []) {
+    const u = validateUsername(acct.username || '');
+    if (u && !candidates.some((c) => c.handle.toLowerCase() === u.toLowerCase())) {
+      candidates.push({ handle: u, source: 'Gravatar linked account', primary: false });
+    }
+  }
+  const primaryCandidates = candidates.slice(0, 4);
+
+  if (primaryCandidates.length > 0) {
+    for (const cand of primaryCandidates) {
+      const sweep = await runUsernameSweep(cand.handle, { hints: { name: parsedInput.name } }).catch(() => null);
+      if (!sweep) continue;
+      const tag = cand.primary ? undefined : cand.handle;
+      mergeChecked(sweep.details, tag);
+      for (const hit of sweep.found) {
+        const tagged: UsernameHit = tag ? { ...hit, site: `${hit.site} [${tag}]` } : hit;
+        socialAccounts.push(tagged);
+        identities.push({
+          source: `${hit.site} (via ${cand.source})`,
+          detail: `handle "${cand.handle}" claimed: ${hit.url}${hit.identity === 'name-match' ? ` — corroborated: "${hit.profile?.displayName || 'name match'}"` : ''}`,
+        });
+      }
+      // A corroborated match on a derived handle confirms the handle chain.
+      if (sweep.found.some((h) => h.identity === 'name-match')) {
+        identities.push({ source: 'corroboration', detail: `handle "${cand.handle}" (${cand.source}) corroborated as the subject — accounts above are the same person` });
+      }
+    }
+  } else if (parsedInput.name && !email && !phone && !domain) {
+    // Name-only subject: hunt handle variants of the real name across the
+    // high-reliability subset of the catalog (the whole point of a name lookup).
+    const words = (parsedInput.name || '').trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      let perms: string[] = [];
+      try {
+        perms = usernamePermutations(words[0], words[words.length - 1], { max: 12 });
+      } catch { /* no perms */ }
+      for (let i = 0; i < perms.length; i += 3) {
+        const chunk = perms.slice(i, i + 3);
+        const sweeps = await Promise.all(
+          chunk.map((perm) => runUsernameSweep(perm, { limit: 20, hints: { name: parsedInput.name } }).catch(() => null))
+        );
+        for (const sweep of sweeps) {
+          if (!sweep) continue;
+          mergeChecked(sweep.details, sweep.username);
+          for (const hit of sweep.found) {
+            socialAccounts.push({ ...hit, site: `${hit.site} [${sweep.username}]` });
+            identities.push({ source: hit.site, detail: `handle "${sweep.username}" (from name) claimed: ${hit.url}` });
+          }
         }
       }
     }

@@ -1008,10 +1008,17 @@
             const push = (type, point, detail, source, rel) => rows.push({ type, point, detail, source, rel });
             Object.entries(d.parsed || {}).forEach(function (kv) { if (kv[1]) push('identifier', kv[0], String(kv[1]), 'auto-parse', '—'); });
             if (d.name) push('identifier', 'name', d.name, 'operator input', '—');
+            // contact core first — the primary output
+            (d.emails || []).forEach(function (e) { push('email', e, '', 'identifier / records', 'confirmed'); });
+            (d.phones || []).forEach(function (p) { push('phone', p, '', 'identifier / records', 'confirmed'); });
+            (d.addresses || []).forEach(function (a) { push('address', a, '', 'dump records', 'confirmed'); });
             (d.socialAccounts || []).forEach(function (h) {
                 const dn = h.profile && h.profile.displayName ? ' — "' + h.profile.displayName + '"' : '';
                 const ident = h.identity === 'name-match' ? ' [IDENTITY MATCH]' : h.identity === 'name-mismatch' ? ' [DIFFERENT PERSON]' : '';
-                push('social account', h.site + dn, h.url + ident, 'public profile probe' + (h.note ? ' · ' + h.note : ''), h.identity === 'name-match' ? 'corroborated' : h.confidence);
+                const pc = [];
+                if (h.profile && h.profile.email) pc.push('email: ' + h.profile.email);
+                if (h.profile && h.profile.location) pc.push('loc: ' + h.profile.location);
+                push('social account', h.site + dn, h.url + ident + (pc.length ? ' · ' + pc.join(' · ') : ''), 'public profile probe' + (h.note ? ' · ' + h.note : ''), h.identity === 'name-match' ? 'corroborated' : h.confidence);
             });
             if (d.emailIntel && d.emailIntel.gravatar && d.emailIntel.gravatar.exists) {
                 const g = d.emailIntel.gravatar;
@@ -1076,8 +1083,15 @@
             if (sc.length === 0) html += '<span class="hint-line">no platform sweeps ran for this subject (no usable handle) — name-only locates sweep the top permutation variants</span>';
             html += '</div>';
 
-            // ── Visual deep-dive sections ──
+            // ── Visual deep-dive sections — contact core first ──
             if (d.screening) html += renderScreening(d.screening);
+
+            if ((d.emails && d.emails.length) || (d.phones && d.phones.length) || (d.addresses && d.addresses.length)) {
+                html += '<div class="dossier-section-title" style="margin-top:20px;">📞 CONTACT CORE — EMAILS · PHONES · ADDRESSES</div>';
+                (d.emails || []).forEach(function (e) { html += '<div class="cred-row"><span style="color:var(--accent);">✉</span><span>' + escapeHtml(e) + '</span></div>'; });
+                (d.phones || []).forEach(function (p) { html += '<div class="cred-row"><span style="color:var(--accent);">☎</span><span>' + escapeHtml(p) + '</span></div>'; });
+                (d.addresses || []).forEach(function (a) { html += '<div class="cred-row"><span style="color:var(--accent);">📍</span><span>' + escapeHtml(a) + '</span></div>'; });
+            }
 
             if (d.socialAccounts && d.socialAccounts.length) {
                 html += '<div class="dossier-section-title" style="margin-top:20px;">📡 SOCIAL ACCOUNTS <span class="count">' + d.socialAccounts.length + ' for this subject</span></div>';
