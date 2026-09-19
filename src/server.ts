@@ -5255,7 +5255,7 @@ function healthPayload(): Record<string, unknown> {
     status: 'operational',
     mode: currentMode(),
     organ: 't3mp3st',
-    version: '0.2.1',
+    version: '1.5.0',
     apiVersion: 'v1',
     llm: {
       configured: Boolean(llmConfig.apiKey) || providerRunsKeyless(llmConfig.provider),
