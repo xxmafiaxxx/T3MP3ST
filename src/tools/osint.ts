@@ -770,6 +770,9 @@ export function personDorks(params: { name?: string; email?: string; username?: 
 
   if (params.name) {
     for (const [label, base] of engines) links.push({ label: `${label}: name`, url: `${base}${q(`"${params.name}"`)}` });
+    // Venmo public pages are only OSINT-accessible passively (search-engine index).
+    // No Venmo endpoints are queried — account enumeration on a financial platform is out of scope.
+    links.push({ label: 'Venmo: public pages (indexed)', url: `https://www.google.com/search?q=${q(`site:venmo.com "${params.name}"`)}` });
     links.push({ label: 'Google: name + CV/resume', url: `https://www.google.com/search?q=${q(`"${params.name}" (CV OR resume OR "curriculum vitae")`)}` });
     links.push({ label: 'Google: name + docs', url: `https://www.google.com/search?q=${q(`"${params.name}" (filetype:pdf OR filetype:doc OR filetype:docx OR filetype:xls)`)}` });
     links.push({ label: 'LinkedIn people', url: `https://www.linkedin.com/search/results/people/?keywords=${q(params.name)}` });
@@ -789,6 +792,8 @@ export function personDorks(params: { name?: string; email?: string; username?: 
   if (params.username) {
     const u = params.username.replace(/^@/, '');
     for (const [label, base] of engines) links.push({ label: `${label}: username`, url: `${base}${q(`"${u}"`)}` });
+    links.push({ label: 'Venmo: profile (public page)', url: `https://venmo.com/u/${q(u)}` });
+    links.push({ label: 'Venmo: indexed mentions', url: `https://www.google.com/search?q=${q(`site:venmo.com "${u}"`)}` });
     links.push({ label: 'Namechk (handle check)', url: `https://namechk.com/check/${q(u)}` });
     links.push({ label: 'KnowEm (aggregator)', url: `https://knowem.com/checkusernames.php?u=${q(u)}` });
     links.push({ label: 'InstantUsername', url: `https://instantusername.com/#/${q(u)}` });

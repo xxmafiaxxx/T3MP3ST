@@ -271,6 +271,13 @@ describe('person dorks', () => {
     expect(labels.some((l) => l.includes('GitHub commits'))).toBe(true);
     expect(labels.some((l) => l.includes('Namechk'))).toBe(true);
     expect(labels.some((l) => l.includes('crt.sh'))).toBe(true);
+    // Venmo lane is passive-only: search-engine index queries + the public profile URL.
+    // No Venmo endpoint probing, no email→account enumeration.
+    expect(labels.some((l) => l.includes('Venmo'))).toBe(true);
+    const venmoIndexed = dorks.find((d) => d.label.includes('Venmo: indexed'));
+    expect(venmoIndexed!.url).toContain('site%3Avenmo.com');
+    const venmoProfile = dorks.find((d) => d.label.includes('Venmo: profile'));
+    expect(venmoProfile!.url).toBe('https://venmo.com/u/jsmith');
     expect(dorks.every((d) => d.url.startsWith('https://'))).toBe(true);
   });
 });
