@@ -1172,6 +1172,8 @@ export interface OsintDossier {
   screening?: ScreeningResult;
   /** Search-result mining runs (per query). */
   searchExtraction: { query: string; via: string; found: number }[];
+  /** Public-records person records (browser-rendered page mining). */
+  peopleRecords: PersonRecord[];
   /** Operator-ready markdown report (the DETAILED REPORT section). */
   report: string;
   identities: { source: string; detail: string }[];
@@ -1783,6 +1785,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     geoPoints: [],
     sourcesChecked,
     searchExtraction: [],
+    peopleRecords: [],
     report: '',
     identities,
     dorks: [],
@@ -1841,6 +1844,26 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
       screenSubject(parsedInput.name).then((screening) => {
         dossier.screening = screening;
       }).catch(() => undefined)
+    );
+  }
+  if (parsedInput.name && parsedInput.name.includes(' ')) {
+    jobs.push(
+      peopleRecordSearch(parsedInput.name).then((result) => {
+        dossier.peopleRecords = result.records;
+        for (const rec of result.records) {
+          if (rec.age && !ages.includes(rec.age)) ages.push(rec.age);
+          if (rec.city && !locations.some((l) => l.includes(rec.city!))) locations.push(rec.city + ' (public records)');
+          for (const a of rec.pastAddresses.slice(0, 4)) {
+            const key = a.toLowerCase();
+            if (!addresses.some((x) => x.toLowerCase().includes(key))) addresses.push(a + ' (public records)');
+          }
+          for (const aka of rec.akas.slice(0, 4)) {
+            identities.push({ source: 'public records AKA', detail: aka });
+          }
+        }
+      }).catch((e) => {
+        identities.push({ source: 'public records', detail: 'lookup failed: ' + String(e).slice(0, 120) });
+      })
     );
   }
 
@@ -2261,6 +2284,120 @@ export async function searchExtract(queryRaw: string): Promise<{ query: string; 
   return { query, via: 'blocked', results: [], extracted: { emails: [], phones: [], socialUrls: [] } };
 }
 
+// =============================================================================
+// PEOPLE RECORDS — agent-driven browser scrubbing of public-records pages
+// =============================================================================
+// The agent renders public pages with a REAL Chromium (Playwright) — the same
+// public data a person sees in their browser — and mines the text for structured
+// records: age, city, address history, relatives, aliases. Public-record data,
+// no login bypass, no stolen dumps. Source URL is kept on every record.
+
+import * as fsPs from 'fs';
+import * as pathPs from 'path';
+
+export interface PersonRecord {
+  name: string;
+  age?: number;
+  city?: string;
+  pastAddresses: string[];
+  relatives: string[];
+  akas: string[];
+  sourceUrl: string;
+}
+
+let peopleLaunchLock: Promise<void> | null = null;
+
+function resolveChromiumExe(): string | null {
+  const base = pathPs.join(process.env.LOCALAPPDATA || '', 'ms-playwright');
+  if (!fsPs.existsSync(base)) return null;
+  const dirs = fsPs.readdirSync(base).filter((d) => d.startsWith('chromium-')).sort().reverse();
+  for (const dir of dirs) {
+    for (const sub of ['chrome-win64', 'chrome-win']) {
+      const exe = pathPs.join(base, dir, sub, 'chrome.exe');
+      if (fsPs.existsSync(exe)) return exe;
+    }
+  }
+  return null;
+}
+
+/** Parse FastPeopleSearch innerText into structured person records (exported for tests). */
+export function parseFastPeopleSearch(text: string, sourceUrl: string, max = 10): PersonRecord[] {
+  const records: PersonRecord[] = [];
+  const blocks = text.split(/VIEW FREE DETAILS/).map((b) => b.trim()).filter(Boolean);
+  const cityRe = /^[A-Za-z .'-]+, [A-Z]{2}$/;
+  for (const block of blocks) {
+    const lines = block.split(/\n+/).map((l) => l.trim()).filter((l) => l && !/^FastPeopleSearch$/.test(l) && !/FREE public records found/.test(l));
+    let name = '';
+    let pending = '';
+    let age: number | undefined;
+    let city = '';
+    const pastAddresses: string[] = [];
+    const relatives: string[] = [];
+    const akas: string[] = [];
+    for (const line of lines) {
+      const ageCity = line.match(/^(?:(.{2,60}?)\s+)?Age (\d{1,3}) \u2022 (.+)$/);
+      if (ageCity) {
+        if (ageCity[1]) name = ageCity[1];
+        else if (!name && pending) name = pending;
+        age = parseInt(ageCity[2], 10);
+        city = ageCity[3].split(/\s*\u2022\s*/)[0];
+        continue;
+      }
+      const past = line.match(/^Past Addresses:\s*(.+)$/);
+      if (past) { pastAddresses.push(...past[1].split(/\s*\u2022\s*/).map((s) => s.trim()).filter(Boolean)); continue; }
+      const rel = line.match(/^Relatives:\s*(.+)$/);
+      if (rel) { relatives.push(...rel[1].split(/\s*\u2022\s*/).map((s) => s.trim()).filter(Boolean)); continue; }
+      const aka = line.match(/^AKA:\s*(.+)$/);
+      if (aka) { akas.push(...aka[1].split(/\s*\u2022\s*/).map((s) => s.trim()).filter(Boolean)); continue; }
+      if (!name && cityRe.test(line) && !city) { city = line; continue; }
+      if (!name && line.length <= 60 && !/^(Find |Names |VIEW)/.test(line)) pending = line;
+    }
+    if (!name && pending) name = pending;
+    if (!name && !city) continue;
+    if (/(©|copyright|all rights reserved)/i.test(name)) continue;
+    records.push({ name: name || city, age, city: city || undefined, pastAddresses, relatives, akas, sourceUrl });
+    if (records.length >= max) break;
+  }
+  return records;
+}
+
+/** Render the public-records page for a name in a real browser and mine it. */
+export async function peopleRecordSearch(fullNameRaw: string): Promise<{ name: string; via: string; records: PersonRecord[]; note?: string }> {
+  const fullName = fullNameRaw.trim().replace(/s+/g, ' ');
+  if (!fullName || !fullName.includes(' ')) throw new Error('full name required (first + last)');
+  const exe = resolveChromiumExe();
+  if (!exe) throw new Error('playwright chromium not installed — run: npx playwright install chromium');
+  const run = async (): Promise<PersonRecord[]> => {
+    const { chromium } = await import('playwright');
+    const browser = await chromium.launch({ headless: true, executablePath: exe });
+    try {
+      const page = await browser.newPage({
+        userAgent: UA,
+        viewport: { width: 1366, height: 900 },
+      });
+      const url = `https://www.fastpeoplesearch.com/name/${encodeURIComponent(fullName.toLowerCase().replace(/s+/g, '-'))}`;
+      await page.goto(url, { timeout: 30_000, waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(4_000);
+      let text = (await page.evaluate('document.body.innerText.slice(0, 60000)')) as string;
+      let parsed = parseFastPeopleSearch(text, url, 10);
+      if (parsed.length === 0) {
+        // Late render / soft block — one more window before giving up.
+        await page.waitForTimeout(6_000);
+        text = (await page.evaluate('document.body.innerText.slice(0, 60000)')) as string;
+        parsed = parseFastPeopleSearch(text, url, 10);
+      }
+      return parsed;
+    } finally {
+      await browser.close().catch(() => undefined);
+    }
+  };
+  // One browser launch at a time.
+  const records = peopleLaunchLock
+    ? await peopleLaunchLock.then(run)
+    : await run();
+  return { name: fullName, via: 'fastpeoplesearch (rendered)', records };
+}
+
 // AGENT-RUNNABLE TOOLS (registered into the arsenal, category 'osint')
 // =============================================================================
 
@@ -2495,6 +2632,32 @@ export const OSINT_TOOLS: CustomTool[] = [
         };
       } catch (error) {
         return { success: false, error: `Permutation failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  },
+  {
+    name: 'osint_people_records',
+    description: 'Render the public-records page for a full name in a real browser (Playwright Chromium) and mine structured person records: age, city, address history, relatives, aliases. Pass the subject full name.',
+    category: 'osint',
+    parameters: [
+      { name: 'name', type: 'string', description: 'Full name (first + last)', required: true },
+    ],
+    handler: async (context) => {
+      const name = context.parameters.name as string;
+      try {
+        const result = await peopleRecordSearch(name);
+        const lines = [
+          `Public records for "${result.name}" (${result.via}): ${result.records.length} record(s)`,
+          ...result.records.map((r) => `  ${r.name}${r.age ? `, age ${r.age}` : ''}${r.city ? ` — ${r.city}` : ''}\n    addresses: ${r.pastAddresses.join(' | ') || '—'}\n    relatives: ${r.relatives.join(', ') || '—'}\n    akas: ${r.akas.join(', ') || '—'}\n    source: ${r.sourceUrl}`),
+        ];
+        const findings = result.records.slice(0, 5).map((r) => ({
+          title: `Public Record — ${r.name}${r.city ? `, ${r.city}` : ''}`,
+          severity: 'info' as const,
+          details: `age ${r.age ?? '?'}; addresses: ${r.pastAddresses.join(' | ') || '—'}; relatives: ${r.relatives.join(', ') || '—'}; akas: ${r.akas.join(', ') || '—'}; source: ${r.sourceUrl}`,
+        }));
+        return { success: true, output: lines.join('\n'), findings };
+      } catch (error) {
+        return { success: false, error: `People records failed: ${error instanceof Error ? error.message : String(error)}` };
       }
     },
   },

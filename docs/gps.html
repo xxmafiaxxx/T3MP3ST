@@ -429,7 +429,7 @@
                         <span class="layer-chip active" data-layer="alert" onclick="toggleLayer('alert')"><span class="dot" style="background:#ff4757"></span>⚠ ALERTS <span class="count" id="cntAlerts">0</span></span>
                         <span class="layer-chip active" data-layer="iss" onclick="toggleLayer('iss')" ondblclick="locateIss()" title="ISS — live International Space Station position (wheretheiss.at). Click to toggle, double-click to fly to it."><span class="dot" style="background:#2ed573"></span>🛰 ISS <span class="count" id="cntIss">0</span></span><button class="btn ghost" style="padding:4px 8px;font-size:11px;" onclick="locateIss()" title="Center map on ISS now">◎ LOCATE ISS</button>
                         <span class="layer-chip" data-layer="poi" onclick="toggleLayer('poi')"><span class="dot" style="background:#b57bff"></span>🍴 POIs <span class="count" id="cntPois">0</span></span>
-                        <span class="layer-chip" data-layer="tower" onclick="toggleLayer('tower')"><span class="dot" style="background:#00d2d3"></span>📡 TOWERS <span class="count" id="cntTower">0</span></span>
+                        <span class="layer-chip" data-layer="tower" onclick="toggleLayer('tower')"><span class="dot" style="background:#00d2d3"></span>📱 TOWERS <span class="count" id="cntTower">0</span></span>
                         <span class="layer-chip" data-layer="app" onclick="toggleLayer('app')"><span class="dot" style="background:#2fffd2"></span>🎯 APP TARGETS <span class="count" id="cntApp">0</span></span>
                     </div>
                 </div>
@@ -840,16 +840,29 @@
             }
         }
 
+        var towerLoad = { key: '', at: 0 };
         async function loadTowers(refresh) {
             if (!map) return;
             var bbox = viewBbox();
             if (!bbox) return;
+            // The cells-in-area API answers ONE search covering ~2×2 km. Fetching on
+            // wide viewports crops results to the map center (looks broken), so gate:
+            // only search when the view is ~2 km wide, and only once per viewport.
+            var kmWide = (bbox.lomax - bbox.lomin) * 111.32 * Math.cos(bbox.lamin * Math.PI / 180);
+            if (kmWide > 2.2) {
+                setStatus('<span class="warn">📱 towers: zoom in to a ~2 km view — the API covers 2×2 km per search (this view is ' + kmWide.toFixed(1) + ' km wide)</span>');
+                return;
+            }
+            var key = [bbox.lamin, bbox.lomin, bbox.lamax, bbox.lomax].map(function (v) { return v.toFixed(3); }).join(',');
+            if (!refresh && key === towerLoad.key && Date.now() - towerLoad.at < 120000) return;
+            towerLoad.key = key; towerLoad.at = Date.now();
             try {
                 var d = await api('/api/gps/towers?refresh=' + (refresh ? 1 : 0) +
                     '&lamin=' + bbox.lamin.toFixed(3) + '&lomin=' + bbox.lomin.toFixed(3) +
                     '&lamax=' + bbox.lamax.toFixed(3) + '&lomax=' + bbox.lomax.toFixed(3));
                 renderFeed('tower', d);
                 if (d.note) setStatus('<span class="warn">cell towers: ' + esc(d.note) + '</span>');
+                else setStatus('OpenCelliD: ' + (d.points || []).length + ' cells in view — one search per viewport, 5-min cache');
             } catch (e) {
                 setStatus('<span class="warn">tower feed: ' + esc(e.message || e) + '</span>');
             }

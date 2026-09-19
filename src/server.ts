@@ -80,6 +80,8 @@ import {
   reverseGeocode,
   fetchPois,
   fetchCellTowers,
+  setOpencellidKey,
+  getOpencellidKey,
   POI_KINDS,
   isPoiKind,
 } from './tools/public-gps.js';
@@ -7694,17 +7696,28 @@ app.get('/api/osint/dump-status', (_req: Request, res: Response) => {
     'T3MP3ST_DEHASHED_KEY': Boolean(process.env.T3MP3ST_DEHASHED_KEY),
     'T3MP3ST_SNUSBASE_KEY': Boolean(process.env.T3MP3ST_SNUSBASE_KEY),
   };
+  const ocArmed = Boolean(getOpencellidKey());
   res.json({
     free: ['LeakCheck public', 'XposedOrNot', 'HIBP Pwned Passwords (k-anonymity)'],
     lanes: lanes.map((l) => {
       const svc = l.envVar === 'T3MP3ST_LEAKCHECK_KEY' ? 'leakcheck' : l.envVar === 'T3MP3ST_DEHASHED_KEY' ? 'dehashed' : 'snusbase';
       return { ...l, armed: armed[svc as keyof typeof armed], source: armed[svc as keyof typeof armed] ? (byEnv[l.envVar] ? 'env-or-runtime' : 'runtime') : 'none' };
     }),
+    gps: {
+      opencellid: {
+        armed: ocArmed,
+        envVar: 'T3MP3ST_OPENCELLID_KEY',
+        source: ocArmed ? (process.env.T3MP3ST_OPENCELLID_KEY ? 'env-or-runtime' : 'runtime') : 'none',
+        unlocks: 'GPS Map 📱 TOWERS layer (cell-site registry, opencellid.org free non-commercial token)',
+      },
+    },
+    allowDirect: !/^(0|false|no|off)$/i.test(process.env.T3MP3ST_OSINT_ALLOW_DIRECT ?? '1'),
   });
 });
 
-// Arm/clear the deep dump lanes at runtime (persisted to the settings DB — masked in
-// every GET; the raw key never leaves the server). Keys take effect immediately.
+// Arm/clear the deep dump lanes + OSINT intel keys at runtime (persisted to the
+// settings DB — masked in every GET; the raw key never leaves the server). Keys
+// take effect immediately. Blank string clears a lane; omitted field keeps it.
 app.post('/api/osint/dump-keys', (req: Request, res: Response): void => {
   const body = (req.body || {}) as Record<string, unknown>;
   const applied: string[] = [];
@@ -7716,9 +7729,21 @@ app.post('/api/osint/dump-keys', (req: Request, res: Response): void => {
     // Persist (opaque blob key) so arming survives restarts without env edits.
     dbSettings[`osintDumpKeys.${service}`] = key || undefined;
   }
-  if (applied.length === 0) { res.status(400).json({ error: 'no recognized service keys in body (leakcheck | dehashed | snusbase)' }); return; }
+  if ('opencellid' in body) {
+    const key = typeof body.opencellid === 'string' ? body.opencellid.trim() : '';
+    setOpencellidKey(key || undefined);
+    dbSettings['osint.opencellidKey'] = key || undefined;
+    applied.push('opencellid');
+  }
+  if ('allowDirect' in body) {
+    const v = body.allowDirect === true || body.allowDirect === '1' || body.allowDirect === 'true';
+    process.env.T3MP3ST_OSINT_ALLOW_DIRECT = v ? '1' : '0';
+    dbSettings['osint.allowDirect'] = v;
+    applied.push('allowDirect');
+  }
+  if (applied.length === 0) { res.status(400).json({ error: 'no recognized keys in body (leakcheck | dehashed | snusbase | opencellid | allowDirect)' }); return; }
   saveDbSettings('osint.dump-keys.updated');
-  console.log(`[T3MP3ST][OSINT] dump-lane keys updated: ${applied.join(', ')}`);
+  console.log(`[T3MP3ST][OSINT] intel keys updated: ${applied.join(', ')}`);
   res.json({ success: true, applied, armed: dumpKeyStatus() });
 });
 
@@ -12017,6 +12042,12 @@ async function startServer() {
       const svc = k.slice('osintDumpKeys.'.length);
       if (isDumpKeyService(svc)) setDumpKey(svc, v);
     }
+  }
+  if (typeof dbSettings['osint.opencellidKey'] === 'string' && dbSettings['osint.opencellidKey'].trim()) {
+    setOpencellidKey(dbSettings['osint.opencellidKey']);
+  }
+  if (typeof dbSettings['osint.allowDirect'] === 'boolean') {
+    process.env.T3MP3ST_OSINT_ALLOW_DIRECT = dbSettings['osint.allowDirect'] ? '1' : '0';
   }
   try { reindexCredentialsFromLedgers(); } catch { /* ignore on boot */ }
 

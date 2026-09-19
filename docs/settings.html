@@ -3824,6 +3824,52 @@
                     </div>
 
                     <div class="settings-section">
+                        <h2 class="settings-title">🕵️ OSINT — Deep Dump Lanes &amp; Intel Keys</h2>
+                        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">
+                            Arm the <b style="color:#bcd;">licensed breach/dump lanes</b> the OSINT Locator uses for record-level results (passwords, DOB, address fields where the source dump has them), plus the
+                            GPS Map cell-tower registry key. Keys are stored server-side (<code>memory/db-settings.json</code>, gitignored), apply <b style="color:#2fd6ff;">instantly — no restart</b>, and are
+                            masked in every GET (the raw value never comes back to any page). Environment variables still work as fallback.
+                        </p>
+                        <div class="card" style="border-color: rgba(160,90,255,0.35);">
+                            <div id="osintLaneStatus" style="margin-bottom:14px; display:grid; gap:6px;">
+                                <div style="color:#5f7079; font-size:12px;">Loading lane status…</div>
+                            </div>
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px;">
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:12px; color:var(--text-muted);">LeakCheck v2 API key — <span style="color:#7f90a0;">full records incl. password fields</span></label>
+                                    <input type="password" class="form-input" id="osintKeyLeakcheck" placeholder="paste key (blank = keep current)" autocomplete="off">
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:12px; color:var(--text-muted);">DeHashed API key — <span style="color:#7f90a0;">format <code>user:key</code> (basic auth)</span></label>
+                                    <input type="password" class="form-input" id="osintKeyDehashed" placeholder="myuser:mykey (blank = keep current)" autocomplete="off">
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:12px; color:var(--text-muted);">Snusbase API key — <span style="color:#7f90a0;">dump DB search incl. phone lanes</span></label>
+                                    <input type="password" class="form-input" id="osintKeySnusbase" placeholder="paste key (blank = keep current)" autocomplete="off">
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:12px; color:var(--text-muted);">OpenCellID API key — <span style="color:#7f90a0;">GPS Map 📱 TOWERS layer (free at opencellid.org)</span></label>
+                                    <input type="password" class="form-input" id="osintKeyOpencellid" placeholder="pk.… (blank = keep current)" autocomplete="off">
+                                </div>
+                            </div>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:11.5px; color:#8a99a5; margin-top:12px;">
+                                <input type="checkbox" id="osintAllowDirect" style="accent-color:#a05aff;">
+                                <span title="OSINT/dump APIs are third-party data platforms, not mission targets — when the SOCKS exit is blocked, fall back to your direct IP for those calls (marked in results). Kill-switch for T3MP3ST_OSINT_ALLOW_DIRECT.">Allow direct (non-proxy) fallback for OSINT/dump API calls when the proxy exit is blocked</span>
+                            </label>
+                            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
+                                <button class="btn btn-primary btn-sm" onclick="saveOsintIntel()">Save &amp; arm keys</button>
+                                <button class="btn btn-sm" onclick="clearOsintIntel()" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.2);color:#bcd;">Clear all keys</button>
+                                <button class="btn btn-sm" onclick="loadOsintIntel()" style="background:rgba(255,255,255,0.05);border:1px solid rgba(0,200,255,0.3);color:#bcd;">↻ Refresh status</button>
+                            </div>
+                            <div id="osintIntelStatus" style="font-size:12px; margin-top:10px; color:var(--text-muted);"></div>
+                            <div class="form-hint" style="margin-top:10px;">
+                                Free lanes always on, no keys: LeakCheck public · XposedOrNot · HIBP Pwned Passwords (k-anonymity). Keyed lanes: <code>T3MP3ST_LEAKCHECK_KEY</code> · <code>T3MP3ST_DEHASHED_KEY</code> · <code>T3MP3ST_SNUSBASE_KEY</code> · <code>T3MP3ST_OPENCELLID_KEY</code>.
+                                Use only for subjects within your lawful authorization.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
                         <h2 class="settings-title">🔌 Local Agents</h2>
                         <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">Enlist agents you've already authed on this machine — <b style="color:#bcd;">no API keys needed</b>. T3MP3ST detects each CLI (<b style="color:#bcd;">Claude Code</b> / Codex / Hermes) and drives it as your LLM backbone using its own login. Connect one, then hit <b style="color:#2fd6ff;">☆ Use</b> to pin it as the <b style="color:#2fd6ff;">★ active backbone</b> for missions and analysis — a pinned local model outranks any stored API key.</p>
                         <div id="localAgentsCard" style="padding: 18px 20px; background: linear-gradient(135deg, rgba(0,200,255,0.06), rgba(160,90,255,0.04)); border: 1px solid rgba(0,200,255,0.25); border-radius: 12px;">
@@ -7095,6 +7141,78 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             }
         }
 
+        // ── OSINT deep dump lanes + intel keys (Settings → OSINT) ──
+        // Mirrors the BREACH & DUMPS tab on the OSINT page: keys POST to
+        // /api/osint/dump-keys, take effect instantly, persist server-side, and are
+        // masked in every GET. Blank field = keep the current key.
+        async function loadOsintIntel() {
+            const host = document.getElementById('osintLaneStatus');
+            if (!host) return;
+            try {
+                const r = await fetch(`${getApiBase()}/api/osint/dump-status`);
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+                const row = (name, armed, src, unlocks) =>
+                    '<div style="font-size:11.5px; color:' + (armed ? '#7CFFC4' : '#8a99a5') + ';">' +
+                    (armed ? '🟢' : '🔒') + ' <b>' + name + '</b>' + (armed ? ' ARMED' : ' not armed') +
+                    '<span style="color:#5f7079;"> · ' + unlocks + (armed ? ' · via ' + src : '') + '</span></div>';
+                let html = d.lanes.map(l => row(l.service, l.armed, l.source, l.unlocks)).join('');
+                if (d.gps && d.gps.opencellid) html += row('OpenCellID (GPS towers)', d.gps.opencellid.armed, d.gps.opencellid.source, d.gps.opencellid.unlocks);
+                const ad = document.getElementById('osintAllowDirect');
+                if (ad && !ad.dataset.touched) ad.checked = !!d.allowDirect;
+                host.innerHTML = html;
+            } catch (e) {
+                host.innerHTML = '<div style="font-size:11.5px; color:#ff8080;">lane status unavailable: ' + (e.message || e) + '</div>';
+            }
+        }
+
+        async function saveOsintIntel() {
+            const el = document.getElementById('osintIntelStatus');
+            const payload = {};
+            const fields = { leakcheck: 'osintKeyLeakcheck', dehashed: 'osintKeyDehashed', snusbase: 'osintKeySnusbase', opencellid: 'osintKeyOpencellid' };
+            let any = false;
+            for (const [svc, id] of Object.entries(fields)) {
+                const v = (document.getElementById(id)?.value || '').trim();
+                if (v) { payload[svc] = v; any = true; }
+            }
+            const ad = document.getElementById('osintAllowDirect');
+            if (ad) { payload.allowDirect = ad.checked; any = true; }
+            if (!any) { toast('Nothing to save — paste at least one key or toggle the direct fallback', 'error'); return; }
+            if (el) { el.style.color = 'var(--text-muted)'; el.textContent = '⏳ Arming lanes…'; }
+            try {
+                const r = await fetch(`${getApiBase()}/api/osint/dump-keys`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+                Object.values(fields).forEach(id => { const i = document.getElementById(id); if (i) i.value = ''; });
+                if (el) { el.style.color = '#7CFFC4'; el.textContent = '✅ Applied: ' + (d.applied || []).join(', ') + ' — live immediately, persisted across restarts.'; }
+                toast('OSINT keys armed: ' + (d.applied || []).join(', '), 'success');
+                addActivity('success', 'OSINT intel keys updated (' + (d.applied || []).join(', ') + ')', 'Settings');
+                loadOsintIntel();
+            } catch (e) {
+                if (el) { el.style.color = '#ff8080'; el.textContent = '❌ ' + (e.message || e); }
+                toast('Save failed: ' + (e.message || e), 'error');
+            }
+        }
+
+        async function clearOsintIntel() {
+            if (!confirm('Clear ALL OSINT intel keys (dump lanes + OpenCellID)? The lanes will report key-required again.')) return;
+            try {
+                const r = await fetch(`${getApiBase()}/api/osint/dump-keys`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ leakcheck: '', dehashed: '', snusbase: '', opencellid: '' }),
+                });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+                toast('All OSINT intel keys cleared', 'info');
+                loadOsintIntel();
+            } catch (e) {
+                toast('Clear failed: ' + (e.message || e), 'error');
+            }
+        }
+
         async function checkProxyIp() {
             const el = document.getElementById('proxyTestResult');
             if (el) { el.style.color = 'var(--text-muted)'; el.textContent = '⏳ Checking egress IP via ifconfig.co …'; }
@@ -7577,6 +7695,17 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             if (el) el.classList.add('active');
         }
         window.addEventListener('load', maybeShowWelcome);
+        // OSINT intel panel: populate lane status on load; once the operator touches
+        // the direct-fallback toggle, stop overwriting it from status refreshes.
+        (function () {
+            const hook = () => setTimeout(() => {
+                loadOsintIntel();
+                const ad = document.getElementById('osintAllowDirect');
+                if (ad) ad.addEventListener('change', () => { ad.dataset.touched = '1'; });
+            }, 300);
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
+            else hook();
+        })();
 
         function openQuickActions() {
             openModal('Quick Actions', `

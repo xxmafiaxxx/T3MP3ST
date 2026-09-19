@@ -39,8 +39,8 @@ describe('osint site catalog', () => {
 });
 
 describe('osint agent tools', () => {
-  it('registers 9 tools in the osint category with required parameters', () => {
-    expect(OSINT_TOOLS.length).toBe(9);
+  it('registers 10 tools in the osint category with required parameters', () => {
+    expect(OSINT_TOOLS.length).toBe(10);
     const names = new Set<string>();
     for (const t of OSINT_TOOLS) {
       expect(names.has(t.name), `duplicate tool ${t.name}`).toBe(false);
@@ -60,6 +60,7 @@ describe('osint agent tools', () => {
       'osint_darkweb_leak_monitor',
       'osint_onion_search',
       'osint_onion_fetch',
+      'osint_people_records',
     ]) {
       expect(names.has(expected), `missing tool ${expected}`).toBe(true);
     }
@@ -302,6 +303,34 @@ describe('search extraction', () => {
     expect(r[0].title).toBe('Profile Page');
     expect(r[0].url).toBe('https://example.org/profile');
     expect(r[0].snippet).toContain('(718) 555-0142');
+  });
+});
+
+describe('people records parsing', () => {
+  it('parses FastPeopleSearch innerText into structured records (fixture)', async () => {
+    const { parseFastPeopleSearch } = await import('../tools/osint.js');
+    const fixture = [
+      'FastPeopleSearch',
+      '5 FREE public records found for Raul Glasgow.',
+      'Raul Glasgow',
+      'East Orange, NJ',
+      'VIEW FREE DETAILS',
+      'Raul Glasgow',
+      'Age 54 \u2022 Brooklyn, NY',
+      'Past Addresses: Brooklyn, NY \u2022 Newark, NJ \u2022 New York, NY',
+      'Relatives: Cynthia Glasgow \u2022 Walter Lang',
+      'AKA: Raul J Glasgow \u2022 Paul Glasgow',
+      'VIEW FREE DETAILS',
+    ].join('\n');
+    const records = parseFastPeopleSearch(fixture, 'https://www.fastpeoplesearch.com/name/raul-glasgow');
+    expect(records.length).toBe(2);
+    expect(records[1].name).toBe('Raul Glasgow');
+    expect(records[1].age).toBe(54);
+    expect(records[1].city).toBe('Brooklyn, NY');
+    expect(records[1].pastAddresses).toContain('Newark, NJ');
+    expect(records[1].relatives).toContain('Cynthia Glasgow');
+    expect(records[1].akas).toContain('Paul Glasgow');
+    expect(records[1].sourceUrl).toContain('fastpeoplesearch.com');
   });
 });
 
