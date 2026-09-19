@@ -107,7 +107,7 @@ export const ARCHETYPE_PROFILES: Record<OperatorArchetype, ArchetypeProfile> = {
     description: 'Specialized in OSINT, network discovery, and asset enumeration',
     mitreTactics: ['TA0043'],
     primaryPhases: [KillChainPhase.RECON],
-    defaultTools: ['dns_lookup', 'reverse_dns', 'whois_lookup', 'subdomain_enum', 'subdomain_takeover_check', 'nmap_scan', 'port_scan', 'network_trace', 'version_detect', 'robots_txt_fetch', 'cidr_expand', 'technology_detect', 'http_request', 'curl_request', 'header_analysis', 'api_endpoint_discovery', 'osint_person_locate', 'osint_username_sweep', 'osint_email_lookup', 'osint_phone_lookup', 'osint_breach_lookup', 'osint_username_permutate', 'osint_darkweb_leak_monitor', 'osint_onion_search', 'osint_onion_fetch'],
+    defaultTools: ['dns_lookup', 'reverse_dns', 'whois_lookup', 'subdomain_enum', 'subdomain_takeover_check', 'nmap_scan', 'port_scan', 'network_trace', 'version_detect', 'robots_txt_fetch', 'cidr_expand', 'technology_detect', 'http_request', 'curl_request', 'header_analysis', 'api_endpoint_discovery', 'osint_person_locate', 'osint_username_sweep', 'osint_email_lookup', 'osint_phone_lookup', 'osint_breach_lookup', 'osint_username_permutate', 'osint_darkweb_leak_monitor', 'osint_onion_search', 'osint_onion_fetch', 'osint_people_records'],
     toolCategories: ['recon', 'web', 'osint'],
     capabilities: ['osint', 'dns_enum', 'subdomain_discovery', 'port_scanning', 'service_detection'],
     techniques: ['T1595', 'T1592', 'T1589', 'T1590', 'T1591'],
