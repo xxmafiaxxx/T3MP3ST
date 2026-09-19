@@ -1167,6 +1167,8 @@ export interface OsintDossier {
   sourcesChecked: { name: string; status: 'found' | 'absent' | 'unknown'; confidence: string; url?: string }[];
   /** Sanctions / watchlist / wanted-notice screening (name subjects). */
   screening?: ScreeningResult;
+  /** Search-result mining runs (per query). */
+  searchExtraction: { query: string; via: string; found: number }[];
   /** Operator-ready markdown report (the DETAILED REPORT section). */
   report: string;
   identities: { source: string; detail: string }[];
@@ -1773,6 +1775,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     locations,
     geoPoints: [],
     sourcesChecked,
+    searchExtraction: [],
     report: '',
     identities,
     dorks: [],
@@ -1860,6 +1863,34 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
         const u = validateUsername(r.username || '');
         if (u && !derivedHandles.some((c) => c.handle === u)) derivedHandles.push({ handle: u, source: dep.service });
       }
+    }
+  }
+
+  // Wave 1.5 — search extraction: mine engine results for contact data.
+  const searchQueries: { q: string; kind: string }[] = [];
+  if (parsedInput.name) searchQueries.push({ q: `"${parsedInput.name}"`, kind: 'name' });
+  if (email) searchQueries.push({ q: `"${email}"`, kind: 'email' });
+  if (phone) searchQueries.push({ q: `"${phone}"`, kind: 'phone' });
+  for (const { q, kind } of searchQueries.slice(0, 3)) {
+    const extraction = await searchExtract(q).catch(() => null);
+    if (!extraction) continue;
+    dossier.searchExtraction.push({ query: q, via: extraction.via, found: extraction.results.length });
+    for (const e of extraction.extracted.emails) {
+      if (!emails.includes(e)) {
+        emails.push(e);
+        identities.push({ source: `search:${kind}`, detail: `email mined from search results: ${e}` });
+      }
+    }
+    for (const p of extraction.extracted.phones) {
+      if (!phones.includes(p)) {
+        phones.push(p);
+        identities.push({ source: `search:${kind}`, detail: `phone mined from search results: ${p}` });
+      }
+    }
+    for (const sUrl of extraction.extracted.socialUrls) {
+      const handleMatch = sUrl.match(/(?:github\.com|t\.me)\/([A-Za-z0-9_-]+)/);
+      const u = handleMatch ? validateUsername(handleMatch[1]) : null;
+      if (u && !derivedHandles.some((c) => c.handle === u)) derivedHandles.push({ handle: u, source: `search (${kind})` });
     }
   }
 
@@ -2132,6 +2163,95 @@ export async function screenSubject(nameRaw: string): Promise<ScreeningResult> {
 }
 
 // =============================================================================
+// =============================================================================
+// SEARCH EXTRACTION — mine search-engine results for contact data (keyless)
+// =============================================================================
+// Bing HTML SERP parses server-side (DDG/Mojeek serve challenges to datacenter
+// exits; Bing answered 200 with real results). Titles + snippets are mined for
+// emails, phones, social profile URLs — passive search-data extraction.
+
+export interface SearchResultItem { title: string; url: string; snippet: string }
+
+/** Parse Bing SERP HTML into result items (exported for unit tests). */
+export function parseBingResults(html: string, max = 20): SearchResultItem[] {
+  const out: SearchResultItem[] = [];
+  const blocks = html.split('<li class="b_algo').slice(1);
+  for (const block of blocks) {
+    const anchor = block.match(/<h2[^>]*><a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!anchor) continue;
+    const url = anchor[1].replace(/&amp;/g, '&');
+    const title = anchor[2].replace(/<[^>]+>/g, '').trim().slice(0, 200);
+    const pMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    const snippet = pMatch ? pMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+    out.push({ title, url, snippet });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+export interface ExtractedContacts {
+  emails: string[];
+  phones: string[];
+  socialUrls: string[];
+}
+
+const EMAIL_RE_GLOBAL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+const PHONE_RE_GLOBAL = /(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/g;
+const SOCIAL_URL_RE = /https?:\/\/(?:www\.)?(github\.com|t\.me|twitter\.com|x\.com|instagram\.com|facebook\.com|linkedin\.com|tiktok\.com|youtube\.com|reddit\.com|soundcloud\.com|keybase\.io)\/[A-Za-z0-9_.\-/@]+/g;
+
+/** Extract contact signals from arbitrary text (titles/snippets/URLs). */
+export function extractContacts(text: string): ExtractedContacts {
+  const emails = new Set<string>();
+  const phones = new Set<string>();
+  const socials = new Set<string>();
+  for (const m of text.match(EMAIL_RE_GLOBAL) || []) {
+    const e = m.toLowerCase().replace(/\.$/, '');
+    if (/\.(png|jpe?g|gif|css|js|woff2?)$/.test(e)) continue;
+    if (/(example\.com|sentry\.io|noreply|no-reply@|@2x)/.test(e)) continue;
+    emails.add(e);
+  }
+  for (const m of text.match(PHONE_RE_GLOBAL) || []) {
+    const digits = m.replace(/\D/g, '');
+    if (digits.length === 11 && digits.startsWith('1')) phones.add(m.trim());
+    else if (digits.length === 10 && !/^(19|20)\d{2}/.test(digits)) phones.add(m.trim());
+  }
+  for (const m of text.match(SOCIAL_URL_RE) || []) {
+    const clean = m.replace(/[.,)]+$/, '');
+    if (clean.split('/').filter(Boolean).length >= 2) socials.add(clean);
+  }
+  return { emails: [...emails], phones: [...phones], socialUrls: [...socials] };
+}
+
+/** Run a Bing search and extract contact signals from the results. */
+export async function searchExtract(queryRaw: string): Promise<{ query: string; via: string; results: SearchResultItem[]; extracted: ExtractedContacts }> {
+  const query = queryRaw.trim().slice(0, 200);
+  if (!query) throw new Error('query required');
+  const attempts: Array<() => Promise<string | null>> = [
+    async () => {
+      const res = await osintFetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20`, {
+        headers: { 'accept-language': 'en-US,en' },
+        signal: AbortSignal.timeout(15_000),
+      });
+      return res.status === 200 ? await res.text() : null;
+    },
+    async () => {
+      const tor = await torStatus();
+      if (!tor.available) return null;
+      const page = await torFetchAny(`https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20`);
+      return page.status === 200 ? page.body : null;
+    },
+  ];
+  for (const attempt of attempts) {
+    const html = await attempt().catch(() => null);
+    if (!html) continue;
+    const results = parseBingResults(html);
+    if (results.length === 0) continue;
+    const corpus = results.map((r) => `${r.title} ${r.snippet} ${r.url}`).join('\n');
+    return { query, via: 'bing', results, extracted: extractContacts(corpus) };
+  }
+  return { query, via: 'blocked', results: [], extracted: { emails: [], phones: [], socialUrls: [] } };
+}
+
 // AGENT-RUNNABLE TOOLS (registered into the arsenal, category 'osint')
 // =============================================================================
 

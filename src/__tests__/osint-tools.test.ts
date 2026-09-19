@@ -278,6 +278,33 @@ describe('identity corroboration', () => {
   });
 });
 
+describe('search extraction', () => {
+  it('extracts emails, phones and social URLs from search text', async () => {
+    const { extractContacts } = await import('../tools/osint.js');
+    const r = extractContacts(
+      'Contact John Smith at john.smith83@gmail.com or call (718) 555-0142. ' +
+      'See https://github.com/jsmith83 and https://t.me/jsmith83 — born 1985, year 2020 photo.png admin@example.com'
+    );
+    expect(r.emails).toContain('john.smith83@gmail.com');
+    expect(r.emails.some((e) => e.includes('example.com'))).toBe(false); // decoy filtered
+    expect(r.emails.some((e) => e.endsWith('.png'))).toBe(false);
+    expect(r.phones).toContain('(718) 555-0142');
+    expect(r.socialUrls.some((u) => u.includes('github.com/jsmith83'))).toBe(true);
+    expect(r.socialUrls.some((u) => u.includes('t.me/jsmith83'))).toBe(true);
+  });
+
+  it('parses Bing SERP blocks into results (fixture)', async () => {
+    const { parseBingResults } = await import('../tools/osint.js');
+    const fixture = '<li class="b_algo"><h2><a href="https://example.org/profile">Profile Page</a></h2>' +
+      '<p class="b_lineclamp">Snippet with (718) 555-0142 inside.</p></li>';
+    const r = parseBingResults(fixture);
+    expect(r.length).toBe(1);
+    expect(r[0].title).toBe('Profile Page');
+    expect(r[0].url).toBe('https://example.org/profile');
+    expect(r[0].snippet).toContain('(718) 555-0142');
+  });
+});
+
 describe('person dorks', () => {
   it('builds engine + people-search links for every identifier kind', () => {
     const dorks = personDorks({ name: 'John Smith', email: 'john@example.com', username: 'jsmith', phone: '+17185550199', domain: 'example.com' });
