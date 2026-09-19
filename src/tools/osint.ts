@@ -2402,12 +2402,22 @@ export function parseTruePeopleSearch(text: string, sourceUrl: string, max = 10)
   return records.slice(0, max);
 }
 
+/** Per-name result cache — public-records sites throttle frequent queries; a cached
+ *  hit is always better than a soft-blocked empty one. 10 min TTL. */
+const peopleCache = new Map<string, { at: number; records: PersonRecord[] }>();
+const PEOPLE_CACHE_TTL = 10 * 60 * 1000;
+
 /** Render the public-records page for a name in a real browser and mine it. */
 export async function peopleRecordSearch(fullNameRaw: string): Promise<{ name: string; via: string; records: PersonRecord[]; note?: string }> {
   const fullName = fullNameRaw.trim().replace(/s+/g, ' ');
   if (!fullName || !fullName.includes(' ')) throw new Error('full name required (first + last)');
   const exe = resolveChromiumExe();
   if (!exe) throw new Error('playwright chromium not installed — run: npx playwright install chromium');
+  const cacheKey0 = fullName.toLowerCase();
+  const cached = peopleCache.get(cacheKey0);
+  if (cached && Date.now() - cached.at < PEOPLE_CACHE_TTL) {
+    return { name: fullName, via: 'fastpeoplesearch (rendered)', records: cached.records, note: 'cached (source throttles frequent queries)' };
+  }
   const run = async (): Promise<PersonRecord[]> => {
     const { chromium } = await import('playwright');
     const browser = await chromium.launch({ headless: true, executablePath: exe });
@@ -2449,6 +2459,8 @@ export async function peopleRecordSearch(fullNameRaw: string): Promise<{ name: s
   const records = peopleLaunchLock
     ? await peopleLaunchLock.then(run)
     : await run();
+  const cacheKey = fullName.toLowerCase();
+  peopleCache.set(cacheKey, { at: Date.now(), records });
   return { name: fullName, via: 'fastpeoplesearch (rendered)', records };
 }
 
