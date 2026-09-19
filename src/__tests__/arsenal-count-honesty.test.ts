@@ -35,16 +35,16 @@ const isGated = (a: ToolAdapter) =>
   a.execution === 'catalog_only' || a.execution === 'import_only';
 
 describe('arsenal count honesty (advertised = real registered surface)', () => {
-  it('the advertised "129 tools" is the real registered surface, not a source-line count', () => {
+  it('the advertised "131 tools" is the real registered surface, not a source-line count', () => {
     const total = TOOL_ADAPTERS.length + BUILTIN_TOOLS.length + EXTERNAL_TOOLS.length + OSINT_TOOLS.length;
     // Locks the headline to code. If the arsenal grows/shrinks, update this AND the
     // README / verify-claims headline together — that is the point of the lock.
     expect(
       total,
-      `arsenal size drifted from the advertised 129 (adapters=${TOOL_ADAPTERS.length}, ` +
+      `arsenal size drifted from the advertised 131 (adapters=${TOOL_ADAPTERS.length}, ` +
         `built-ins=${BUILTIN_TOOLS.length}, externals=${EXTERNAL_TOOLS.length}, osint=${OSINT_TOOLS.length}) — ` +
         'update the README / verify-claims headline to match',
-    ).toBe(129);
+    ).toBe(131);
     expect(total).toBeGreaterThanOrEqual(80); // stays consistent with verify-claims' `>= 80` gate
   });
 

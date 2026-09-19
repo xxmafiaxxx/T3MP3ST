@@ -2361,6 +2361,47 @@ export function parseFastPeopleSearch(text: string, sourceUrl: string, max = 10)
   return records;
 }
 
+/** Parse TruePeopleSearch innerText into structured records.
+ *  Layout: header rows, then per-record: name line, 'Age [N|Unknown] • City, ST',
+ *  optional 'Used to live in A, B, C', optional 'Related to A, B', 'View Details'. */
+export function parseTruePeopleSearch(text: string, sourceUrl: string, max = 10): PersonRecord[] {
+  const records: PersonRecord[] = [];
+  const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  let pending = '';
+  let cur: PersonRecord | null = null;
+  const finish = () => {
+    if (cur && (cur.name || cur.city)) {
+      if (!/(©|copyright)/i.test(cur.name)) records.push(cur);
+    }
+    cur = null;
+  };
+  for (const line of lines) {
+    if (/^TruePeopleSearch$/.test(line) || /^(Name|Phone|Address|Email|Neighbors)$/.test(line)) continue;
+    if (/records? found for/i.test(line)) continue;
+    const ageN = line.match(/^Age (\d{1,3})\s*•\s*(.+)$/i);
+    const ageUnknown = line.match(/^Age Unknown\s*•\s*(.+)$/i);
+    if (ageN || ageUnknown) {
+      finish();
+      cur = {
+        name: pending,
+        age: ageN ? parseInt(ageN[1], 10) : undefined,
+        city: (ageN ? ageN[2] : ageUnknown![1]).trim(),
+        pastAddresses: [], relatives: [], akas: [], sourceUrl,
+      };
+      pending = '';
+      continue;
+    }
+    const usedTo = line.match(/^Used to live in\s*(.+)$/i);
+    if (usedTo && cur) { cur.pastAddresses.push(...usedTo[1].split(/,\s*/).map((s) => s.trim()).filter(Boolean)); continue; }
+    const related = line.match(/^Related to\s*(.+)$/i);
+    if (related && cur) { cur.relatives.push(...related[1].split(/,\s*/).map((s) => s.trim()).filter(Boolean)); continue; }
+    if (/^View Details/i.test(line)) { finish(); continue; }
+    if (!cur) pending = line;
+  }
+  finish();
+  return records.slice(0, max);
+}
+
 /** Render the public-records page for a name in a real browser and mine it. */
 export async function peopleRecordSearch(fullNameRaw: string): Promise<{ name: string; via: string; records: PersonRecord[]; note?: string }> {
   const fullName = fullNameRaw.trim().replace(/s+/g, ' ');
@@ -2375,16 +2416,29 @@ export async function peopleRecordSearch(fullNameRaw: string): Promise<{ name: s
         userAgent: UA,
         viewport: { width: 1366, height: 900 },
       });
-      const url = `https://www.fastpeoplesearch.com/name/${encodeURIComponent(fullName.toLowerCase().replace(/s+/g, '-'))}`;
-      await page.goto(url, { timeout: 30_000, waitUntil: 'domcontentloaded' });
+      const slug = fullName.toLowerCase().replace(/\s+/g, '-');
+      // Source 1: TruePeopleSearch — renders for datacenter exits more reliably.
+      const tpsUrl = `https://www.truepeoplesearch.com/results?name=${encodeURIComponent(fullName)}`;
+      await page.goto(tpsUrl, { timeout: 30_000, waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(6_000);
+      let tpsText = (await page.evaluate('document.body.innerText.slice(0, 60000)')) as string;
+      let parsed = parseTruePeopleSearch(tpsText, tpsUrl, 10);
+      if (parsed.length > 0) return parsed;
+      // TPS late render / soft block — one retry window.
+      await page.waitForTimeout(5_000);
+      tpsText = (await page.evaluate('document.body.innerText.slice(0, 60000)')) as string;
+      parsed = parseTruePeopleSearch(tpsText, tpsUrl, 10);
+      if (parsed.length > 0) return parsed;
+      // Source 2: FastPeopleSearch.
+      const fpsUrl = `https://www.fastpeoplesearch.com/name/${slug}`;
+      await page.goto(fpsUrl, { timeout: 30_000, waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(4_000);
-      let text = (await page.evaluate('document.body.innerText.slice(0, 60000)')) as string;
-      let parsed = parseFastPeopleSearch(text, url, 10);
+      let fpsText = (await page.evaluate('document.body.innerText.slice(0, 60000)')) as string;
+      parsed = parseFastPeopleSearch(fpsText, fpsUrl, 10);
       if (parsed.length === 0) {
-        // Late render / soft block — one more window before giving up.
         await page.waitForTimeout(6_000);
-        text = (await page.evaluate('document.body.innerText.slice(0, 60000)')) as string;
-        parsed = parseFastPeopleSearch(text, url, 10);
+        fpsText = (await page.evaluate('document.body.innerText.slice(0, 60000)')) as string;
+        parsed = parseFastPeopleSearch(fpsText, fpsUrl, 10);
       }
       return parsed;
     } finally {

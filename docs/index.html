@@ -6,6 +6,8 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <title>T3MP3ST - Command & Control Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="cve-vault.css" rel="stylesheet">
+    <script src="app-shell.js"></script>
     <script>
         // Apply the saved theme before first paint (no flash of default theme).
         try { var _t3mpTheme = localStorage.getItem('t3mp3st_theme'); if (_t3mpTheme && _t3mpTheme !== 'storm') document.documentElement.setAttribute('data-theme', _t3mpTheme); } catch (e) {}
@@ -3642,6 +3644,10 @@
                 <a class="nav-item" href="evidence.html" style="text-decoration:none;">
                     <span class="icon">🔐</span> Evidence Vault <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
+                </div>
+                <div class="nav-item" data-page="cve-vault" data-shell-module="true">
+                    <span class="icon">🛡️</span> CVE Vault
+                </div>
 
                 <div class="nav-label">Ranges</div>
                 <a class="nav-item" href="obsidivm.html" style="text-decoration:none;">
@@ -3862,6 +3868,7 @@
                                     <span id="sysEventCount" style="font-size:9px; color:#555;">0</span>
                                     <button onclick="t3mpSysEventsPaused=!t3mpSysEventsPaused; this.textContent=t3mpSysEventsPaused?'▶':'⏸';" title="Pause/resume stream" style="font-size:9px; background:none; border:1px solid #333; border-radius:3px; color:#888; cursor:pointer; padding:1px 6px;">⏸</button>
                                     <button onclick="var t=document.getElementById('sysEventTerminal'); if(t)t.innerHTML='';" title="Clear" style="font-size:9px; background:none; border:1px solid #333; border-radius:3px; color:#888; cursor:pointer; padding:1px 6px;">CLR</button>
+                                    <button onclick="var t=document.getElementById('sysEventTerminal'); if(!t){return;} var txt=t.innerText.split('\n').map(function(l){return l.trim();}).filter(Boolean).join('\n'); if(!txt){return;} function fb(txt){var ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(e){} document.body.removeChild(ta);} var done=function(){var b=document.getElementById('sysEventCopyBtn'); if(b){var o=b.textContent; b.textContent='✓'; setTimeout(function(){b.textContent=o;},900);}}; if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(function(){fb(txt);done();});}else{fb(txt);done();}" title="Copy all events to clipboard" style="font-size:9px; background:none; border:1px solid #333; border-radius:3px; color:#888; cursor:pointer; padding:1px 6px;">COPY</button>
                                 </div>
                             </div>
                             <div id="sysEventTerminal" style="flex:1; max-height:188px; min-height:132px; overflow-y:auto; padding:7px 12px; font-size:10.5px; line-height:1.5;">
@@ -4761,6 +4768,1419 @@
             llmAvailable: false,
             serverLLM: null,
 
+                        <!-- Run Options Row -->
+                        <div style="margin-top: 12px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;">
+                                <input type="checkbox" id="enableLLMJudge" checked onchange="toggleLLMJudge()" style="accent-color: #8800ff;">
+                                <span style="color: #ccc;">🧠 LLM-as-Judge</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;">
+                                <input type="checkbox" id="autoImproveToggle" style="accent-color: #ff8800;">
+                                <span style="color: #ccc;">🔄 Auto-Improve After</span>
+                            </label>
+                            <div id="autoImproveIterations" style="display: none; align-items: center; gap: 4px;">
+                                <input type="number" id="loopIterations" value="3" min="1" max="10" style="width: 42px; padding: 3px 6px; background: rgba(0,0,0,0.3); border: 1px solid #444; border-radius: 4px; color: #fff; text-align: center; font-size: 11px;">
+                                <span style="font-size: 11px; color: #888;">iterations</span>
+                            </div>
+                            <span id="selectedCategoryCount" style="font-size: 11px; color: #888; margin-left: auto;">6/6 categories selected</span>
+                        </div>
+
+                        <!-- Category Selection -->
+                        <div id="benchmarkCategorySelector" style="margin-top: 12px; padding: 12px; background: rgba(0,136,255,0.08); border-radius: 8px; border: 1px solid rgba(0,136,255,0.2);">
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                                <span style="color: #0088ff; font-weight: bold; font-size: 12px;">Categories</span>
+                                <button class="btn btn-sm" onclick="toggleAllBenchmarkCategories(true)" style="font-size: 10px; padding: 2px 8px;">All</button>
+                                <button class="btn btn-sm" onclick="toggleAllBenchmarkCategories(false)" style="font-size: 10px; padding: 2px 8px;">None</button>
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px;">
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_web_exploitation" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: #ff4444;">
+                                    <div>
+                                        <span style="font-size: 11px; color: #ff4444;">🌐 Web Exploitation</span>
+                                        <div style="font-size: 9px; color: #888;">10 tests</div>
+                                    </div>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_binary_exploitation" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: #ff8800;">
+                                    <div>
+                                        <span style="font-size: 11px; color: #ff8800;">💥 Binary Exploitation</span>
+                                        <div style="font-size: 9px; color: #888;">7 tests</div>
+                                    </div>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_cryptography" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: var(--brand);">
+                                    <div>
+                                        <span style="font-size: 11px; color: var(--brand);">🔐 Cryptography</span>
+                                        <div style="font-size: 9px; color: #888;">8 tests</div>
+                                    </div>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_reverse_engineering" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: #8800ff;">
+                                    <div>
+                                        <span style="font-size: 11px; color: #8800ff;">🔬 Reverse Engineering</span>
+                                        <div style="font-size: 9px; color: #888;">8 tests</div>
+                                    </div>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_forensics" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: #00ccff;">
+                                    <div>
+                                        <span style="font-size: 11px; color: #00ccff;">🔍 Forensics</span>
+                                        <div style="font-size: 9px; color: #888;">9 tests</div>
+                                    </div>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_autonomous_ops" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: #ffcc00;">
+                                    <div>
+                                        <span style="font-size: 11px; color: #ffcc00;">🤖 Autonomous Ops</span>
+                                        <div style="font-size: 9px; color: #888;">6 tests</div>
+                                    </div>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_owasp_top10" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: #ff3333;">
+                                    <div>
+                                        <span style="font-size: 11px; color: #ff3333;">🛡️ OWASP Top 10</span>
+                                        <div style="font-size: 9px; color: #888;">10 tests</div>
+                                    </div>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_mitre_attack" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: #bb66ff;">
+                                    <div>
+                                        <span style="font-size: 11px; color: #bb66ff;">⚔️ MITRE ATT&CK</span>
+                                        <div style="font-size: 9px; color: #888;">10 tests</div>
+                                    </div>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="bench_cwe_top25" checked onchange="updateBenchmarkCategoryCount()" style="accent-color: #ffaa44;">
+                                    <div>
+                                        <span style="font-size: 11px; color: #ffaa44;">🐛 CWE Top 25</span>
+                                        <div style="font-size: 9px; color: #888;">10 tests</div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Self-Improvement Loop Progress (hidden until triggered) -->
+                        <div id="loopProgress" style="display: none; margin-top: 12px; padding: 12px; background: linear-gradient(135deg, rgba(255,136,0,0.08), rgba(var(--brand-rgb),0.08)); border-radius: 8px; border: 1px solid rgba(255,136,0,0.25);">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                <span id="loopStatus" style="font-size: 12px; color: var(--brand);">Starting optimization loop...</span>
+                                <span id="loopCounter" style="font-size: 12px; color: #888;">0/0</span>
+                            </div>
+                            <div style="background: rgba(0,0,0,0.3); border-radius: 4px; height: 8px; overflow: hidden;">
+                                <div id="loopProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #ff8800, var(--brand)); transition: width 0.3s;"></div>
+                            </div>
+                            <div id="loopLog" style="margin-top: 8px; max-height: 120px; overflow-y: auto; font-size: 11px; color: #888;"></div>
+                            <div id="loopComplete" style="display: none; margin-top: 12px; padding: 10px; background: rgba(var(--brand-rgb),0.1); border-radius: 6px; border: 1px solid rgba(var(--brand-rgb),0.3);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                                    <span id="loopSummary" style="color: var(--brand); font-size: 12px;"></span>
+                                    <button class="btn btn-sm" onclick="downloadLoopReport()" style="background: var(--brand); color: #000; font-size: 11px;">📥 Download Report</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Standalone Improvement Button -->
+                        <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <button class="btn btn-sm" onclick="runSelfImprovementLoop()" id="selfImprovementBtn" style="background: linear-gradient(135deg, #ff8800, var(--brand)); font-size: 11px;">
+                                🔄 Run Improvement Loop Only
+                            </button>
+                            <span style="font-size: 10px; color: #666;">Re-benchmark + analyze + auto-apply config changes</span>
+                        </div>
+
+                        <!-- Cognitive Architecture (collapsed by default) -->
+                        <details style="margin-top: 12px;">
+                            <summary style="cursor: pointer; color: #8800ff; font-weight: bold; font-size: 12px; padding: 8px 0;">🧠 Cognitive Architecture Settings</summary>
+                            <div style="padding: 12px; background: linear-gradient(135deg, rgba(136,0,255,0.08), rgba(0,136,255,0.08)); border-radius: 8px; border: 1px solid rgba(136,0,255,0.2); margin-top: 4px;">
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                                    <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                                        <input type="checkbox" id="useTastemaker" checked style="accent-color: #8800ff;">
+                                        <div>
+                                            <label for="useTastemaker" style="font-size: 12px; color: #fff; cursor: pointer;">Tastemaker Quality Gate</label>
+                                            <div style="font-size: 10px; color: #888;">Elite arbiter reviews all outputs</div>
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                                        <input type="checkbox" id="useReflection" checked style="accent-color: #8800ff;">
+                                        <div>
+                                            <label for="useReflection" style="font-size: 12px; color: #fff; cursor: pointer;">Self-Reflection Loops</label>
+                                            <div style="font-size: 10px; color: #888;">OODA + self-critique reasoning</div>
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                                        <input type="checkbox" id="strictQuality" checked style="accent-color: #8800ff;">
+                                        <div>
+                                            <label for="strictQuality" style="font-size: 12px; color: #fff; cursor: pointer;">Strict Quality Mode</label>
+                                            <div style="font-size: 10px; color: #888;">Retry on rejection (max 2)</div>
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                                        <select id="collaborationMode" style="flex: 1; padding: 4px 8px; background: rgba(0,0,0,0.3); border: 1px solid #444; border-radius: 4px; color: #fff; font-size: 11px;">
+                                            <option value="adaptive" selected>🔀 Adaptive (Auto-select)</option>
+                                            <option value="sequential">📝 Sequential (One agent)</option>
+                                            <option value="parallel">⚡ Parallel (Merge results)</option>
+                                            <option value="debate">💬 Debate (Agent discussion)</option>
+                                            <option value="bestOfN">🎯 Best-of-N (Judge picks best)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
+                                    <button class="btn btn-sm" onclick="applyArchitectureConfig()" style="background: linear-gradient(135deg, #8800ff, #0088ff);">
+                                        ✓ Apply Configuration
+                                    </button>
+                                    <button class="btn btn-sm" onclick="resetArchitectureConfig()" style="background: transparent; border: 1px solid #444;">
+                                        ↺ Reset to Defaults
+                                    </button>
+                                    <span id="archConfigStatus" style="font-size: 11px; color: #888; display: flex; align-items: center;"></span>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Benchmark Progress -->
+                    <div class="card" id="benchmarkProgress" style="display: none;">
+                        <div class="card-header">
+                            <h3 class="card-title">⏳ Validating Configuration...</h3>
+                            <span id="benchProgressText">0/0</span>
+                        </div>
+                        <div style="background: var(--bg-tertiary); border-radius: 8px; height: 8px; overflow: hidden;">
+                            <div id="benchProgressBar" style="background: var(--accent); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <div id="benchCurrentTest" style="margin-top: 10px; font-size: 12px; color: var(--text-muted);"></div>
+                    </div>
+
+                    <!-- Benchmark Categories - 6 categories matching BENCHMARKS constant -->
+                    <div class="grid-2" id="benchmarkCategories">
+                        <!-- Web Exploitation (XBOW + HTB) -->
+                        <div class="card benchmark-cat" data-category="web_exploitation">
+                            <div class="card-header">
+                                <h3 class="card-title">🌐 Web Exploitation</h3>
+                                <span class="tag" id="webExploitationScore">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">XBOW + HTB Cyber Apocalypse 2024</p>
+                            <div class="benchmark-tests" style="max-height: 200px; overflow-y: auto;">
+                                <div class="bench-test" data-test="sqli_korp_terminal">[HTB] KORP Terminal - SQLi <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="sqli_blind_csaw">[CSAW] Blind SQL Injection <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="xss_testimonial">[HTB] Testimonial - Stored XSS <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="ssrf_xbow">[XBOW] SSRF to Cloud Metadata <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="ssti_labyrinth">[HTB] Labyrinth Linguist - SSTI <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="idor_xbow">[XBOW] Broken Access Control <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="jwt_locktalk">[HTB] LockTalk - JWT Bypass <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cmd_injection_timekorp">[HTB] TimeKORP - Cmd Injection <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="serialflow_deserialization">[HTB] SerialFlow - Deserialization <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="percetron_advanced">[HTB] Percetron - Multi-Vector <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Binary Exploitation (Cybench PWN) -->
+                        <div class="card benchmark-cat" data-category="binary_exploitation">
+                            <div class="card-header">
+                                <h3 class="card-title">💥 Binary Exploitation</h3>
+                                <span class="tag" id="binaryExploitationScore">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">Cybench HTB PWN + CSAW PWN</p>
+                            <div class="benchmark-tests">
+                                <div class="bench-test" data-test="bof_tutorial">[HTB] Tutorial - Stack Overflow <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="writing_on_wall">[HTB] Writing on Wall - Format String <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="rocket_blaster">[HTB] Rocket Blaster XXX - ROP <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="death_note_heap">[HTB] Death Note - Heap Exploit <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="unlimited_subway_csaw">[CSAW] unlimited_subway - Int Overflow <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="maze_of_mist">[HTB] Maze of Mist - Advanced ROP <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="oracle_advanced">[HTB] Oracle - Heap + ROP <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Cryptography (HTB + CSAW Crypto) -->
+                        <div class="card benchmark-cat" data-category="cryptography">
+                            <div class="card-header">
+                                <h3 class="card-title">🔐 Cryptography</h3>
+                                <span class="tag" id="cryptographyScore">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">HTB + CSAW Crypto Challenges</p>
+                            <div class="benchmark-tests">
+                                <div class="bench-test" data-test="dynastic_crypto">[HTB] Dynastic - Classical Cipher <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="primary_knowledge_rsa">[HTB] Primary Knowledge - RSA <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="iced_tea_crypto">[HTB] Iced Tea - Block Cipher <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="blunt_dh">[HTB] Blunt - Diffie-Hellman <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="arranged_lattice">[HTB] Arranged - Lattice Crypto <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="partial_tenacity">[HTB] Partial Tenacity - RSA Partial <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="textbook_rsa_csaw">[CSAW] Textbook-RSA <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="rot128_insane">[HTB] ROT128 - Advanced LFSR <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Reverse Engineering (HTB + CSAW Rev) -->
+                        <div class="card benchmark-cat" data-category="reverse_engineering">
+                            <div class="card-header">
+                                <h3 class="card-title">🔬 Reverse Engineering</h3>
+                                <span class="tag" id="reverseEngineeringScore">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">HTB + CSAW Reversing Challenges</p>
+                            <div class="benchmark-tests">
+                                <div class="bench-test" data-test="boxcutter_static">[HTB] BoxCutter - Static Analysis <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="packedaway">[HTB] PackedAway - Unpacking <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="crushing_algorithm">[HTB] Crushing - Algorithm Reversal <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="followthepath">[HTB] FollowThePath - Control Flow <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="ransomware_csaw">[CSAW] Ransomware Analysis <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="quickscan_dotnet">[HTB] QuickScan - .NET Reversing <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="flecksofgold_advanced">[HTB] FlecksOfGold - VM Protection <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mazeofpower_insane">[HTB] MazeOfPower - Multi-Layer <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Forensics (HTB + CSAW Forensics) -->
+                        <div class="card benchmark-cat" data-category="forensics">
+                            <div class="card-header">
+                                <h3 class="card-title">🔍 Forensics</h3>
+                                <span class="tag" id="forensicsScore">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">HTB + CSAW DFIR Challenges</p>
+                            <div class="benchmark-tests" style="max-height: 200px; overflow-y: auto;">
+                                <div class="bench-test" data-test="unusual_sighting_mem">[HTB] An Unusual Sighting - Memory <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="it_has_begun">[HTB] It Has Begun - Log Analysis <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="fake_boost_discord">[HTB] Fake Boost - Malware <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="persue_tracks_network">[HTB] Persue The Tracks - Network <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="data_siege_disk">[HTB] Data Siege - Disk Forensics <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="phreaky_steganography">[HTB] Phreaky - Steganography <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="confinement_ransomware">[HTB] Confinement - Ransomware <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="game_invitation_phishing">[HTB] Game Invitation - Phishing <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="oblique_final_advanced">[HTB] Oblique Final - Advanced IR <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Autonomous Operations (T3MP3ST Multi-Agent) -->
+                        <div class="card benchmark-cat" data-category="autonomous_ops">
+                            <div class="card-header">
+                                <h3 class="card-title">🤖 Autonomous Operations</h3>
+                                <span class="tag" id="autonomousOpsScore">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">T3MP3ST Multi-Agent + XBOW-style tasks</p>
+                            <div class="benchmark-tests">
+                                <div class="bench-test" data-test="kill_chain">⚙️ Kill Chain Coverage <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="multi_agent">⚙️ Multi-Agent Swarm <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="api_ready">⚙️ LLM API Operational <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="attack_planning">🔴 Attack Plan Generation <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="swarm_coordination">🔴 Multi-Agent Coordination <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="adaptive_response">🔴 Real-Time Adaptation <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+
+                        <!-- OWASP Top 10 -->
+                        <div class="card benchmark-cat" data-category="owasp_top10">
+                            <div class="card-header">
+                                <h3 class="card-title">🛡️ OWASP Top 10</h3>
+                                <span class="tag" id="owaspTop10Score">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">OWASP 2021 Top 10 Web Application Security Risks</p>
+                            <div class="benchmark-tests" style="max-height: 200px; overflow-y: auto;">
+                                <div class="bench-test" data-test="owasp_a01_bac" onclick="runSingleBenchTest('owasp_a01_bac')" style="cursor:pointer;">A01 Broken Access Control <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a02_crypto" onclick="runSingleBenchTest('owasp_a02_crypto')" style="cursor:pointer;">A02 Cryptographic Failures <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a03_injection" onclick="runSingleBenchTest('owasp_a03_injection')" style="cursor:pointer;">A03 Injection <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a04_design" onclick="runSingleBenchTest('owasp_a04_design')" style="cursor:pointer;">A04 Insecure Design <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a05_misconfig" onclick="runSingleBenchTest('owasp_a05_misconfig')" style="cursor:pointer;">A05 Security Misconfiguration <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a06_components" onclick="runSingleBenchTest('owasp_a06_components')" style="cursor:pointer;">A06 Vulnerable Components <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a07_authn" onclick="runSingleBenchTest('owasp_a07_authn')" style="cursor:pointer;">A07 Auth Failures <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a08_integrity" onclick="runSingleBenchTest('owasp_a08_integrity')" style="cursor:pointer;">A08 Software Integrity Failures <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a09_logging" onclick="runSingleBenchTest('owasp_a09_logging')" style="cursor:pointer;">A09 Logging & Monitoring <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="owasp_a10_ssrf" onclick="runSingleBenchTest('owasp_a10_ssrf')" style="cursor:pointer;">A10 SSRF <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+
+                        <!-- MITRE ATT&CK -->
+                        <div class="card benchmark-cat" data-category="mitre_attack">
+                            <div class="card-header">
+                                <h3 class="card-title">⚔️ MITRE ATT&CK</h3>
+                                <span class="tag" id="mitreAttackScore">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">Adversarial Tactics, Techniques & Common Knowledge</p>
+                            <div class="benchmark-tests" style="max-height: 200px; overflow-y: auto;">
+                                <div class="bench-test" data-test="mitre_initial_access" onclick="runSingleBenchTest('mitre_initial_access')" style="cursor:pointer;">TA0001 Initial Access <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_execution" onclick="runSingleBenchTest('mitre_execution')" style="cursor:pointer;">TA0002 Execution <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_persistence" onclick="runSingleBenchTest('mitre_persistence')" style="cursor:pointer;">TA0003 Persistence <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_privesc" onclick="runSingleBenchTest('mitre_privesc')" style="cursor:pointer;">TA0004 Privilege Escalation <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_defense_evasion" onclick="runSingleBenchTest('mitre_defense_evasion')" style="cursor:pointer;">TA0005 Defense Evasion <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_credential_access" onclick="runSingleBenchTest('mitre_credential_access')" style="cursor:pointer;">TA0006 Credential Access <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_discovery" onclick="runSingleBenchTest('mitre_discovery')" style="cursor:pointer;">TA0007 Discovery <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_lateral_movement" onclick="runSingleBenchTest('mitre_lateral_movement')" style="cursor:pointer;">TA0008 Lateral Movement <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_exfiltration" onclick="runSingleBenchTest('mitre_exfiltration')" style="cursor:pointer;">TA0010 Exfiltration <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="mitre_c2" onclick="runSingleBenchTest('mitre_c2')" style="cursor:pointer;">TA0011 Command & Control <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+
+                        <!-- CWE Top 25 -->
+                        <div class="card benchmark-cat" data-category="cwe_top25">
+                            <div class="card-header">
+                                <h3 class="card-title">🐛 CWE Top 25</h3>
+                                <span class="tag" id="cweTop25Score">--</span>
+                            </div>
+                            <p style="font-size: 11px; color: #888; margin-bottom: 8px;">Most Dangerous Software Weaknesses (2024)</p>
+                            <div class="benchmark-tests" style="max-height: 200px; overflow-y: auto;">
+                                <div class="bench-test" data-test="cwe_787_oob_write" onclick="runSingleBenchTest('cwe_787_oob_write')" style="cursor:pointer;">CWE-787 Out-of-Bounds Write <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_79_xss" onclick="runSingleBenchTest('cwe_79_xss')" style="cursor:pointer;">CWE-79 Cross-Site Scripting <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_89_sqli" onclick="runSingleBenchTest('cwe_89_sqli')" style="cursor:pointer;">CWE-89 SQL Injection <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_416_uaf" onclick="runSingleBenchTest('cwe_416_uaf')" style="cursor:pointer;">CWE-416 Use After Free <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_78_os_cmd" onclick="runSingleBenchTest('cwe_78_os_cmd')" style="cursor:pointer;">CWE-78 OS Command Injection <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_20_input_val" onclick="runSingleBenchTest('cwe_20_input_val')" style="cursor:pointer;">CWE-20 Input Validation <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_125_oob_read" onclick="runSingleBenchTest('cwe_125_oob_read')" style="cursor:pointer;">CWE-125 Out-of-Bounds Read <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_22_path_traversal" onclick="runSingleBenchTest('cwe_22_path_traversal')" style="cursor:pointer;">CWE-22 Path Traversal <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_352_csrf" onclick="runSingleBenchTest('cwe_352_csrf')" style="cursor:pointer;">CWE-352 Cross-Site Request Forgery <span class="bench-result">--</span></div>
+                                <div class="bench-test" data-test="cwe_434_file_upload" onclick="runSingleBenchTest('cwe_434_file_upload')" style="cursor:pointer;">CWE-434 Unrestricted File Upload <span class="bench-result">--</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Overall Results -->
+                    <div class="card" id="benchResults" style="display: none;">
+                        <div class="card-header">
+                            <h3 class="card-title">📊 Overall Results</h3>
+                            <button class="btn btn-sm btn-secondary" onclick="exportBenchmarkReport()">Export Report</button>
+                        </div>
+                        <div class="stats-grid" style="margin-bottom: 20px;">
+                            <div class="stat-card">
+                                <div class="stat-icon">🏆</div>
+                                <div class="stat-value" id="overallScore">--</div>
+                                <div class="stat-label">Overall Score</div>
+                            </div>
+                            <div class="stat-card info">
+                                <div class="stat-icon">✅</div>
+                                <div class="stat-value" id="passedTests">--</div>
+                                <div class="stat-label">Tests Passed</div>
+                            </div>
+                            <div class="stat-card warning">
+                                <div class="stat-icon">⏱️</div>
+                                <div class="stat-value" id="avgTime">--</div>
+                                <div class="stat-label">Avg Time (ms)</div>
+                            </div>
+                            <div class="stat-card purple">
+                                <div class="stat-icon">🎯</div>
+                                <div class="stat-value" id="accuracy">--</div>
+                                <div class="stat-label">Accuracy</div>
+                            </div>
+                        </div>
+
+                        <!-- Performance Chart - 6 categories -->
+                        <div style="display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;">
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="webExploitationBar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">Web</div>
+                            </div>
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="binaryExploitationBar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">Binary</div>
+                            </div>
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="cryptographyBar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">Crypto</div>
+                            </div>
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="reverseEngineeringBar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">Reverse</div>
+                            </div>
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="forensicsBar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">Forensics</div>
+                            </div>
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="autonomousOpsBar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">Auto Ops</div>
+                            </div>
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="owaspTop10Bar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">OWASP</div>
+                            </div>
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="mitreAttackBar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">MITRE</div>
+                            </div>
+                            <div style="flex: 1; min-width: 60px; text-align: center;">
+                                <div class="perf-bar" id="cweTop25Bar" style="height: 0%;"></div>
+                                <div style="font-size: 10px; margin-top: 5px;">CWE</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- LLM Analysis -->
+                    <div class="card" id="llmAnalysis" style="display: none;">
+                        <div class="card-header">
+                            <h3 class="card-title">🧠 AI Performance Analysis</h3>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-sm btn-primary" onclick="generateAnalysis()" id="genAnalysisBtn">Generate Analysis</button>
+                                <button class="btn btn-sm" onclick="autoApplyRecommendations()" id="autoApplyBtn" style="background: linear-gradient(135deg, #ff8800, #ff4444); display: none;">🤖 Auto-Apply</button>
+                            </div>
+                        </div>
+                        <div id="analysisContent" style="display: none;">
+                            <!-- Overall Assessment Grade -->
+                            <div id="assessmentSummary" class="analysis-section" style="margin-bottom: 20px;"></div>
+
+                            <div class="analysis-section">
+                                <h4 style="color: var(--accent); margin-bottom: 10px;">💪 Strengths</h4>
+                                <ul id="strengthsList" style="color: var(--text-secondary); font-size: 13px; padding-left: 20px;"></ul>
+                            </div>
+                            <div class="analysis-section" style="margin-top: 20px;">
+                                <h4 style="color: var(--warning); margin-bottom: 10px;">⚠️ Weaknesses</h4>
+                                <ul id="weaknessesList" style="color: var(--text-secondary); font-size: 13px; padding-left: 20px;"></ul>
+                            </div>
+                            <div class="analysis-section" style="margin-top: 20px;">
+                                <h4 style="color: var(--cyan); margin-bottom: 10px;">🔧 Recommended Improvements</h4>
+                                <div id="improvementsList"></div>
+                            </div>
+
+                            <!-- Creative Solutions for Underperforming Categories -->
+                            <div id="creativeSolutions" class="analysis-section" style="margin-top: 20px; display: none;"></div>
+
+                            <div class="analysis-section" style="margin-top: 20px;">
+                                <h4 style="color: var(--purple); margin-bottom: 10px;">⚙️ Suggested Config Changes</h4>
+                                <div class="code-block" style="margin-top: 10px;">
+                                    <div class="code-header"><span>Optimized Configuration</span></div>
+                                    <div class="code-body" id="suggestedConfig" style="font-size: 11px;"></div>
+                                </div>
+                            </div>
+
+                            <!-- Auto-Applied Changes Log -->
+                            <div id="autoApplyResults" class="analysis-section" style="margin-top: 20px; display: none;">
+                                <h4 style="color: var(--brand); margin-bottom: 10px;">✨ Applied Configuration Changes</h4>
+                                <div id="appliedChangesList" style="font-size: 13px;"></div>
+                            </div>
+                        </div>
+                        <div id="analysisLoading" style="display: none; text-align: center; padding: 30px;">
+                            <div style="font-size: 24px; margin-bottom: 10px;">🔄</div>
+                            <p style="color: var(--text-muted);">Analyzing performance data...</p>
+                        </div>
+                        <div id="autoApplyLoading" style="display: none; text-align: center; padding: 30px;">
+                            <div style="font-size: 24px; margin-bottom: 10px;">🤖</div>
+                            <p style="color: var(--text-muted);">LLM is optimizing your configuration...</p>
+                            <p style="color: #ff8800; font-size: 12px; margin-top: 10px;">Analyzing recommendations and generating optimal settings</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CTF Range - Execution-Based Testing -->
+                <div class="page" id="page-ctf-range">
+                    <div style="margin-bottom: 14px; padding: 10px 14px; background: rgba(255,170,0,0.08); border: 1px solid rgba(255,170,0,0.3); border-radius: 8px; font-size: 12px; color: #ffcc66; line-height: 1.5;">
+                        ⚠ <b>Local simulation / illustrative.</b> The container controls and challenge "solves" here do not touch a live Docker daemon or a real flag server — flags are <b>format-checked, not verified against a live target</b>. For measured, live-exploit-verified results use <b>OBSIDIVM</b> and the benchmarks.
+                    </div>
+                    <!-- Quick Setup Wizard -->
+                    <div class="card" id="ctfSetupWizard" style="margin-bottom: 18px; background: linear-gradient(135deg, rgba(255,136,0,0.1), rgba(255,68,68,0.1)); border: 1px solid rgba(255,136,0,0.3);">
+                        <div class="card-header">
+                            <h3 class="card-title">🚀 Quick Setup</h3>
+                            <button class="btn btn-sm" onclick="toggleCtfSetupWizard()" id="ctfSetupToggle">Hide Setup</button>
+                        </div>
+                        <div id="ctfSetupContent">
+                            <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px;">
+                                Get started with execution-based CTF benchmarks in minutes. Requires Docker installed locally.
+                            </p>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+                                <!-- Step 1: Docker Check -->
+                                <div class="setup-step" style="padding: 16px; background: rgba(0,0,0,0.2); border-radius: 8px; border-left: 3px solid #ff8800;">
+                                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                                        <span style="font-size: 20px;">1️⃣</span>
+                                        <span style="font-weight: bold; color: #ff8800;">Check Docker</span>
+                                        <span id="dockerStatus" class="tag tag-warning" style="font-size: 10px; margin-left: auto;">Unknown</span>
+                                    </div>
+                                    <p style="font-size: 11px; color: #888; margin-bottom: 10px;">Verify Docker daemon is running and accessible.</p>
+                                    <button class="btn btn-sm" onclick="checkDockerStatus()" style="width: 100%;">🔍 Check Docker</button>
+                                </div>
+                                <!-- Step 2: Build Images -->
+                                <div class="setup-step" style="padding: 16px; background: rgba(0,0,0,0.2); border-radius: 8px; border-left: 3px solid #ff8800;">
+                                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                                        <span style="font-size: 20px;">2️⃣</span>
+                                        <span style="font-weight: bold; color: #ff8800;">Build Images</span>
+                                        <span id="imagesStatus" class="tag tag-warning" style="font-size: 10px; margin-left: auto;">Not Built</span>
+                                    </div>
+                                    <p style="font-size: 11px; color: #888; margin-bottom: 10px;">Build Docker images for CTF challenges.</p>
+                                    <button class="btn btn-sm" onclick="buildCtfImages()" style="width: 100%;">🔨 Build All Images</button>
+                                </div>
+                                <!-- Step 3: Start Range -->
+                                <div class="setup-step" style="padding: 16px; background: rgba(0,0,0,0.2); border-radius: 8px; border-left: 3px solid #ff8800;">
+                                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                                        <span style="font-size: 20px;">3️⃣</span>
+                                        <span style="font-weight: bold; color: #ff8800;">Launch Range</span>
+                                        <span id="rangeStatus" class="tag tag-warning" style="font-size: 10px; margin-left: auto;">Offline</span>
+                                    </div>
+                                    <p style="font-size: 11px; color: #888; margin-bottom: 10px;">Start all challenge containers.</p>
+                                    <button class="btn btn-sm" onclick="launchCtfRange()" style="width: 100%;">🚀 Launch Range</button>
+                                </div>
+                            </div>
+                            <!-- Manual Commands -->
+                            <div style="margin-top: 16px; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 8px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <span style="font-size: 11px; color: #888;">📋 Manual Commands (run in terminal)</span>
+                                    <button class="btn btn-sm" onclick="copyCtfCommands()" style="font-size: 10px; padding: 2px 8px;">Copy All</button>
+                                </div>
+                                <pre style="font-size: 10px; color: var(--brand); background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; overflow-x: auto; margin: 0;">cd ctf && docker-compose build && docker-compose up -d</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Range Control Panel -->
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-bottom: 18px;">
+                        <!-- Challenge Browser -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">🎯 Challenge Browser</h3>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <select id="ctfCategoryFilter" onchange="filterCtfChallenges()" style="padding: 4px 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px;">
+                                        <option value="all">All Categories</option>
+                                        <option value="web_exploitation">🌐 Web Exploitation</option>
+                                        <option value="binary_exploitation">💥 Binary Exploitation</option>
+                                        <option value="cryptography">🔐 Cryptography</option>
+                                        <option value="forensics">🔍 Forensics</option>
+                                        <option value="reverse_engineering">🔬 Reverse Engineering</option>
+                                    </select>
+                                    <button class="btn btn-sm" onclick="refreshChallenges()">🔄 Refresh</button>
+                                </div>
+                            </div>
+                            <div id="ctfChallengeGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; max-height: 400px; overflow-y: auto; padding: 4px;">
+                                <!-- Challenges populated by JS -->
+                            </div>
+                        </div>
+
+                        <!-- Range Status -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">📊 Range Status</h3>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 12px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                                    <span style="font-size: 12px;">Containers Running</span>
+                                    <span id="ctfContainersRunning" style="font-size: 18px; font-weight: bold; color: var(--brand);">0</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                                    <span style="font-size: 12px;">Challenges Solved</span>
+                                    <span id="ctfSolvedCount" style="font-size: 18px; font-weight: bold; color: #ff8800;">0 / 8</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                                    <span style="font-size: 12px;">Total Points</span>
+                                    <span id="ctfTotalPoints" style="font-size: 18px; font-weight: bold; color: #8800ff;">0 / 1450</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                                    <span style="font-size: 12px;">Agent Success Rate</span>
+                                    <span id="ctfSuccessRate" style="font-size: 18px; font-weight: bold; color: #00ccff;">--%</span>
+                                </div>
+                            </div>
+                            <div style="margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                                <button class="btn btn-sm btn-primary" onclick="startAllContainers()">▶️ Start All</button>
+                                <button class="btn btn-sm btn-danger" onclick="stopAllContainers()">⏹️ Stop All</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Agent Execution Panel -->
+                    <div class="card" style="margin-bottom: 18px;">
+                        <div class="card-header">
+                            <h3 class="card-title">🤖 Agent Execution</h3>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-sm btn-secondary" onclick="stopCtfExecution()" id="ctfStopBtn" disabled>⏹️ Stop</button>
+                                <button class="btn btn-sm btn-primary" onclick="runCtfBenchmark()" id="ctfRunBtn">🚀 Run Full Benchmark</button>
+                            </div>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px;">
+                            <!-- Agent Selection -->
+                            <div>
+                                <label style="font-size: 11px; color: #888; display: block; margin-bottom: 4px;">Agent/Operator</label>
+                                <select id="ctfAgentSelect" style="width: 100%; padding: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; color: #fff;">
+                                    <option value="exploiter">💥 Exploiter</option>
+                                    <option value="scanner">📡 Scanner</option>
+                                    <option value="recon">🔍 Recon</option>
+                                    <option value="infiltrator">🥷 Infiltrator</option>
+                                    <option value="auto">🎯 Auto-Select (Best Match)</option>
+                                </select>
+                            </div>
+                            <!-- Model Selection -->
+                            <div>
+                                <label style="font-size: 11px; color: #888; display: block; margin-bottom: 4px;">Model</label>
+                                <select id="ctfModelSelect" style="width: 100%; padding: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; color: #fff;">
+                                    <option value="anthropic/claude-opus-4.6">Claude Opus 4.6</option>
+                                    <option value="anthropic/claude-sonnet-4.5">Claude Sonnet 4.5</option>
+                                    <option value="anthropic/claude-sonnet-4">Claude Sonnet 4</option>
+                                    <option value="openai/gpt-4o">GPT-4o</option>
+                                    <option value="openai/o1">o1</option>
+                                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                </select>
+                            </div>
+                            <!-- Time Limit -->
+                            <div>
+                                <label style="font-size: 11px; color: #888; display: block; margin-bottom: 4px;">Time Limit (per challenge)</label>
+                                <select id="ctfTimeLimit" style="width: 100%; padding: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; color: #fff;">
+                                    <option value="300">5 minutes</option>
+                                    <option value="600" selected>10 minutes</option>
+                                    <option value="900">15 minutes</option>
+                                    <option value="1800">30 minutes</option>
+                                </select>
+                            </div>
+                            <!-- Max Attempts -->
+                            <div>
+                                <label style="font-size: 11px; color: #888; display: block; margin-bottom: 4px;">Max Attempts</label>
+                                <input type="number" id="ctfMaxAttempts" value="3" min="1" max="10" style="width: 100%; padding: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; color: #fff;">
+                            </div>
+                        </div>
+                        <!-- Execution Progress -->
+                        <div id="ctfExecutionProgress" style="display: none;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <span id="ctfExecStatus" style="font-size: 12px; color: var(--brand);">Initializing agent...</span>
+                                <span id="ctfExecProgress" style="font-size: 12px; color: #888;">0 / 8</span>
+                            </div>
+                            <div style="background: rgba(0,0,0,0.3); border-radius: 4px; height: 8px; overflow: hidden; margin-bottom: 12px;">
+                                <div id="ctfExecProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #ff8800, var(--brand)); transition: width 0.3s;"></div>
+                            </div>
+                            <div id="ctfExecLog" style="max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px; font-family: monospace; font-size: 11px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Results & History -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">📈 Results & History</h3>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-sm" onclick="exportCtfResults()">📥 Export Results</button>
+                                <button class="btn btn-sm" onclick="clearCtfHistory()">🗑️ Clear History</button>
+                            </div>
+                        </div>
+                        <div id="ctfResultsTable" style="overflow-x: auto;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid var(--border); text-align: left;">
+                                        <th style="padding: 10px; color: #888;">Challenge</th>
+                                        <th style="padding: 10px; color: #888;">Category</th>
+                                        <th style="padding: 10px; color: #888;">Agent</th>
+                                        <th style="padding: 10px; color: #888;">Time</th>
+                                        <th style="padding: 10px; color: #888;">Status</th>
+                                        <th style="padding: 10px; color: #888;">Flag</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ctfResultsBody">
+                                    <tr>
+                                        <td colspan="6" style="padding: 40px; text-align: center; color: #666;">
+                                            <div style="font-size: 32px; margin-bottom: 8px;">🏁</div>
+                                            <div>No execution results yet. Run the benchmark to see agent performance.</div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Op Admiral — Autonomous Operation Orchestrator -->
+                <div class="page" id="page-general">
+                    <!-- Directive Input -->
+                    <div class="card" style="margin-bottom: 18px; background: linear-gradient(135deg, rgba(255,68,68,0.08), rgba(255,170,0,0.08)); border: 1px solid rgba(255,68,68,0.3);">
+                        <div class="card-header" style="border-bottom: 1px solid rgba(255,68,68,0.2);">
+                            <h3 class="card-title" style="color: #ff4444;">&#9733; THE ADMIRAL — Autonomous Op Orchestrator</h3>
+                            <div style="display: flex; gap: 6px;">
+                                <span id="generalState" style="font-size: 10px; padding: 3px 8px; border-radius: 4px; background: rgba(255,255,255,0.08); color: #888; text-transform: uppercase; letter-spacing: 1px;">STANDING BY</span>
+                            </div>
+                        </div>
+                        <div style="padding: 16px;">
+                            <p style="color: #ccc; font-size: 12px; margin-bottom: 14px; line-height: 1.5;">
+                                Give the Admiral a high-level directive and it will autonomously plan the entire operation — identifying targets, allocating operators, setting OPSEC levels, and executing the full kill chain. No manual configuration needed.
+                            </p>
+
+                            <!-- Directive Textarea -->
+                            <div style="margin-bottom: 14px;">
+                                <label style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #ff8800; margin-bottom: 6px; font-weight: bold;">Directive</label>
+                                <textarea id="generalDirective" rows="3" placeholder="e.g. Assess the full security posture of example.com — find all vulnerabilities in their web infrastructure, test for OWASP Top 10 issues, and demonstrate impact of any critical findings." style="width: 100%; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,68,68,0.3); border-radius: 6px; color: #fff; font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 10px; resize: vertical; box-sizing: border-box;"></textarea>
+                            </div>
+
+                            <!-- Options Row -->
+                            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+                                <div>
+                                    <label style="display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 4px;">OPSEC Level</label>
+                                    <select id="generalOpsec" style="width: 100%; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; padding: 6px 8px; font-size: 12px;">
+                                        <option value="covert" selected>Covert (Default)</option>
+                                        <option value="silent">Silent (Passive Only)</option>
+                                        <option value="loud">Loud (Max Coverage)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 4px;">Urgency</label>
+                                    <select id="generalUrgency" style="width: 100%; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; padding: 6px 8px; font-size: 12px;">
+                                        <option value="normal" selected>Normal</option>
+                                        <option value="low">Low (Thorough)</option>
+                                        <option value="high">High (Fast)</option>
+                                        <option value="critical">Critical (ASAP)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 4px;">Scope Hints (Optional)</label>
+                                    <input id="generalScope" type="text" placeholder="e.g. web apps only, 10.0.0.0/24" style="width: 100%; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; padding: 6px 8px; font-size: 12px; box-sizing: border-box;" />
+                                </div>
+                            </div>
+
+                            <!-- Constraints (Optional) -->
+                            <div style="margin-bottom: 14px;">
+                                <label style="display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 4px;">Constraints (Optional)</label>
+                                <input id="generalConstraints" type="text" placeholder="e.g. No exploitation, recon only, avoid port 443" style="width: 100%; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; padding: 6px 8px; font-size: 12px; box-sizing: border-box;" />
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button id="generalPlanBtn" onclick="generalPlanOp()" style="flex: 1 1 180px; padding: 12px; font-size: 13px; font-weight: bold; background: linear-gradient(135deg, #ff8800, #ff4444); border: none; border-radius: 6px; color: #fff; cursor: pointer; letter-spacing: 1px; text-transform: uppercase;">PLAN OPERATION</button>
+                                <button id="generalCodexHuntBtn" onclick="generalCodexAutohunt()" style="flex: 1 1 180px; padding: 12px; font-size: 13px; font-weight: bold; background: linear-gradient(135deg, rgba(var(--accent-rgb),0.22), rgba(0,136,255,0.24)); border: 1px solid rgba(var(--accent-rgb),0.38); border-radius: 6px; color: #d8fff7; cursor: pointer; letter-spacing: 1px; text-transform: uppercase;">CODEX AUTOHUNT</button>
+                                <button id="generalDrillBtn" onclick="generalLoadLocalDrill()" style="flex: 0.8 1 130px; padding: 12px; font-size: 13px; font-weight: bold; background: rgba(var(--accent-rgb),0.12); border: 1px solid rgba(var(--accent-rgb),0.32); border-radius: 6px; color: var(--accent); cursor: pointer; letter-spacing: 1px; text-transform: uppercase;">LOCAL DRILL</button>
+                                <button id="generalDegradedDrillBtn" onclick="generalLoadDegradedDrill()" style="flex: 0.8 1 130px; padding: 12px; font-size: 13px; font-weight: bold; background: rgba(255,170,0,0.12); border: 1px solid rgba(255,170,0,0.35); border-radius: 6px; color: #ffd17a; cursor: pointer; letter-spacing: 1px; text-transform: uppercase;">DEGRADED</button>
+                                <button id="generalHoldDrillBtn" onclick="generalLoadHoldDrill()" style="flex: 0.8 1 130px; padding: 12px; font-size: 13px; font-weight: bold; background: rgba(255,68,68,0.12); border: 1px solid rgba(255,68,68,0.35); border-radius: 6px; color: #ff7777; cursor: pointer; letter-spacing: 1px; text-transform: uppercase;">HOLD DRILL</button>
+                                <button id="generalSmokeGauntletBtn" onclick="generalRunSmokeGauntlet()" style="flex: 0.9 1 150px; padding: 12px; font-size: 13px; font-weight: bold; background: rgba(168,85,247,0.13); border: 1px solid rgba(168,85,247,0.35); border-radius: 6px; color: #d9c2ff; cursor: pointer; letter-spacing: 1px; text-transform: uppercase;">GAUNTLET</button>
+                                <button id="generalAutoBtn" onclick="generalFullAuto()" style="flex: 1 1 150px; padding: 12px; font-size: 13px; font-weight: bold; background: linear-gradient(135deg, #ff0000, #aa0000); border: none; border-radius: 6px; color: #fff; cursor: pointer; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 0 10px rgba(255,0,0,0.5);">FULL AUTO</button>
+                            </div>
+                            <div id="generalSmokeReport" style="display: none; margin-top: 12px; padding: 10px; border-radius: 6px; background: rgba(0,0,0,0.32); border: 1px solid rgba(168,85,247,0.25); font-family: 'JetBrains Mono', monospace; font-size: 11px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Plan Display -->
+                    <div id="generalPlanCard" class="card" style="margin-bottom: 18px; display: none; border: 1px solid rgba(var(--brand-rgb),0.2);">
+                        <div class="card-header" style="border-bottom: 1px solid rgba(var(--brand-rgb),0.15);">
+                            <h3 class="card-title" style="color: var(--brand);">Operation Plan</h3>
+                            <div style="display: flex; gap: 6px;">
+                                <span id="generalCodename" style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: rgba(255,68,68,0.2); color: #ff4444; font-weight: bold; letter-spacing: 1px;"></span>
+                                <button id="generalExecuteBtn" onclick="generalExecutePlan()" style="padding: 4px 14px; font-size: 11px; font-weight: bold; background: linear-gradient(135deg, var(--brand), #00aa66); border: none; border-radius: 4px; color: #000; cursor: pointer; text-transform: uppercase;">EXECUTE</button>
+                            </div>
+                        </div>
+                        <div style="padding: 16px;">
+                            <!-- Plan Summary -->
+                            <div id="generalPlanSummary" style="color: #ccc; font-size: 12px; margin-bottom: 14px; line-height: 1.6; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 6px;"></div>
+
+                            <!-- Admiral Intent / Gate -->
+                            <div id="generalIntentPanel" style="display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 12px; margin-bottom: 14px;">
+                                <div style="background: linear-gradient(135deg, rgba(var(--accent-rgb),0.08), rgba(0,0,0,0.32)); border-radius: 6px; padding: 12px; border: 1px solid rgba(var(--accent-rgb),0.18);">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); font-weight: bold;">Admiral's Intent</div>
+                                        <span id="generalMissionFamily" style="font-size: 10px; padding: 3px 8px; border-radius: 4px; background: rgba(var(--accent-rgb),0.12); color: var(--accent); text-transform: uppercase; font-family: 'JetBrains Mono', monospace;">UNROUTED</span>
+                                    </div>
+                                    <div id="generalIntentText" style="font-size: 12px; color: #d8f7f0; line-height: 1.55;"></div>
+                                    <div id="generalNextActions" style="display: grid; gap: 5px; margin-top: 10px;"></div>
+                                </div>
+                                <div style="background: rgba(0,0,0,0.34); border-radius: 6px; padding: 12px; border: 1px solid rgba(255,255,255,0.08);">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #ffaa00; font-weight: bold;">Mission Gate</div>
+                                        <span id="generalGateBadge" style="font-size: 10px; padding: 3px 8px; border-radius: 4px; background: rgba(255,170,0,0.16); color: #ffaa00; text-transform: uppercase; font-family: 'JetBrains Mono', monospace;">WAIT</span>
+                                    </div>
+                                    <div id="generalGateMeter" style="height: 6px; background: rgba(255,255,255,0.08); border-radius: 99px; overflow: hidden; margin-bottom: 10px;">
+                                        <div id="generalGateFill" style="height: 100%; width: 0%; background: #ffaa00;"></div>
+                                    </div>
+                                    <div id="generalGateDetails" style="font-size: 11px; color: #ccc; line-height: 1.45;"></div>
+                                </div>
+                            </div>
+
+                            <div id="generalOperatorDebrief" style="margin-bottom: 14px; padding: 12px; border-radius: 6px; background: rgba(0,0,0,0.32); border: 1px solid rgba(var(--accent-rgb),0.14);"></div>
+
+                            <!-- Plan Grid -->
+                            <div class="general-plan-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+                                <!-- Targets -->
+                                <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(255,255,255,0.06);">
+                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #ff8800; margin-bottom: 8px; font-weight: bold;">Targets</div>
+                                    <div id="generalPlanTargets" style="font-size: 11px; color: #ddd; font-family: 'JetBrains Mono', monospace;"></div>
+                                </div>
+
+                                <!-- Operators -->
+                                <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(255,255,255,0.06);">
+                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #00aaff; margin-bottom: 8px; font-weight: bold;">Force Allocation</div>
+                                    <div id="generalPlanOperators" style="font-size: 11px; color: #ddd;"></div>
+                                </div>
+                            </div>
+
+                            <div class="general-plan-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+                                <!-- Objectives -->
+                                <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(255,255,255,0.06);">
+                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--brand); margin-bottom: 8px; font-weight: bold;">Objectives</div>
+                                    <div id="generalPlanObjectives" style="font-size: 11px; color: #ddd;"></div>
+                                </div>
+
+                                <!-- Contingencies & RoE -->
+                                <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(255,255,255,0.06);">
+                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #ff4444; margin-bottom: 8px; font-weight: bold;">Rules of Engagement</div>
+                                    <div id="generalPlanRoE" style="font-size: 11px; color: #ddd;"></div>
+                                </div>
+                            </div>
+
+                            <div class="general-plan-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+                                <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(var(--accent-rgb),0.12);">
+                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); margin-bottom: 8px; font-weight: bold;">Hunt Lanes</div>
+                                    <div id="generalHuntLanes" style="font-size: 11px; color: #ddd;"></div>
+                                </div>
+                                <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(245,184,75,0.15);">
+                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--brass); margin-bottom: 8px; font-weight: bold;">Specialist Work Orders</div>
+                                    <div id="generalWorkOrders" style="font-size: 11px; color: #ddd;"></div>
+                                </div>
+                            </div>
+
+                            <div class="general-plan-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+                                <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(0,136,255,0.15);">
+                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #00aaff; margin-bottom: 8px; font-weight: bold;">Evidence Contract</div>
+                                    <div id="generalEvidenceContract" style="font-size: 11px; color: #ddd;"></div>
+                                </div>
+                                <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(168,85,247,0.16);">
+                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #a855f7; margin-bottom: 8px; font-weight: bold;">Critic & Tool Route</div>
+                                    <div id="generalCriticRoute" style="font-size: 11px; color: #ddd;"></div>
+                                </div>
+                            </div>
+
+                            <!-- Rationale -->
+                            <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px; border: 1px solid rgba(255,255,255,0.06);">
+                                <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #aaa; margin-bottom: 8px; font-weight: bold;">Admiral's Strategic Rationale</div>
+                                <div id="generalPlanRationale" style="font-size: 12px; color: #ccc; font-style: italic; line-height: 1.5;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Live Sitreps -->
+                    <div id="generalSitrepsCard" class="card" style="margin-bottom: 18px; display: none; border: 1px solid rgba(0,136,255,0.2);">
+                        <div class="card-header" style="border-bottom: 1px solid rgba(0,136,255,0.15);">
+                            <h3 class="card-title" style="color: #0088ff;">Situation Reports</h3>
+                            <button onclick="generalRequestSitrep()" style="padding: 4px 12px; font-size: 10px; background: rgba(0,136,255,0.2); border: 1px solid rgba(0,136,255,0.3); border-radius: 4px; color: #0088ff; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;">Request SITREP</button>
+                        </div>
+                        <div id="generalSitrepFeed" style="max-height: 400px; overflow-y: auto; padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+                            <div style="color: #555; text-align: center; padding: 20px;">Awaiting first situation report...</div>
+                        </div>
+                    </div>
+
+                    <!-- Strategic Assessment -->
+                    <div id="generalAssessmentCard" class="card" style="margin-bottom: 18px; display: none; border: 1px solid rgba(255,170,0,0.3);">
+                        <div class="card-header" style="border-bottom: 1px solid rgba(255,170,0,0.15);">
+                            <h3 class="card-title" style="color: #ffaa00;">Strategic Assessment</h3>
+                            <button onclick="generalRequestAssessment()" style="padding: 4px 12px; font-size: 10px; background: rgba(255,170,0,0.2); border: 1px solid rgba(255,170,0,0.3); border-radius: 4px; color: #ffaa00; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;">Generate Assessment</button>
+                        </div>
+                        <div id="generalAssessmentContent" style="padding: 16px;">
+                            <div style="color: #555; text-align: center; padding: 20px;">Assessment will be generated after operation completes or on demand.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Self-Improvement — harness-level self-improvement loop management (rendered by renderSelfImprove) -->
+                <div class="page" id="page-selfimprove">
+                    <div id="siRoot" style="max-width: 1100px;">
+                        <div style="color:#7f93a5;font-size:13px;padding:40px;text-align:center;">Loading self-improvement loops…</div>
+                    </div>
+                </div>
+
+                <!-- Settings -->
+                <div class="page" id="page-settings">
+                    <div class="settings-section">
+                        <h2 class="settings-title">🎛️ Universal API Config</h2>
+                        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">Configure your LLM providers in one place — provider, key, base URL, model, and context cap — shared with the individual provider sections below (fully backward-compatible).</p>
+                        <div class="card">
+                            <div class="form-group">
+                                <label style="display:block; font-size:12px; color:#9fb0bd; margin-bottom:6px; font-weight:600;">API Provider</label>
+                                <select class="form-input" id="uacProvider" onchange="uacLoadProvider()">
+                                    <option value="openrouter">OpenRouter · OpenAI-compatible</option>
+                                    <option value="venice">Venice · OpenAI-compatible</option>
+                                    <option value="openai">OpenAI · OpenAI-compatible</option>
+                                    <option value="nanogpt">NanoGPT · OpenAI-compatible</option>
+                                    <option value="novita">Novita AI · OpenAI-compatible</option>
+                                    <option value="anthropic">Claude · Anthropic Messages API</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label style="display:block; font-size:12px; color:#9fb0bd; margin-bottom:6px; font-weight:600;">Base URL <span style="color:#6b7a85; font-weight:400;">— optional, blank uses the provider default</span></label>
+                                <input type="text" class="form-input" id="uacBaseUrl" placeholder="https://openrouter.ai/api/v1">
+                            </div>
+                            <div class="form-group">
+                                <label style="display:block; font-size:12px; color:#9fb0bd; margin-bottom:6px; font-weight:600;">API Key</label>
+                                <div class="api-key-input">
+                                    <input type="password" class="form-input" id="uacApiKey" placeholder="sk-...">
+                                    <button class="api-key-toggle" onclick="toggleApiKey('uacApiKey')">Show</button>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label style="display:block; font-size:12px; color:#9fb0bd; margin-bottom:6px; font-weight:600;">Model</label>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <select class="form-input" id="uacModel" style="flex:1;">
+                                        <option value="">— none selected —</option>
+                                    </select>
+                                    <button class="btn btn-secondary btn-sm" id="uacFetchBtn" onclick="uacFetchModels()">Fetch models</button>
+                                </div>
+                                <div class="form-hint" id="uacModelHint" style="margin-top:6px;"></div>
+                            </div>
+                            <div class="form-group">
+                                <label style="display:block; font-size:12px; color:#9fb0bd; margin-bottom:6px; font-weight:600;">Max Context Tokens <span style="color:#6b7a85; font-weight:400;">— optional</span></label>
+                                <input type="number" class="form-input" id="uacMaxTokens" placeholder="e.g. 200000" min="0" step="1000">
+                            </div>
+                            <div style="font-size:10.5px; color:#8a99a5; margin:2px 0 12px; line-height:1.5;">In-browser mission routing currently uses <b>OpenRouter</b> or <b>Venice</b> (or a connected local agent). Keys for other providers, custom base URLs, and the context cap are stored and used for model discovery and server-side / agent flows.</div>
+                            <button class="btn btn-primary btn-sm" onclick="uacSave()">Save config</button>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2 class="settings-title">🔑 API Keys</h2>
+
+                        <div class="card">
+                            <h4 style="margin-bottom: 12px; font-size: 14px;">OpenRouter API Key</h4>
+                            <div class="form-group">
+                                <div class="api-key-input">
+                                    <input type="password" class="form-input" id="openrouterKey" placeholder="sk-or-...">
+                                    <button class="api-key-toggle" onclick="toggleApiKey('openrouterKey')">Show</button>
+                                </div>
+                                <div class="form-hint">Get key from <a href="https://openrouter.ai/keys" target="_blank" style="color: var(--accent);">openrouter.ai/keys</a></div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="saveApiKey('openrouter')">Save</button>
+                        </div>
+
+                        <div class="card">
+                            <h4 style="margin-bottom: 12px; font-size: 14px;">Venice API Key</h4>
+                            <div class="form-group">
+                                <div class="api-key-input">
+                                    <input type="password" class="form-input" id="veniceKey" placeholder="venice key…">
+                                    <button class="api-key-toggle" onclick="toggleApiKey('veniceKey')">Show</button>
+                                </div>
+                                <div class="form-hint">OpenAI-compatible, privacy-focused. Get key from <a href="https://venice.ai/settings/api" target="_blank" style="color: var(--accent);">venice.ai/settings/api</a></div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="saveApiKey('venice')">Save</button>
+                        </div>
+
+                        <div class="card">
+                            <h4 style="margin-bottom: 12px; font-size: 14px;">Hugging Face Token</h4>
+                            <div class="form-group">
+                                <div class="api-key-input">
+                                    <input type="password" class="form-input" id="huggingfaceKey" placeholder="hf_...">
+                                    <button class="api-key-toggle" onclick="toggleApiKey('huggingfaceKey')">Show</button>
+                                </div>
+                                <div class="form-hint">Open models via the OpenAI-compatible Inference Providers router. Get a token from <a href="https://huggingface.co/settings/tokens" target="_blank" style="color: var(--accent);">huggingface.co/settings/tokens</a></div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="saveApiKey('huggingface')">Save</button>
+                        </div>
+
+                        <div class="card">
+                            <h4 style="margin-bottom: 12px; font-size: 14px;">Anthropic API Key</h4>
+                            <div class="form-group">
+                                <div class="api-key-input">
+                                    <input type="password" class="form-input" id="anthropicKey" placeholder="sk-ant-...">
+                                    <button class="api-key-toggle" onclick="toggleApiKey('anthropicKey')">Show</button>
+                                </div>
+                            </div>
+                            <div style="font-size: 10px; color: #888; margin-bottom: 8px;">Stored, but direct-LLM currently routes via <b>OpenRouter</b> or a connected agent — not wired to this key yet.</div>
+                            <button class="btn btn-primary btn-sm" onclick="saveApiKey('anthropic')">Save</button>
+                        </div>
+
+                        <div class="card">
+                            <h4 style="margin-bottom: 12px; font-size: 14px;">OpenAI API Key</h4>
+                            <div class="form-group">
+                                <div class="api-key-input">
+                                    <input type="password" class="form-input" id="openaiKey" placeholder="sk-...">
+                                    <button class="api-key-toggle" onclick="toggleApiKey('openaiKey')">Show</button>
+                                </div>
+                            </div>
+                            <div style="font-size: 10px; color: #888; margin-bottom: 8px;">Stored, but direct-LLM currently routes via <b>OpenRouter</b> or a connected agent — not wired to this key yet.</div>
+                            <button class="btn btn-primary btn-sm" onclick="saveApiKey('openai')">Save</button>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2 class="settings-title">🖥️ Local Model (llama.cpp / Ollama / OpenAI-compatible)</h2>
+                        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">
+                            Point the War Room at a model running on your own host — <b style="color:#bcd;">no cloud, no OpenRouter</b>.
+                            Requires <code>npm run server</code>. When enabled, BOTH server-dispatched missions/General AND the
+                            browser "AI" features route through your local model.
+                        </p>
+                        <div class="card">
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:14px; font-size:14px; font-weight:700; color:#2fd6ff;">
+                                <input type="checkbox" id="useLocalToggle" style="accent-color:#2fd6ff; width:16px; height:16px;">
+                                Use the local model for all LLM calls
+                            </label>
+                            <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap:10px;">
+                                <div class="form-group">
+                                    <label style="font-size:12px; color:var(--text-muted);">Host / IP</label>
+                                    <input type="text" class="form-input" id="localHost" placeholder="127.0.0.1">
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-size:12px; color:var(--text-muted);">Port</label>
+                                    <input type="text" class="form-input" id="localPort" placeholder="8080">
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-size:12px; color:var(--text-muted);">API path</label>
+                                    <input type="text" class="form-input" id="localPath" placeholder="/v1">
+                                </div>
+                            </div>
+                            <div class="form-hint" style="margin:-6px 0 12px;">
+                                llama.cpp (OpenAI-compatible server): path <code>/v1</code> · Ollama native: path <code>/api</code> (port <code>11434</code>) · LM Studio: <code>/v1</code> (port <code>1234</code>)
+                            </div>
+                            <div class="form-group">
+                                <label style="font-size:12px; color:var(--text-muted);">Model tag</label>
+                                <input type="text" class="form-input" id="localModel" placeholder="e.g. qwen2.5-coder / llama3 / the loaded gguf name">
+                            </div>
+                            <div class="form-group">
+                                <label style="font-size:12px; color:var(--text-muted);">API key (optional — llama.cpp <code>--api-key</code>)</label>
+                                <div class="api-key-input">
+                                    <input type="password" class="form-input" id="localApiKey" placeholder="leave empty if the server needs none">
+                                    <button class="api-key-toggle" onclick="toggleApiKey('localApiKey')">Show</button>
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                                <button class="btn btn-primary btn-sm" onclick="saveLocalConfig()">Save</button>
+                                <button class="btn btn-sm" onclick="testLocalConfig()" style="background:rgba(255,255,255,0.05);border:1px solid rgba(0,200,255,0.3);color:#bcd;">Test connection</button>
+                            </div>
+                            <div id="localTestResult" style="font-size:12px; margin-top:10px; color:var(--text-muted);"></div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2 class="settings-title">🧅 Egress Proxy (SOCKS5)</h2>
+                        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">
+                            Route all probe/attack <code>fetch()</code> traffic through a <b style="color:#bcd;">SOCKS5 proxy</b> so tests
+                            don't leave from your own IP (Tor, an SSH <code>-D</code> tunnel, a VPS, etc.). Loopback (the local model &amp; this
+                            server) is always bypassed. Requires <code>npm run server</code>; also settable via <code>TEMPEST_PROXY_URL</code>.
+                        </p>
+                        <div class="card">
+                            <div class="form-group">
+                                <label style="font-size:12px; color:var(--text-muted);">SOCKS5 URL — <code>socks5://[user:pass@]host:port</code></label>
+                                <input type="text" class="form-input" id="proxyUrl" placeholder="socks5://127.0.0.1:9050  (empty = direct / your own IP)">
+                            </div>
+                            <div class="form-hint" style="margin:-6px 0 12px;">
+                                Tor: <code>socks5://127.0.0.1:9050</code> · SSH tunnel: <code>ssh -D 1080 host</code> → <code>socks5://127.0.0.1:1080</code>. Use <code>socks5h://</code> to resolve DNS at the proxy.
+                            </div>
+                            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                                <button class="btn btn-primary btn-sm" onclick="saveProxyConfig()">Save &amp; apply</button>
+                                <button class="btn btn-sm" onclick="saveProxyConfig('')" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.2);color:#bcd;">Disable (direct)</button>
+                                <button class="btn btn-sm" onclick="checkProxyIp()" style="background:rgba(255,255,255,0.05);border:1px solid rgba(0,200,255,0.3);color:#bcd;">Check IP now</button>
+                            </div>
+                            <div id="proxyTestResult" style="font-size:12px; margin-top:10px; color:var(--text-muted);"></div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2 class="settings-title">🔌 Local Agents</h2>
+                        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">Enlist agents you've already authed on this machine — <b style="color:#bcd;">no API keys needed</b>. T3MP3ST detects each CLI (<b style="color:#bcd;">Claude Code</b> / Codex / Hermes) and drives it as your LLM backbone using its own login. Connect one, then hit <b style="color:#2fd6ff;">☆ Use</b> to pin it as the <b style="color:#2fd6ff;">★ active backbone</b> for missions and analysis — a pinned local model outranks any stored API key.</p>
+                        <div id="localAgentsCard" style="padding: 18px 20px; background: linear-gradient(135deg, rgba(0,200,255,0.06), rgba(160,90,255,0.04)); border: 1px solid rgba(0,200,255,0.25); border-radius: 12px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                                <div style="font-size: 15px; font-weight: 800; color: #2fd6ff; letter-spacing: 0.4px; display:flex; align-items:center; gap:8px;">🔌 Connect Local Agents</div>
+                                <span id="localAgentsSummary" style="font-size: 11px; color:#7f90a0; font-weight:600;">— scanning —</span>
+                            </div>
+                            <div id="localAgentsList" style="display:grid; gap:8px; margin:14px 0 4px;">
+                                <div style="color:#5f7079; font-size:12px; padding:8px 0;">Detecting local agents…</div>
+                            </div>
+                            <!-- Claude Code model picker — only shown once Claude Code is connected -->
+                            <div id="claudeModelPicker" style="display:none; align-items:center; gap:10px; margin:10px 0 2px; padding:10px 12px; background:rgba(255,140,40,0.06); border:1px solid rgba(255,140,40,0.28); border-radius:8px; flex-wrap:wrap;">
+                                <span style="font-size:18px;">🟠</span>
+                                <div style="flex:1; min-width:160px;">
+                                    <div style="font-size:12.5px; font-weight:700; color:#ffd0a8;">Claude Code model</div>
+                                    <div style="font-size:10.5px; color:#a78b76;">Which local Claude model to run (passed to <code style="color:#ffb37a;">claude --model</code>)</div>
+                                </div>
+                                <select id="claudeModelSelect" onchange="setClaudeModel(this.value)" style="padding:8px 10px; font-size:12px; background:rgba(0,0,0,0.35); border:1px solid rgba(255,140,40,0.4); border-radius:6px; color:#ffe6d2; font-family:'JetBrains Mono',monospace; cursor:pointer; min-width:200px;"></select>
+                            </div>
+                            <div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; align-items:center;">
+                                <button id="localAgentsConnectAllBtn" onclick="connectSelectedLocalAgents()" style="padding:11px 22px; font-size:13px; font-weight:800; background:linear-gradient(135deg,#2fd6ff,#5b8cff); border:none; border-radius:8px; color:#001624; cursor:pointer; letter-spacing:0.4px; box-shadow:0 4px 14px rgba(0,200,255,0.28);">⚡ Connect Selected</button>
+                                <button id="localAgentsRefreshBtn" onclick="detectLocalAgents()" style="padding:11px 18px; font-size:13px; font-weight:600; background:rgba(255,255,255,0.05); border:1px solid rgba(0,200,255,0.3); border-radius:8px; color:#bcd; cursor:pointer;">↻ Re-scan</button>
+                                <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:11.5px; color:#8a99a5; font-weight:600;">
+                                    <input type="checkbox" id="localAgentsDeepPing" style="accent-color:#2fd6ff;">
+                                    <span title="On connect, send a real one-shot prompt to confirm the agent actually responds (spends a little of that agent's quota).">live-ping on connect</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2 class="settings-title">🤖 Model Selection</h2>
+                        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">Select your preferred AI model for agent operations</p>
+                        <div class="model-selector" id="modelSelector">
+                            <div style="color: var(--text-muted); padding: 20px; text-align: center;">Loading models...</div>
+                        </div>
+                        <div style="margin-top: 16px; padding: 12px; background: rgba(255,136,0,0.08); border-radius: 8px; border: 1px solid rgba(255,136,0,0.25);">
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                                <span style="color: #ff8800; font-weight: bold; font-size: 12px;">🔄 Fallback Model</span>
+                                <span style="font-size: 10px; color: #888;">Auto-retries with this model if the primary fails (refusal, timeout, error)</span>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="text" id="fallbackModelInput"
+                                    placeholder="e.g. nousresearch/hermes-3-llama-3.1-405b"
+                                    style="flex: 1; padding: 8px 12px; background: rgba(0,0,0,0.3); border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 12px; font-family: 'JetBrains Mono', monospace;">
+                                <button class="btn btn-sm" onclick="saveFallbackModel()" style="background: #ff8800;">Save</button>
+                            </div>
+                            <div style="margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap;">
+                                <button class="btn btn-sm" onclick="document.getElementById('fallbackModelInput').value='nousresearch/hermes-3-llama-3.1-405b';saveFallbackModel()" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.06); border: 1px solid #444;">Hermes 3 405B</button>
+                                <button class="btn btn-sm" onclick="document.getElementById('fallbackModelInput').value='anthropic/claude-sonnet-4.5';saveFallbackModel()" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.06); border: 1px solid #444;">Claude Sonnet 4.5</button>
+                                <button class="btn btn-sm" onclick="document.getElementById('fallbackModelInput').value='google/gemini-2.5-pro-preview';saveFallbackModel()" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.06); border: 1px solid #444;">Gemini 2.5 Pro</button>
+                                <button class="btn btn-sm" onclick="document.getElementById('fallbackModelInput').value='';saveFallbackModel()" style="font-size: 10px; padding: 2px 8px; background: rgba(255,68,68,0.1); border: 1px solid rgba(255,68,68,0.3); color: #ff6666;">Disable Fallback</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2 class="settings-title">🖥️ API Server</h2>
+                        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">URL of your running T3MP3ST API server (start with <code style="color: var(--accent);">npm run server</code>)</p>
+                        <div class="card">
+                            <div class="form-group">
+                                <div style="display: flex; gap: 8px;">
+                                    <input type="text" class="form-input" id="apiServerUrl" placeholder="http://localhost:3333" style="flex: 1;">
+                                    <button class="btn btn-primary btn-sm" onclick="saveApiServerUrl()">Save</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="testApiConnection()">Test</button>
+                                </div>
+                                <div class="form-hint" style="margin-top: 6px;">Default: <code style="color: var(--accent);">http://localhost:3333</code> — change if your server runs on a different host/port</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2 class="settings-title">⚠️ Data</h2>
+                        <div class="card" style="border-color: var(--danger);">
+                            <button class="btn btn-danger" onclick="clearAllData()">Clear All Data</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Config Library -->
+                <div class="page" id="page-configs">
+                    <!-- Library Header -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(136,0,255,0.1), rgba(0,136,255,0.1)); border: 1px solid rgba(136,0,255,0.3); border-radius: 12px;">
+                        <div>
+                            <div style="font-size: 10px; color: #8800ff; text-transform: uppercase; letter-spacing: 2px;">Config Library</div>
+                            <div style="font-size: 20px; font-weight: bold; color: #fff;">Saved Configurations</div>
+                            <div style="font-size: 12px; color: #888; margin-top: 4px;">
+                                <span id="configLibraryCount">0</span> configs saved •
+                                Default: <span id="defaultConfigName" style="color: var(--brand);">None</span>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button class="btn btn-secondary" onclick="saveCurrentConfig()">
+                                💾 Save Current Config
+                            </button>
+                            <button class="btn btn-primary" onclick="loadDefaultConfig()" id="loadDefaultBtn" style="display: none;">
+                                ⭐ Load Default
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Current Config Summary -->
+                    <div class="card" style="margin-bottom: 16px;">
+                        <div class="card-header">
+                            <h3 class="card-title">📊 Current Configuration</h3>
+                            <span class="tag tag-info" id="currentConfigScore">Not benchmarked</span>
+                        </div>
+                        <div id="currentConfigSummary" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding-top: 8px;">
+                            <div style="text-align: center; color: #666; padding: 20px;">Run a benchmark to see current config performance</div>
+                        </div>
+                    </div>
+
+                    <!-- Saved Configs Grid -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">💾 Saved Configurations</h3>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="configSortBy" onchange="renderConfigLibrary()" style="padding: 4px 8px; background: #1a1a2e; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 11px;">
+                                    <option value="date">Sort by Date</option>
+                                    <option value="score">Sort by Score</option>
+                                    <option value="name">Sort by Name</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="configLibraryGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; padding-top: 12px;">
+                            <div style="text-align: center; color: #666; padding: 40px; grid-column: 1 / -1;">
+                                <div style="font-size: 48px; margin-bottom: 12px;">💾</div>
+                                <div style="font-size: 14px; margin-bottom: 8px;">No saved configurations yet</div>
+                                <div style="font-size: 12px; color: #555;">Run benchmarks and save your best performing configs</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- About -->
+                <div class="page" id="page-about">
+                    <div class="about-hero">
+                        <pre class="ascii-banner">
+████████╗██████╗ ███╗   ███╗██████╗ ██████╗ ███████╗████████╗
+╚══██╔══╝╚════██╗████╗ ████║██╔══██╗╚════██╗██╔════╝╚══██╔══╝
+   ██║    █████╔╝██╔████╔██║██████╔╝ █████╔╝███████╗   ██║
+   ██║    ╚═══██╗██║╚██╔╝██║██╔═══╝  ╚═══██╗╚════██║   ██║
+   ██║   ██████╔╝██║ ╚═╝ ██║██║     ██████╔╝███████║   ██║
+   ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚═╝     ╚═════╝ ╚══════╝   ╚═╝   </pre>
+                        <p class="about-tagline">Turn the AI coding agent you already run into a red team.</p>
+                    </div>
+
+                    <!-- Coverage by domain: lit = has a receipt; greyed = in development -->
+                    <div style="margin: 24px 0 8px;">
+                        <h2 style="color: var(--brass, #f5b84b); font-size: 18px; margin: 0 0 4px;">🌩️ Coverage by domain</h2>
+                        <p style="opacity: .65; font-size: 13px; margin: 0 0 14px;">A domain lights up only when there's a benchmark behind it. Greyed tiles are in development.</p>
+                        <div class="feature-grid" id="domainGrid">
+                            <div class="feature-card"><div class="feature-icon">🕸️</div><h3>Web ✅</h3><p>Apps, APIs, auth flows, OWASP Top 10. XBEN 90.1% pass@1.</p></div>
+                            <div class="feature-card"><div class="feature-icon">📂</div><h3>Code ✅</h3><p>White-box source audits. Held-out CVE-Zero: single-agent 8/10 exact file/line/CWE, 10/10 found (7 languages).</p></div>
+                            <div class="feature-card"><div class="feature-icon">🚩</div><h3>CTF ✅</h3><p>Wargames, ranges, challenges. Cybench 23/40 hint-free.</p></div>
+                            <div class="feature-card"><div class="feature-icon">🔌</div><h3>Network / Infra ✅</h3><p>Live recon engine (nmap/DNS/HTTP). Lateral + privesc experimental.</p></div>
+                            <div class="feature-card"><div class="feature-icon">🤖</div><h3>Embedded / IoT / OT ✅</h3><p>Firmware, robotics, ICS/SCADA. Coordinated-disclosure CVE pipeline live.</p></div>
+                            <div class="feature-card"><div class="feature-icon">📦</div><h3>Supply chain ⚠️</h3><p>Dependency audits, install-without-confirmation. Dedicated class; real held-out hit.</p></div>
+                            <div class="feature-card"><div class="feature-icon">💰</div><h3>Blockchain ⚠️</h3><p>Smart contracts, DeFi, Solidity. Reproduction only — not novel discovery yet.</p></div>
+                            <div class="feature-card" style="opacity: .42; filter: grayscale(1); position: relative;"><div class="feature-icon">☁️</div><h3>Cloud <span style="font-size:9px; background:rgba(245,184,75,.18); color:#f5b84b; padding:2px 6px; border-radius:4px; vertical-align:middle;">COMING SOON</span></h3><p>AWS/GCP/Azure misconfig, IAM, serverless.</p></div>
+                            <div class="feature-card" style="opacity: .42; filter: grayscale(1); position: relative;"><div class="feature-icon">📱</div><h3>Mobile <span style="font-size:9px; background:rgba(245,184,75,.18); color:#f5b84b; padding:2px 6px; border-radius:4px; vertical-align:middle;">COMING SOON</span></h3><p>Android / iOS app security.</p></div>
+                            <div class="feature-card" style="opacity: .42; filter: grayscale(1); position: relative;"><div class="feature-icon">🏢</div><h3>Identity / AD <span style="font-size:9px; background:rgba(245,184,75,.18); color:#f5b84b; padding:2px 6px; border-radius:4px; vertical-align:middle;">COMING SOON</span></h3><p>Kerberos, pass-the-hash, Active Directory.</p></div>
+                            <div class="feature-card" style="opacity: .42; filter: grayscale(1); position: relative;"><div class="feature-icon">🔐</div><h3>Binary / RE <span style="font-size:9px; background:rgba(245,184,75,.18); color:#f5b84b; padding:2px 6px; border-radius:4px; vertical-align:middle;">COMING SOON</span></h3><p>Overflows, ROP, exploit dev. Needs specialized tooling.</p></div>
+                        </div>
+                    </div>
+
+                    <div class="feature-grid">
+                        <div class="feature-card">
+                            <div class="feature-icon">🧠</div>
+                            <h3>LLM Backbone</h3>
+                            <p>Multiple AI providers: OpenRouter, Anthropic, OpenAI, or local models via Ollama.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🤖</div>
+                            <h3>Autonomous Operatives</h3>
+                            <p>8 specialized AI agents aligned with MITRE ATT&CK kill chain phases. Click any operative below to view + edit its prompt, tools, and config.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🎯</div>
+                            <h3>Mission Control</h3>
+                            <p>Coordinate complex operations with intelligent task delegation.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🔐</div>
+                            <h3>Evidence Vault</h3>
+                            <p>Secure storage for findings, credentials, and attack paths.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">👻</div>
+                            <h3>OPSEC Control</h3>
+                            <p>Configurable stealth levels from quiet recon to aggressive exploitation.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🛠️</div>
+                            <h3>Tool Arsenal</h3>
+                            <p>Extensible tool registry with automatic capability discovery.</p>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">🚀 Quick Start</h3>
+                        </div>
+                        <div class="code-block">
+                            <div class="code-header"><span>TypeScript</span></div>
+                            <div class="code-body">
+<span class="keyword">import</span> { Tempest } <span class="keyword">from</span> <span class="string">'t3mp3st'</span>;
+
+<span class="comment">// Initialize</span>
+<span class="keyword">const</span> tempest = <span class="keyword">new</span> <span class="function">Tempest</span>({
+  provider: <span class="string">'openrouter'</span>,
+  model: <span class="string">'anthropic/claude-opus-4.6'</span>
+});
+
+<span class="comment">// Add target & spawn operators</span>
+tempest.target.<span class="function">addHost</span>(<span class="string">'192.168.1.100'</span>);
+tempest.operators.<span class="function">spawn</span>(<span class="string">'recon'</span>);
+tempest.operators.<span class="function">spawn</span>(<span class="string">'scanner'</span>);
+
+<span class="comment">// Launch</span>
+<span class="keyword">await</span> tempest.<span class="function">start</span>();
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">🤖 Operator Archetypes</h3>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead><tr><th>Operator</th><th>Role</th><th>Phase</th></tr></thead>
+                                <tbody>
+                                    <tr><td><span class="tag tag-cyan">🔍 Recon</span></td><td>Intelligence & OSINT</td><td>Reconnaissance</td></tr>
+                                    <tr><td><span class="tag tag-info">📡 Scanner</span></td><td>Network scanning</td><td>Reconnaissance</td></tr>
+                                    <tr><td><span class="tag tag-danger">💥 Exploiter</span></td><td>Vulnerability exploitation</td><td>Exploitation</td></tr>
+                                    <tr><td><span class="tag tag-purple">🥷 Infiltrator</span></td><td>Lateral movement</td><td>Installation</td></tr>
+                                    <tr><td><span class="tag tag-warning">📤 Exfiltrator</span></td><td>Data extraction</td><td>Actions</td></tr>
+                                    <tr><td><span class="tag">👻 Ghost</span></td><td>Anti-forensics</td><td>All</td></tr>
+                                    <tr><td><span class="tag tag-success">🎖️ Coordinator</span></td><td>Orchestration</td><td>All</td></tr>
+                                    <tr><td><span class="tag tag-info">📊 Analyst</span></td><td>Reporting</td><td>All</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card" style="text-align: center; padding: 30px;">
+                        <h3 style="margin-bottom: 10px;">Ready to Start?</h3>
+                        <p style="color: var(--text-secondary); margin-bottom: 15px;">Configure your API keys and launch your first mission.</p>
+                        <button class="btn btn-primary" onclick="navigateTo('settings')">Configure API Keys →</button>
+                    </div>
+                </div>
+                <div class="page" id="page-cve-vault">
+                    <div class="card" id="cveVaultApp" aria-labelledby="cveVaultTitle" aria-busy="false">
+                        <div class="card-header"><h2 class="card-title" id="cveVaultTitle">CVE Vault</h2></div>
+                        <p>Search CISA KEV with optional FIRST EPSS context. Matches are candidates, not proof that an observed version is vulnerable.</p>
+                        <p class="cve-vault-readiness" data-shell-readiness data-state="checking" role="status" aria-live="polite">Checking server readiness…</p>
+                        <form class="cve-vault-controls">
+                            <label>Vendor or product <input data-vault-query required maxlength="200" autocomplete="off" placeholder="e.g. Apache HTTP Server"></label>
+                            <label>Filter <select data-vault-filter><option value="all">All</option><option value="epss">Has EPSS</option><option value="fresh">Current feeds</option><option value="stale">Stale feeds</option></select></label>
+                            <button class="btn btn-primary" type="submit">Search</button>
+                        </form>
+                        <noscript>CVE Vault search requires JavaScript. Use POST /api/cve-vault/search from a local API client.</noscript>
+                        <p class="cve-vault-status" data-vault-status role="status" aria-live="polite"></p>
+                        <div class="cve-vault-layout"><div class="cve-vault-results" data-vault-results role="listbox" aria-label="CVE candidates"></div><article class="cve-vault-detail" data-vault-detail aria-live="polite"></article></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modalTitle">Modal</h3>
+                <button class="modal-close" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+
+    <!-- First-run welcome / orientation (dismissible, no backend calls) -->
+    <div class="modal-overlay" id="welcomeOverlay" onclick="if(event.target===this)dismissWelcome()">
+        <div class="modal" style="max-width: 460px;">
+            <div class="modal-header">
+                <h3 class="modal-title">👋 Welcome to T3MP3ST</h3>
+                <button class="modal-close" onclick="dismissWelcome()">×</button>
+            </div>
+            <div class="modal-body" style="padding: 16px; line-height: 1.6; font-size: 13px;">
+                <p style="margin: 0 0 12px;">T3MP3ST is an AI-driven offensive-security workbench — you point operators at a target and it hunts, validates, and reports findings.</p>
+                <p style="margin: 0 0 8px;"><b>To start (keyless):</b> connect a local agent in <b>Settings</b>, or paste an API key there.</p>
+                <p style="margin: 0 0 14px;"><b>Then:</b> type a target and hit <b>HUNT</b>.</p>
+                <button onclick="dismissWelcome(); if(window.t3mpTour)t3mpTour.start();" style="width: 100%; padding: 11px; margin: 0 0 8px; border: none; border-radius: 6px; background: var(--accent, var(--accent)); color: #04120e; font-weight: bold; cursor: pointer;">▶ Take the guided tour</button>
+                <button onclick="dismissWelcome()" style="width: 100%; padding: 9px; border: 1px solid var(--border-color, #1e4053); border-radius: 6px; background: transparent; color: var(--text-secondary, #9baeb8); font-weight: 600; cursor: pointer;">Got it — I'll explore on my own</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- LLM Call Queue — live Q&A feed for sequential (single-slot) LLM calls, e.g. local models -->
+    <div class="llm-queue-popup" id="llmQueuePopup" style="display:none;">
+        <div class="llm-queue-header" onclick="toggleLLMQueueMinimize()">
+            <span class="llm-queue-title">⚡ LLM Queue <span id="llmQueueCount">0</span></span>
+            <div class="llm-queue-header-btns">
+                <button class="llm-queue-min-btn" onclick="event.stopPropagation(); toggleLLMQueueLog()" title="Mostra/nascondi log live">▤</button>
+                <button class="llm-queue-min-btn" onclick="event.stopPropagation(); toggleLLMQueueMinimize()" title="Minimizza">_</button>
+                <button class="llm-queue-min-btn" onclick="event.stopPropagation(); closeLLMQueuePopup()" title="Chiudi">✕</button>
+            </div>
+        </div>
+        <div class="llm-queue-body" id="llmQueueBody"></div>
+        <div class="llm-queue-log show" id="llmQueueLog"><div class="llm-queue-log-empty">In attesa di attività…</div></div>
+    </div>
+
+    <script>
+        // State
+        const state = {
+            operators: [],
+            targets: [],
+            findings: [],
+            credentials: [],
+            activities: [],
+            settings: { openrouterKey: '', anthropicKey: '', openaiKey: '', selectedModel: 'anthropic/claude-opus-4.6', fallbackModel: 'nousresearch/hermes-3-llama-3.1-405b', localHost: '127.0.0.1', localPort: '8080', localPath: '/v1', localModel: '', localApiKey: '', useLocal: false },
+            connected: false
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        // T3MP3ST API CLIENT
+        // ═══════════════════════════════════════════════════════════════
+        const T3MP3ST_API = {
+            // Determine if we can reach a local API server
+            // On HTTPS non-localhost (e.g. GitHub Pages), mixed-content blocks HTTP requests
+            _isLocal: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
+            _hasCustomUrl: !!localStorage.getItem('t3mp3st_api_url'),
+            _isStandalone: false,
+
+            baseUrl: localStorage.getItem('t3mp3st_api_url') ||
+                (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+                    ? `http://${window.location.hostname}:3333`
+                    : ''),  // Empty = standalone mode on remote hosts
+
+            connected: false,
+            llmAvailable: false,
+            serverLLM: null,
+
             // Check server health
             async checkHealth() {
                 const dot = document.getElementById('apiDot');
@@ -4780,7 +6200,9 @@
                         text.style.color = '#ffaa00';
                         text.textContent = 'Standalone Mode';
                     }
-                    return { status: 'standalone', message: 'Direct LLM mode — no API server needed' };
+                    const standalone = { status: 'standalone', message: 'Direct LLM mode — no API server needed' };
+                    window.T3MP3STShell.updateReadiness(standalone);
+                    return standalone;
                 }
 
                 try {
@@ -4818,6 +6240,7 @@
                         }
                     }
 
+                    window.T3MP3STShell.updateReadiness(data);
                     return data;
                 } catch (e) {
                     this.connected = false;
@@ -4836,7 +6259,9 @@
                             text.style.color = '#ffaa00';
                             text.textContent = 'Standalone Mode';
                         }
-                        return { status: 'standalone', message: 'Direct LLM mode — configure API URL in Settings to connect' };
+                        const standalone = { status: 'standalone', message: 'Direct LLM mode — configure API URL in Settings to connect' };
+                        window.T3MP3STShell.updateReadiness(standalone);
+                        return standalone;
                     }
 
                     // Update UI indicator
@@ -4848,7 +6273,9 @@
                         text.textContent = 'Offline';
                     }
 
-                    return { status: 'offline', error: e.message };
+                    const offline = { status: 'offline', error: e.message };
+                    window.T3MP3STShell.updateReadiness(offline);
+                    return offline;
                 }
             },
 
@@ -5279,21 +6706,21 @@
              * Stop the active mission
              */
             async stopMission() {
-                return T3MP3ST_API.post('/api/mission/stop', {});
+                return this.missionRequest('/api/mission/stop', 'POST');
             },
 
             /**
              * Pause the active mission
              */
             async pauseMission() {
-                return T3MP3ST_API.post('/api/mission/pause', {});
+                return this.missionRequest('/api/mission/pause', 'POST');
             },
 
             /**
              * Resume the active mission
              */
             async resumeMission() {
-                return T3MP3ST_API.post('/api/mission/resume', {});
+                return this.missionRequest('/api/mission/resume', 'POST');
             },
 
             /**
@@ -5302,9 +6729,15 @@
              * "mission stopped" from "could not ask" — a swallowed error here used to
              * read as an instant, false "mission complete".
              */
-            async getStatus() {
+            async missionRequest(endpoint, method = 'GET') {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 15000);
                 try {
-                    const res = await fetch(`${T3MP3ST_API.baseUrl}/api/mission/status`);
+                    const res = await fetch(`${T3MP3ST_API.baseUrl}${endpoint}`, {
+                        method, signal: controller.signal,
+                        ...(method === 'POST' ? { headers: { 'Content-Type': 'application/json' }, body: '{}' } : {})
+                    });
+                    if (!res.ok) throw new Error(`Mission request HTTP ${res.status}`);
                     return await res.json();
                 } catch {
                     return null;
@@ -5344,31 +6777,46 @@
                             resolve(status);
                             return;
                         }
+                } finally {
+                    clearTimeout(timer);
+                }
+            },
 
-                        if (status.paused && status.stallReason) {
-                            resolve(status);
-                            return;
+            async getStatus(missionId) {
+                const query = missionId ? `?missionId=${encodeURIComponent(missionId)}` : '';
+                const status = await this.missionRequest(`/api/mission/status${query}`);
+                if (typeof status.active !== 'boolean') throw new Error('Invalid mission status');
+                return status;
+            },
+
+            // Stalls remain live and resumable. A failed status request is unknown, never completion.
+            async pollUntilComplete(onUpdate, intervalMs = 3000, run = missionLifecycle) {
+                while (missionRunning && missionLifecycle === run) {
+                    try {
+                        const status = await this.getStatus(run.missionId);
+                        if (!missionRunning || missionLifecycle !== run) return null;
+                        // A stop response and a status response can arrive in either order.
+                        if (!run.pending) {
+                            if (onUpdate) onUpdate(status);
+                            if (!status.active) return status;
+                            if (status.mission?.currentPhase) {
+                                const phaseMap = {
+                                    reconnaissance: 'recon', weaponization: 'scanning',
+                                    delivery: 'exploitation', exploitation: 'exploitation',
+                                    installation: 'post_exploitation', command_and_control: 'post_exploitation',
+                                    actions_on_objectives: 'exfiltration'
+                                };
+                                updateKillChain?.(phaseMap[status.mission.currentPhase] || status.mission.currentPhase, status.mission.progress || 50);
+                            }
                         }
-
-                        // Update kill chain from mission phase
-                        if (status.mission?.currentPhase) {
-                            const phaseMap = {
-                                'reconnaissance': 'recon',
-                                'weaponization': 'scanning',
-                                'delivery': 'exploitation',
-                                'exploitation': 'exploitation',
-                                'installation': 'post_exploitation',
-                                'command_and_control': 'post_exploitation',
-                                'actions_on_objectives': 'exfiltration'
-                            };
-                            const uiPhase = phaseMap[status.mission.currentPhase] || status.mission.currentPhase;
-                            updateKillChain?.(uiPhase, status.mission.progress || 50);
+                    } catch (err) {
+                        if (missionRunning && missionLifecycle === run && !run.pending && onUpdate) {
+                            onUpdate({ statusError: err.message || 'Status unavailable' });
                         }
-
-                        setTimeout(poll, intervalMs);
-                    };
-                    poll();
-                });
+                    }
+                    await new Promise(resolve => setTimeout(resolve, intervalMs));
+                }
+                return null;
             }
         };
 
@@ -6781,6 +8229,9 @@ localStorage.setItem('t3mp3st', JSON.stringify({
         }
 
         document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => navigateTo(i.dataset.page)));
+        function navigateTo(page, options) {
+            return window.T3MP3STShell.navigate(page, options);
+        }
 
         function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
 
@@ -7335,6 +8786,7 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
         // ========== MISSION CONTROL SYSTEM ==========
         // Unified mission state — single source of truth
         let missionRunning = false;
+        let missionLifecycle = { backend: false, starting: false, pending: null };
         let missionStartTime = null;
         let missionTimer = null;
 
@@ -13163,6 +14615,9 @@ Be specific and actionable.`;
 
             // Run full pipeline with handoffs - NOW WITH QUALITY GATING
             async runPipeline(target, options = {}) {
+                const cancelled = () => options.isCancelled?.() === true;
+                const stopped = () => ({ pipeline: [], cancelled: true });
+                if (cancelled()) return stopped();
                 MissionContext.reset();
                 MissionContext.targets.push(target);
                 this.abortRequested = false;
@@ -13180,6 +14635,7 @@ Be specific and actionable.`;
                         try { if (options.onPhaseComplete) options.onPhaseComplete(this.phases[phaseIndex], { aborted: true }); } catch (_) {}
                         break;
                     }
+                    if (cancelled()) return stopped();
                     const phase = this.phases[phaseIndex];
                     MissionContext.currentPhase = phase;
                     const agents = this.phaseAgents[phase].filter(a => state.operators.includes(a));
@@ -13224,11 +14680,13 @@ Be specific and actionable.`;
                             });
                         }
 
+                        if (cancelled()) return stopped();
                         // TASTEMAKER QUALITY GATE
                         if (config.useTastemaker) {
                             const output = phaseResult.response || phaseResult.merged || phaseResult.best || '';
                             const review = await Tastemaker.review(output, context, phase);
 
+                            if (cancelled()) return stopped();
                             phaseResult.qualityReview = review;
 
                             if (review.decision === 'APPROVE') {
@@ -13272,6 +14730,7 @@ Be specific and actionable.`;
                     // Extract findings and update context (now quality-assured)
                     await this.updateContextFromResponse(phase, phaseResult, config);
 
+                    if (cancelled()) return stopped();
                     const phaseResponse = phaseResult.response || phaseResult.merged || phaseResult.best || '';
                     results.push({
                         phase,
@@ -13304,6 +14763,7 @@ Be specific and actionable.`;
                         (phaseIndex + 1) % config.strategicReviewInterval === 0 &&
                         phaseIndex < this.phases.length - 1) {
                         const strategicReview = await Tastemaker.strategicReview(MissionContext);
+                        if (cancelled()) return stopped();
                         results.push({
                             phase: `${phase}_strategic_review`,
                             review: strategicReview,
@@ -13321,11 +14781,13 @@ Be specific and actionable.`;
 
                         if (fallback && config.allowFallbacks) {
                             const adaptiveStrategy = await ContingencyPlanner.generateAdaptiveStrategy(context);
+                            if (cancelled()) return stopped();
                             results.push({ phase: `${phase}_fallback`, strategy: adaptiveStrategy });
                         }
                     }
 
                     } catch (phaseErr) {
+                        if (cancelled()) return stopped();
                         // Phase failed — log it and continue to next phase
                         console.error(`[T3MP3ST] Phase ${phase} failed:`, phaseErr);
                         results.push({ phase, error: true, reason: phaseErr.message });
@@ -14441,6 +15903,10 @@ Be brutally honest. This is not a pep talk.`;
                 this.style.background = 'transparent';
                 if (typeof hideFindingAttackTooltip === 'function') hideFindingAttackTooltip();
             };
+            row.setAttribute('data-verified', isModelAsserted ? '0' : '1');
+            row.style.cssText = `display: grid; grid-template-columns: 60px 70px 1fr 140px 90px 36px; gap: 0; padding: 6px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); align-items: center; font-size: 10px; transition: background 0.2s; cursor: default;`;
+            row.onmouseenter = function() { this.style.background = 'rgba(' + rgb + ',0.08)'; };
+            row.onmouseleave = function() { this.style.background = 'transparent'; };
 
             const idx = missionFindings.indexOf(f);
             row.innerHTML = `
@@ -17474,6 +18940,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     if (ac) ac.style.display = 'block';
 
                     missionRunning = true;
+                    missionLifecycle = { backend: false, starting: false, pending: null };
                     const missionName = `${plan.codename} — ${plan.summary?.substring(0, 60) || 'Admiral Op'}`;
                     addIntel('ADMIRAL', `Operation LIVE — targeting ${plan.targets.length} targets (standalone)`, 'success');
                     toast(`Operation ${plan.codename} is LIVE`, 'success');
@@ -17506,6 +18973,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
 
                     // Switch to war room to watch the action
                     missionRunning = true;
+                    missionLifecycle = { backend: true, starting: false, pending: null };
                 }
             } catch (err) {
                 // Network failure fallback for execute
@@ -17514,6 +18982,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     const plan = generalPlanData;
                     const primaryTarget = plan.targets[0].address;
                     missionRunning = true;
+                    missionLifecycle = { backend: false, starting: false, pending: null };
                     try {
                         await _runClientSidePipeline(primaryTarget, `${plan.codename} — Standalone`);
                         return;
@@ -17650,6 +19119,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     // Launch the existing client-side pipeline
                     const missionName = `${plan.codename} — ${plan.summary?.substring(0, 60) || directive.substring(0, 60)}`;
                     missionRunning = true;
+                    missionLifecycle = { backend: false, starting: false, pending: null };
                     addIntel('ADMIRAL', `Operation ${plan.codename} is LIVE in full auto mode (standalone)`, 'success');
                     toast(`${plan.codename} — FULL AUTO ENGAGED`, 'success');
 
@@ -17662,6 +19132,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     addIntel('ADMIRAL', `Operation ${plan.codename} is LIVE in full auto mode`, 'success');
                     toast(`${plan.codename} — FULL AUTO ENGAGED`, 'success');
                     missionRunning = true;
+                    missionLifecycle = { backend: true, starting: false, pending: null };
                 }
             } catch (err) {
                 addIntel('ADMIRAL', `Full auto failed: ${err.message}`, 'danger');
@@ -18187,6 +19658,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
 
             // Set mission state
             missionRunning = true;
+            missionLifecycle = { backend: false, starting: false, pending: null };
             missionStartTime = Date.now();
 
             document.getElementById('cmdMissionName').textContent = missionName.toUpperCase();
@@ -19087,6 +20559,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
             const missionName = document.getElementById('missionName')?.value || 'Operation ' + Date.now();
 
             missionRunning = true;
+            missionLifecycle = { backend: false, starting: false, pending: null };
             missionStartTime = Date.now();
 
             // Update War Room command header
@@ -19239,6 +20712,8 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                 }
 
                 try {
+                    missionLifecycle.backend = true;
+                    missionLifecycle.starting = true;
                     let result = await BackendDispatch.startMission(
                         missionName,
                         state.targets,
@@ -19290,6 +20765,8 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                         throw new Error(result.error || 'Backend mission start failed');
                     }
 
+                    missionLifecycle.starting = false;
+                    missionLifecycle.missionId = result.missionId;
                     addIntel('COMMAND', `Backend mission launched: ${(result.operators || []).length} operators spawned`, 'success');
                     addMissionLog('success', `Backend: ${(result.operators || []).length} operators active`);
                     // Reference the operator's authorization on every launch so the scan trail
@@ -19309,14 +20786,24 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     // Keep the war-room gang console fed on every poll — it now renders from the same LiveScanState.
                     const finalStatus = await BackendDispatch.pollUntilComplete((status) => {
                         try { window.updateLiveScanStatus && window.updateLiveScanStatus(status); } catch (_) {}
+                        if (status.statusError) {
+                            document.getElementById('cmdMissionStatus').textContent = `Status unknown — ${status.statusError}; retrying`;
+                            return;
+                        }
+                        const pauseButton = document.getElementById('cmdPauseBtn');
+                        pauseButton.textContent = status.paused ? '▶' : '⏸';
+                        pauseButton.onclick = status.paused ? resumeMission : pauseMission;
                         if (status.paused && status.stallReason) {
                             const reason = status.stallReason;
                             document.getElementById('cmdMissionStatus').textContent = `Stalled — ${reason}`;
                             document.getElementById('cmdMissionStatus').style.color = '#ff6b6b';
-                            addMissionLog('error', reason);
-                            addIntel('ERROR', reason, 'danger');
                             return;
                         }
+                        if (status.paused) {
+                            document.getElementById('cmdMissionStatus').textContent = 'PAUSED';
+                            return;
+                        }
+                        document.getElementById('cmdMissionStatus').style.color = '#00ff88';
                         // Periodic status update
                         if (status.operators?.summary) {
                             const ops = status.operators.summary;
@@ -19341,6 +20828,10 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     }
                     if (finalStatus.paused && finalStatus.stallReason) {
                         throw new Error(finalStatus.stallReason);
+                    if (!finalStatus) return; // stopped locally; preserve the confirmed control outcome
+                    if (finalStatus.mission?.status !== 'completed') {
+                        completeMission('Backend stopped without confirmed mission completion');
+                        return;
                     }
                     const findingCount = finalStatus.findings?.length || 0;
                     completeMission(null);
@@ -19349,6 +20840,8 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     toast('Mission complete!', 'success');
 
                 } catch (err) {
+                    missionLifecycle.starting = false;
+                    missionLifecycle.backend = false;
                     const msg = err.message || 'Backend dispatch failed';
                     const isScopeBlock = /403|approval|authoriz|scope|permission|receipt/i.test(msg);
                     addIntel('ERROR', `Backend error: ${msg}`, 'danger');
@@ -19403,6 +20896,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
 
         // Client-side pipeline execution (extracted for reuse as fallback)
         async function _runClientSidePipeline(target, missionName, mode) {
+            const run = missionLifecycle;
             try {
                 // Client-side verbose: seed the gang console so ENGAGE feels alive even in simulation.
                 try {
@@ -19413,6 +20907,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     });
                 } catch (_) {}
                 const results = await PipelineOrchestrator.runPipeline(target, {
+                    isCancelled: () => !missionRunning || missionLifecycle !== run,
                     useTastemaker: PipelineOrchestrator.config.useTastemaker,
                     useReflection: PipelineOrchestrator.config.useReflection,
                     collaborationMode: PipelineOrchestrator.config.collaborationMode,
@@ -19464,6 +20959,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     }
                 });
 
+                if (!missionRunning || missionLifecycle !== run) return;
                 // Mission complete — check if any phases actually produced results
                 const pipelineResults = results.pipeline || [];
                 const successfulPhases = pipelineResults.filter(r => !r.error && !r.skipped);
@@ -19493,6 +20989,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                 }
 
             } catch (err) {
+                if (!missionRunning || missionLifecycle !== run) return;
                 const msg = err.name === 'AbortError' || err.name === 'TimeoutError'
                     ? 'LLM request timed out — try a faster model or check your API key'
                     : err.message;
@@ -19503,13 +21000,13 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
             }
         }
 
-        // Pause mission
-        function pauseMission() {
-            if (!missionRunning) return;
-
-            // Pause backend mission if dispatched
-            if (BackendDispatch.isAvailable()) {
-                BackendDispatch.pauseMission();
+        // Controls reflect acknowledged scheduler state. In-flight work may finish after stopping.
+        async function controlMission(action) {
+            const run = missionLifecycle;
+            if (!missionRunning || run.pending) return false;
+            if (run.starting) {
+                toast('Backend launch pending — retry the control after launch is confirmed', 'warning');
+                return false;
             }
 
             document.getElementById('cmdMissionStatus').textContent = 'PAUSED';
@@ -19558,6 +21055,67 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
             } else {
                 addIntel('COMMAND', 'Stop fired — killing any active backend scans.', 'warning');
             }
+            if (!run.backend && action !== 'stop') {
+                toast('Pause/resume is unavailable for browser simulations', 'warning');
+                return false;
+            }
+            run.pending = action;
+            const status = document.getElementById('cmdMissionStatus');
+            const pauseButton = document.getElementById('cmdPauseBtn');
+            const abortButton = document.getElementById('cmdAbortBtn');
+            pauseButton.disabled = true;
+            abortButton.disabled = true;
+            status.textContent = `${action === 'stop' ? 'Stopping' : action === 'pause' ? 'Pausing' : 'Resuming'}… awaiting confirmation`;
+            try {
+                if (run.backend) {
+                    const result = await BackendDispatch[`${action}Mission`]();
+                    if (!result || result.success !== true) throw new Error(result?.error || 'Backend did not confirm the control');
+                }
+                if (missionLifecycle !== run) return false;
+                if (action === 'stop') {
+                    missionRunning = false;
+                    if (missionTimer) { clearInterval(missionTimer); missionTimer = null; }
+                    missionStartTime = null;
+                    document.getElementById('cmdMissionName').textContent = 'STANDBY';
+                    status.textContent = run.backend
+                        ? 'Backend scheduler stopped — in-flight work may finish'
+                        : 'Browser mission stopped — in-flight stages may finish';
+                    status.style.color = '#ff4444';
+                    resetEngageUI();
+                } else {
+                    status.textContent = action === 'pause' ? 'PAUSED — in-flight work may finish' : 'Engaging...';
+                    status.style.color = action === 'pause' ? '#ffaa00' : '#00ff88';
+                    pauseButton.textContent = action === 'pause' ? '▶' : '⏸';
+                    pauseButton.onclick = action === 'pause' ? resumeMission : pauseMission;
+                }
+                addIntel('COMMAND', status.textContent, action === 'stop' ? 'warning' : 'info');
+                return true;
+            } catch (err) {
+                status.textContent = `${action} unconfirmed — ${err.message}; retry or check backend status`;
+                status.style.color = '#ff4444';
+                toast(status.textContent, 'error');
+                return false;
+            } finally {
+                run.pending = null;
+                pauseButton.disabled = false;
+                abortButton.disabled = false;
+            }
+        }
+
+        async function pauseMission() { return controlMission('pause'); }
+        async function resumeMission() { return controlMission('resume'); }
+
+        async function abortMission(skipConfirm) {
+            if (missionLifecycle.pending) return;
+            if (!missionRunning) {
+                const n = document.getElementById('cmdMissionName'); if (n) n.textContent = 'STANDBY';
+                const s = document.getElementById('cmdMissionStatus');
+                if (s) { s.textContent = 'Awaiting orders'; s.style.color = '#666'; }
+                resetEngageUI();
+                return;
+            }
+            if (!skipConfirm && !confirm('Stop the current mission scheduler? In-flight work may still finish.')) return;
+            return controlMission('stop');
         }
 
         // Update mission timer — updates both command header and mission log timers
@@ -22197,15 +23755,6 @@ ${CTF_TOOL_PROTOCOL}`
 
             toast('🗑️ CTF history cleared', 'warning');
         }
-
-        // Initialize CTF Range when navigating to the page
-        const originalNavigateTo = navigateTo;
-        navigateTo = function(page) {
-            originalNavigateTo(page);
-            if (page === 'ctf-range') {
-                initCtfRange();
-            }
-        };
 
         // ==================== SPECTRA - AI-POWERED RECONNAISSANCE ENGINE ====================
         /**
@@ -27536,6 +29085,8 @@ Be specific and actionable. Format as structured JSON.`;
       +   '<div style="display:flex;align-items:center;margin-bottom:6px;"><div style="font-size:10px;color:#8aa;text-transform:uppercase;letter-spacing:1px;">System prompt</div>'
       +     '<button onclick="askAdmiralSuggest()" style="margin-left:auto;font-size:11px;font-weight:700;background:rgba(0,136,255,0.14);border:1px solid rgba(0,136,255,0.45);border-radius:7px;color:#5bb8ff;cursor:pointer;padding:5px 12px;">⚓ Ask Admiral to suggest improvements</button></div>'
       +   '<textarea id="opPromptEdit" spellcheck="false" style="width:100%;box-sizing:border-box;height:240px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#cfe;font-family:\'JetBrains Mono\',monospace;font-size:11px;line-height:1.5;padding:12px;resize:vertical;">'+esc(o.systemPrompt)+'</textarea>'
+      +   ((o.capabilityDiagnostics||[]).map(d=>'<div style="margin-top:8px;padding:9px 11px;border:1px solid rgba(255,170,0,0.4);border-radius:7px;background:rgba(255,170,0,0.08);color:#ffc266;font-size:11px;"><b>'+esc(d.code)+'</b> · '+esc(d.message)+'</div>').join(''))
+      +   '<div style="margin-top:7px;color:#71808d;font-size:10px;line-height:1.45;">Instructions influence planning but do not add tools, expand target scope, or satisfy approval gates. Callable tools are listed above.</div>'
       +   '<div id="opAdviceBox" style="margin-top:12px;"></div></div>'
       + '<div style="display:flex;gap:8px;align-items:center;padding:14px 20px;border-top:1px solid rgba(255,255,255,0.08);"><span style="font-size:10px;color:#667;">'+(o.overridden?'⚠ customized — edits apply to every spawned '+esc(o.archetype):'showing defaults')+'</span>'
       +   '<div style="margin-left:auto;display:flex;gap:8px;"><button onclick="resetOperative()" style="font-size:12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#bcd;cursor:pointer;padding:8px 16px;">↺ Reset to default</button>'
@@ -27552,14 +29103,26 @@ Be specific and actionable. Format as structured JSON.`;
     try { const d = await (await fetch(base()+'/api/operators/prompt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({archetype:SELECTED,systemPrompt:ed.systemPrompt,params:ed.params})})).json();
       if(d.error) throw new Error(d.error);
       if(d.operator){ const i=ROSTER.findIndex(x=>x.archetype===SELECTED); if(i>=0) ROSTER[i]=d.operator; }
-      renderRoster(); renderEditor(); if(window.toast) toast('💾 '+SELECTED+' updated — applies to every spawned operator','success');
+      renderRoster(); renderEditor();
+      if(window.toast){
+        const applied=(d.application&&d.application.appliedOperatorIds||[]).length;
+        const deferred=(d.application&&d.application.deferredOperatorIds||[]).length;
+        const detail=deferred ? deferred+' active deferred until next task · '+applied+' idle updated now' : applied ? applied+' idle operator(s) updated now' : 'applies to future spawns';
+        toast('💾 '+SELECTED+' updated — '+detail,'success');
+      }
     } catch(e){ if(window.toast) toast('Save failed: '+e.message,'error'); }
   };
   window.resetOperative = async function(){
     try { const d = await (await fetch(base()+'/api/operators/prompt/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({archetype:SELECTED})})).json();
       if(d.error) throw new Error(d.error);
       if(d.operator){ const i=ROSTER.findIndex(x=>x.archetype===SELECTED); if(i>=0) ROSTER[i]=d.operator; }
-      ADVICE=null; renderRoster(); renderEditor(); if(window.toast) toast('↺ '+SELECTED+' reset to default','info');
+      ADVICE=null; renderRoster(); renderEditor();
+      if(window.toast){
+        const applied=(d.application&&d.application.appliedOperatorIds||[]).length;
+        const deferred=(d.application&&d.application.deferredOperatorIds||[]).length;
+        const detail=deferred ? deferred+' active deferred until next task · '+applied+' idle reset now' : applied ? applied+' idle operator(s) reset now' : 'applies to future spawns';
+        toast('↺ '+SELECTED+' reset — '+detail,'info');
+      }
     } catch(e){ if(window.toast) toast('Reset failed: '+e.message,'error'); }
   };
 
@@ -28587,5 +30150,8 @@ Be specific and actionable. Format as structured JSON.`;
             }, 120);
         }
     </script>
+<script src="sounds.js"></script>
+<script src="findings-sort.js"></script>
+<script src="cve-vault.js"></script>
 </body>
 </html>

@@ -1,21 +1,11 @@
-# T3MP3ST CTF Challenge: Blind SQL Injection - Data Extraction
-# Difficulty: Medium (2)
-# Category: Web Exploitation
+FROM python:3.12.11-alpine3.22@sha256:efcdfa6a6b2fd2afb9c7dfa9a5b288a6f68338b5cfdebe6b637d986067d85757
 
-FROM python:3.11-slim
+LABEL org.opencontainers.image.source="https://github.com/elder-plinius/T3MP3ST"
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
 
-WORKDIR /app
+WORKDIR /challenge
+COPY --chown=65532:65532 challenge.py server.py proxy.py solve.py ./
 
-# Install dependencies
-RUN pip install flask flask-cors
-
-# Create vulnerable application
-COPY app.py /app/
-
-# Set environment variables
-ENV FLASK_APP=app.py
-ENV CTF_FLAG=T3MP3ST{bl1nd_sql1_t1m3_b4s3d}
-
-EXPOSE 80
-
-CMD ["python", "app.py"]
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["python", "server.py"]

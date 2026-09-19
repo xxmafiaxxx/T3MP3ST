@@ -69,6 +69,61 @@ describe('parseToolOutput — field mapping per scanner', () => {
     expect(f[0].title).toBe('katana: 3 endpoint(s) discovered');
     expect(f[0].details).toContain('/about');
   });
+
+  it('wpscan: core/plugin vulns + interesting findings + enumerated users, severity documented', () => {
+    const f = parseToolOutput('wpscan', fixture('wpscan.json'));
+    expect(f).toHaveLength(7); // 1 core + 3 plugin vulns, 2 interesting findings, 1 users aggregate
+    const core = f[0];
+    expect(core.title).toContain('WordPress core 6.4.2');
+    expect(core.severity).toBe('high'); // wpscan labels this core 'insecure'
+    expect(core.remediation).toBe('update WordPress core 6.4.2 to 6.4.3');
+    const woo = f.filter((x) => x.title.startsWith('plugin woocommerce'));
+    expect(woo).toHaveLength(2);
+    expect(woo[0].severity).toBe('medium'); // confirmed component vuln; wpscan never scores severity
+    expect(woo[0].remediation).toBe('update plugin woocommerce to 4.1.0');
+    const cf7 = f.find((x) => x.title.includes('contact-form-7-datepicker'));
+    expect(cf7?.cve).toEqual(['CVE-2020-11516']); // bare wpvulndb cve ref gains the CVE- prefix
+    expect(cf7?.remediation).toBeUndefined(); // fixed_in: null → no fabricated fix
+    const xmlrpc = f.find((x) => x.title.includes('XML-RPC'));
+    expect(xmlrpc?.severity).toBe('info');
+    expect(xmlrpc?.details).toContain('confidence: 30');
+    const users = f.find((x) => x.title.includes('user(s) enumerated'));
+    expect(users?.title).toBe('wpscan: 2 user(s) enumerated');
+    expect(users?.details).toContain('admin');
+    expect(users?.details).toContain('editor');
+  });
+
+  it('wpscan: redacts target-derived secrets from every emitted field', () => {
+    const secret = 'wpscan-secret-value';
+    const f = parseToolOutput('wpscan', JSON.stringify({
+      interesting_findings: [{
+        to_s: `Authenticated endpoint https://operator:${secret}@target.test/?token=${secret}`,
+        url: `https://operator:${secret}@target.test/?token=${secret}`,
+        found_by: `token=${secret}`,
+      }],
+      users: { [`token=${secret}`]: {} },
+    }));
+    const serialized = JSON.stringify(f);
+    expect(f).toHaveLength(2);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain('operator:');
+    expect(serialized).toContain('[redacted]');
+  });
+
+  it('wpscan: normalizes valid CVEs and discards malformed references', () => {
+    const f = parseToolOutput('wpscan', JSON.stringify({
+      plugins: {
+        example: {
+          vulnerabilities: [{
+            title: 'Mixed reference quality',
+            references: { cve: ['2020-11516', 'cve-2021-44228', 'not-a-cve', '2024-12'] },
+          }],
+        },
+      },
+    }));
+    expect(f).toHaveLength(1);
+    expect(f[0].cve).toEqual(['CVE-2020-11516', 'CVE-2021-44228']);
+  });
 });
 
 describe('parseToolOutput — honesty contract (never fabricate, never throw)', () => {
@@ -83,7 +138,7 @@ describe('parseToolOutput — honesty contract (never fabricate, never throw)', 
   it('returns [] for a tool with no parser wired', () => {
     expect(parseToolOutput('sqlmap', fixture('nuclei.jsonl'))).toEqual([]);
     expect(parseToolOutput('metasploit', 'anything')).toEqual([]);
-    expect(hasParser('sqlmap')).toBe(false);
+    expect(hasParser('sqlmap')).toBe(true); // sqlmap parser wired; non-sqlmap input stays []
   });
 
   it('never throws on adversarial / deeply-nested / wrong-shape input', () => {
@@ -104,8 +159,79 @@ describe('parseToolOutput — honesty contract (never fabricate, never throw)', 
 
   it('exposes exactly the wired parser ids', () => {
     expect([...PARSED_TOOL_IDS].sort()).toEqual(
-      ['dalfox', 'ffuf', 'garak', 'gitleaks', 'grype', 'httpx', 'katana', 'nuclei', 'semgrep', 'trivy'],
+      ['arjun', 'dalfox', 'feroxbuster', 'ffuf', 'garak', 'gitleaks', 'grype', 'httpx', 'katana', 'nuclei', 'semgrep', 'sqlmap', 'trivy', 'trufflehog', 'wafw00f', 'wpscan'],
     );
+  });
+
+  it('sqlmap: one finding per confirmed vulnerable parameter, with payload evidence', () => {
+    const raw = [
+      '[00:00:01] [INFO] testing connection to the target URL',
+      '--- Parameter: id (GET) ---',
+      '    Type: boolean-based blind',
+      '    Payload: id=1 AND 1=1',
+      '    Type: time-based blind',
+      '    Payload: id=1 AND SLEEP(5)',
+      '--- Parameter: user (POST) ---',
+      '    Type: UNION query',
+      '    Payload: user=admin UNION SELECT 1,2,3--',
+      '[00:00:05] [INFO] the back-end DBMS is MySQL',
+    ].join('\n');
+    const f = parseToolOutput('sqlmap', raw);
+    expect(f).toHaveLength(2);
+    expect(f[0].title).toContain("'id'");
+    expect(f[0].severity).toBe('high');
+    expect(f[0].cwe).toEqual(['CWE-89']);
+    expect(f[0].details).toContain('MySQL');
+    expect(f[0].details).toContain('SLEEP(5)');
+    expect(f[1].title).toContain("'user'");
+    // non-sqlmap text stays empty
+    expect(parseToolOutput('sqlmap', '[INF] nuclei banner that is not JSON')).toEqual([]);
+  });
+
+  it('feroxbuster: one aggregate finding of reachable 2xx/3xx paths', () => {
+    const raw = [
+      '{"url":"http://x/admin","status":200,"content_length":512}',
+      '{"url":"http://x/api","status":301,"content_length":0}',
+      '{"url":"http://x/secret","status":404,"content_length":32}',
+    ].join('\n');
+    const f = parseToolOutput('feroxbuster', raw);
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('info');
+    expect(f[0].title).toContain('2');
+    expect(f[0].details).toContain('/admin');
+    expect(f[0].details).not.toContain('/secret');
+  });
+
+  it('wafw00f: detects WAF name and no-WAF case', () => {
+    const f = parseToolOutput('wafw00f', '[+] The site https://x is behind Cloudflare (Cloudflare)');
+    expect(f).toHaveLength(1);
+    expect(f[0].title).toContain('Cloudflare');
+    const none = parseToolOutput('wafw00f', '[+] No WAF detected by the generic detection\n[+] Checking https://y');
+    expect(none.some((n) => n.title === 'No WAF Detected')).toBe(true);
+  });
+
+  it('trufflehog: one finding per leaked secret with file/line and verified flag', () => {
+    const raw = [
+      JSON.stringify({ Raw: 'AKIA1234567890ABCDEF', DetectorName: 'AWS', Verified: true, SourceMetadata: { Data: { File: 'src/app.py', Line: 42 } } }),
+      JSON.stringify({ Raw: 'ghp_abcdefghijklmnopqrstuvwxyz', DetectorName: 'Github', Verified: false, SourceMetadata: { Data: { File: 'config.json' } } }),
+    ].join('\n');
+    const f = parseToolOutput('trufflehog', raw);
+    expect(f).toHaveLength(2);
+    expect(f[0].severity).toBe('high');
+    expect(f[0].details).toContain('app.py:42');
+    expect(f[0].details).toContain('Verified');
+    expect(f[1].severity).toBe('medium');
+  });
+
+  it('arjun: hidden parameters per endpoint from -oJ output', () => {
+    const raw = JSON.stringify({ 'https://x/api': { token: '1', debug: '1', page: '1' } });
+    const f = parseToolOutput('arjun', raw);
+    expect(f).toHaveLength(1);
+    expect(f[0].title).toContain('3 hidden parameter');
+    expect(f[0].details).toContain('token, debug, page');
+    expect(parseToolOutput('arjun', '{"https://x/api": {}}')).toEqual([]);
+    const text = parseToolOutput('arjun', '[+] Found 2 parameters: id, debug');
+    expect(text[0].title).toContain('2 hidden parameter');
   });
 });
 
