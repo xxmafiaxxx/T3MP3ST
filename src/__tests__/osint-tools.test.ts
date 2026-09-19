@@ -262,6 +262,20 @@ describe('dark web direct', () => {
   });
 });
 
+describe('identity corroboration', () => {
+  it('matches subject names against profile display names', async () => {
+    const { scoreIdentityMatch } = await import('../tools/osint.js');
+    expect(scoreIdentityMatch({ name: 'Linus Torvalds' }, { displayName: 'Linus Torvalds' })).toBe('name-match');
+    expect(scoreIdentityMatch({ name: 'Linus Torvalds' }, { displayName: 'Linus T.' })).toBe('name-match');
+    expect(scoreIdentityMatch({ name: 'Linus Torvalds' }, { displayName: 'bio: written by Linus Torvalds' })).toBe('name-match');
+    expect(scoreIdentityMatch({ name: 'John Smith' }, { displayName: 'Alice Chains' })).toBe('name-mismatch');
+    expect(scoreIdentityMatch({ name: 'John Smith' }, { displayName: 'JSmith Gaming' })).toBe('name-match'); // initials-style partial
+    expect(scoreIdentityMatch({ name: 'John Smith' }, null)).toBe('handle-only');
+    expect(scoreIdentityMatch({}, { displayName: 'Linus Torvalds' })).toBe('handle-only'); // no hints, no claims
+    expect(scoreIdentityMatch({ name: 'john smith' }, { displayName: '  John   Smith  ' })).toBe('name-match'); // normalization
+  });
+});
+
 describe('person dorks', () => {
   it('builds engine + people-search links for every identifier kind', () => {
     const dorks = personDorks({ name: 'John Smith', email: 'john@example.com', username: 'jsmith', phone: '+17185550199', domain: 'example.com' });

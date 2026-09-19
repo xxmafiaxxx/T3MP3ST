@@ -832,8 +832,16 @@
             return '<span class="conf-badge conf-' + escapeHtml(c) + '">' + escapeHtml(c) + '</span>';
         }
         function renderSocialCard(h) {
-            return '<div class="social-card">' +
-                '<div class="site">' + escapeHtml(h.site) + confBadge(h.confidence) + ' <span class="cat-tag">(' + escapeHtml(h.category) + ')</span></div>' +
+            const ident = h.identity === 'name-match'
+                ? '<span class="conf-badge conf-high">✓ IDENTITY MATCH</span>'
+                : h.identity === 'name-mismatch'
+                    ? '<span class="conf-badge conf-medium">≠ DIFFERENT PERSON</span>'
+                    : '';
+            const dn = h.profile && h.profile.displayName ? '<div style="color:var(--text-primary);font-size:11.5px;margin-top:3px;">as "' + escapeHtml(h.profile.displayName) + '"</div>' : '';
+            const style = h.identity === 'name-mismatch' ? 'opacity:0.55;' : h.identity === 'name-match' ? 'border-color:var(--success);' : '';
+            return '<div class="social-card" style="' + style + '">' +
+                '<div class="site">' + escapeHtml(h.site) + confBadge(h.confidence) + ident + ' <span class="cat-tag">(' + escapeHtml(h.category) + ')</span></div>' +
+                dn +
                 '<a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(h.url) + '</a>' +
                 '</div>';
         }
@@ -962,7 +970,11 @@
             const push = (type, point, detail, source, rel) => rows.push({ type, point, detail, source, rel });
             Object.entries(d.parsed || {}).forEach(function (kv) { if (kv[1]) push('identifier', kv[0], String(kv[1]), 'auto-parse', '—'); });
             if (d.name) push('identifier', 'name', d.name, 'operator input', '—');
-            (d.socialAccounts || []).forEach(function (h) { push('social account', h.site, h.url, 'public profile probe', h.confidence); });
+            (d.socialAccounts || []).forEach(function (h) {
+                const dn = h.profile && h.profile.displayName ? ' — "' + h.profile.displayName + '"' : '';
+                const ident = h.identity === 'name-match' ? ' [IDENTITY MATCH]' : h.identity === 'name-mismatch' ? ' [DIFFERENT PERSON]' : '';
+                push('social account', h.site + dn, h.url + ident, 'public profile probe' + (h.note ? ' · ' + h.note : ''), h.identity === 'name-match' ? 'corroborated' : h.confidence);
+            });
             if (d.emailIntel && d.emailIntel.gravatar && d.emailIntel.gravatar.exists) {
                 const g = d.emailIntel.gravatar;
                 if (g.displayName) push('identity', 'display name', g.displayName, 'Gravatar', 'high');

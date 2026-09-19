@@ -13,6 +13,7 @@
 
 import { createHash } from 'crypto';
 import { promises as dns } from 'dns';
+import { directFetch } from '../net/proxy.js';
 import type { Credential, CustomTool } from '../types/index.js';
 
 const UA =
@@ -24,7 +25,7 @@ async function osintFetch(url: string, init: RequestInit = {}): Promise<Response
   return globalThis.fetch(url, {
     ...init,
     headers: { 'user-agent': UA, accept: 'text/html,application/json;q=0.9,*/*;q=0.8', ...(init.headers || {}) },
-    signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    signal: (init.signal as AbortSignal) || AbortSignal.timeout(PROBE_TIMEOUT_MS),
     redirect: 'follow',
   });
 }
@@ -64,11 +65,15 @@ export interface OsintSite {
   probeValue?: string;
   reliability: 'high' | 'medium' | 'low';
   notes?: string;
+  /** Secondary probe when the primary is rate-limited/WAF-blocked (e.g. GitHub API 403 → HTML page). */
+  fallbackProbeUrlTemplate?: string;
+  fallbackProbeType?: OsintSite['probeType'];
+  fallbackProbeValue?: string;
 }
 
 export const OSINT_SITES: OsintSite[] = [
   // --- developer / technical (strongest signals — clean API 404s) ---
-  { name: 'GitHub', category: 'dev', urlTemplate: 'https://github.com/{u}', probeUrlTemplate: 'https://api.github.com/users/{u}', probeType: 'status', reliability: 'high', notes: 'GitHub REST API' },
+  { name: 'GitHub', category: 'dev', urlTemplate: 'https://github.com/{u}', probeUrlTemplate: 'https://api.github.com/users/{u}', probeType: 'status', reliability: 'high', notes: 'GitHub REST API', fallbackProbeUrlTemplate: 'https://github.com/{u}', fallbackProbeType: 'body_contains', fallbackProbeValue: 'octolytics-dimension-user_login' },
   { name: 'GitLab', category: 'dev', urlTemplate: 'https://gitlab.com/{u}', probeUrlTemplate: 'https://gitlab.com/api/v4/users?username={u}', probeType: 'json_array_nonempty', reliability: 'high' },
   { name: 'Bitbucket', category: 'dev', urlTemplate: 'https://bitbucket.org/{u}/', probeUrlTemplate: 'https://api.bitbucket.org/2.0/users/{u}', probeType: 'status', reliability: 'high' },
   { name: 'npm', category: 'dev', urlTemplate: 'https://www.npmjs.com/~{u}', probeUrlTemplate: 'https://www.npmjs.com/~{u}', probeType: 'status', reliability: 'high' },
@@ -181,6 +186,14 @@ function dig(obj: unknown, path: string): unknown {
   return cur;
 }
 
+export type IdentityMatch = 'name-match' | 'name-mismatch' | 'handle-only';
+
+export interface ProfileHint {
+  displayName?: string;
+  bio?: string;
+  imageUrl?: string;
+}
+
 export interface UsernameHit {
   site: string;
   category: OsintSiteCategory;
@@ -189,11 +202,183 @@ export interface UsernameHit {
   confidence: 'high' | 'medium' | 'low';
   probeStatus?: number;
   note?: string;
+  /** Profile details pulled from the platform's public API on a FOUND hit. */
+  profile?: ProfileHint;
+  /** Is this account corroborated as the subject, or just a claimed handle? */
+  identity?: IdentityMatch;
 }
 
-async function probeSite(site: ResolvedSite, username: string): Promise<UsernameHit> {
-  const url = site.probeUrlTemplate.replaceAll('{u}', encodeURIComponent(username).replace(/%40/g, '@'));
-  const humanUrl = site.urlTemplate.replaceAll('{u}', encodeURIComponent(username).replace(/%40/g, '@'));
+/** Cheap public profile lookups for identity corroboration on FOUND hits. Each spec
+ *  is URL + parser so the corroborator can run it via egress AND fall back to Tor. */
+const PROFILE_APIS: Record<string, (u: string) => { url: string; parse: (j: unknown) => ProfileHint | null }> = {
+  GitHub: (u) => ({
+    url: `https://api.github.com/users/${encodeURIComponent(u)}`,
+    parse: (j) => {
+      const r = j as Record<string, string | null>;
+      return r?.name || r?.avatar_url ? { displayName: (r.name as string) || undefined, bio: (r.bio as string) || undefined, imageUrl: (r.avatar_url as string) || undefined } : null;
+    },
+  }),
+  Reddit: (u) => ({
+    url: `https://www.reddit.com/user/${encodeURIComponent(u)}/about.json`,
+    parse: (j) => {
+      const data = (j as { data?: { name?: string; title?: string; icon_img?: string } })?.data;
+      return data ? { displayName: data.title || data.name || undefined, imageUrl: data.icon_img || undefined } : null;
+    },
+  }),
+  'chess.com': (u) => ({
+    url: `https://api.chess.com/pub/player/${encodeURIComponent(u)}`,
+    parse: (j) => {
+      const r = j as { name?: string; avatar?: string };
+      return r ? { displayName: r.name || undefined, imageUrl: r.avatar || undefined } : null;
+    },
+  }),
+  'dev.to': (u) => ({
+    url: `https://dev.to/api/users/by_username?url=${encodeURIComponent(u)}`,
+    parse: (j) => {
+      const r = j as { username?: string; name?: string; profile_image?: string; summary?: string };
+      return r?.username ? { displayName: r.name || undefined, imageUrl: r.profile_image || undefined, bio: r.summary || undefined } : null;
+    },
+  }),
+  Lichess: (u) => ({
+    url: `https://lichess.org/api/user/${encodeURIComponent(u)}`,
+    parse: (j) => {
+      const r = j as { profile?: { fullName?: string; bio?: string }; lastName?: string; firstName?: string };
+      if (!r) return null;
+      const fullName = r.profile?.fullName || [r.firstName, r.lastName].filter(Boolean).join(' ') || undefined;
+      return { displayName: fullName || undefined, bio: r.profile?.bio || undefined };
+    },
+  }),
+  'Hacker News': (u) => ({
+    url: `https://hn.algolia.com/api/v1/users/${encodeURIComponent(u)}`,
+    parse: (j) => ((j as { id?: string })?.id ? {} : null),
+  }),
+};
+
+async function corroborate(siteName: string, username: string): Promise<ProfileHint | null> {
+  const spec = PROFILE_APIS[siteName];
+  if (!spec) return null;
+  const { url, parse } = spec(username);
+  try {
+    const j = await fetchJson<unknown>(url);
+    const hint = j ? parse(j) : null;
+    if (hint) return hint;
+  } catch { /* fall through to Tor */ }
+  const tor = await torStatus();
+  if (tor.available) {
+    try {
+      const page = await torFetchAny(url);
+      if (page.status === 200) return parse(JSON.parse(page.body));
+    } catch { /* fall through to direct */ }
+  }
+  if (directAllowed()) {
+    try {
+      const res = await directFetch(url, {
+        headers: { 'user-agent': UA, accept: 'application/json' },
+        signal: AbortSignal.timeout(12_000),
+      } as never);
+      if (res.status === 200) return parse(await res.json());
+    } catch { /* all paths failed — handle-only */ }
+  }
+  return null;
+}
+
+/** Corroborate a claimed handle against the subject's known name. Pure function.
+ *  'name-match'      = profile display name/bio contains the subject's name tokens
+ *  'name-mismatch'   = profile has a different display name (someone else owns the handle)
+ *  'handle-only'     = no name hints, or profile carries no name to compare */
+export function scoreIdentityMatch(hints: { name?: string }, profile?: ProfileHint | null): IdentityMatch {
+  const hintName = (hints.name || '').toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!hintName || !hintName.includes(' ')) return 'handle-only'; // need a real full name to corroborate
+  const hTokens = hintName.split(' ').filter((t) => t.length > 1);
+  const dn = (profile?.displayName || '').toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const dTokens = dn ? dn.split(' ').filter((t) => t.length > 1) : [];
+  if (dTokens.length > 0) {
+    // Substring-aware overlap: 'jsmith' contains 'smith' — initials-style display
+    // names count as partial matches (the report still shows the display name).
+    const overlap = hTokens.filter((t) => dTokens.some((d) => d.includes(t) || t.includes(d))).length;
+    if (hTokens.length > 0 && hTokens.every((t) => dTokens.includes(t))) return 'name-match';
+    if (overlap > 0) return 'name-match'; // partial (initials/hyphenated/maiden) — detail shows the display name
+    return 'name-mismatch';
+  }
+  const bio = (profile?.bio || '').toLowerCase();
+  if (bio && hTokens.every((t) => bio.includes(t))) return 'name-match';
+  return dn ? 'name-mismatch' : 'handle-only';
+}
+
+interface ProbeOutcome { status: number; body?: string; via: 'egress' | 'tor'; url: string; note?: string }
+
+function classifyOutcome(site: ResolvedSite, outcome: ProbeOutcome): Pick<UsernameHit, 'status' | 'probeStatus' | 'note'> {
+  const ok = outcome.status >= 200 && outcome.status < 300;
+  let status: UsernameHit['status'] = 'unknown';
+  if (site.effectiveProbeType === 'status') {
+    if (ok) status = 'found';
+    else if (outcome.status === 404 || outcome.status === 410) status = 'absent';
+  } else if (ok) {
+    const body = outcome.body ?? '';
+    const has = site.probeValue ? body.includes(site.probeValue) : false;
+    if (site.effectiveProbeType === 'body_contains') status = has ? 'found' : 'absent';
+    else if (site.effectiveProbeType === 'body_missing') status = has ? 'absent' : 'found';
+    else if (site.effectiveProbeType === 'json_array_nonempty') {
+      try { status = Array.isArray(JSON.parse(body || '[]')) && JSON.parse(body).length > 0 ? 'found' : 'absent'; } catch { status = 'unknown'; }
+    } else if (site.effectiveProbeType === 'json_field') {
+      try { status = dig(JSON.parse(body || '{}'), site.probeValue || '') ? 'found' : 'absent'; } catch { status = 'unknown'; }
+    }
+  } else if (outcome.status === 404 || outcome.status === 410) {
+    status = 'absent';
+  }
+  const note = outcome.via === 'tor' ? 'probe via Tor circuit' : outcome.note;
+  return { status, probeStatus: outcome.status, note };
+}
+
+async function probeEgress(url: string, readBody: boolean): Promise<ProbeOutcome> {
+  const res = await osintFetch(url);
+  const body = readBody ? (await res.text().catch(() => '')).slice(0, 300_000) : undefined;
+  return { status: res.status, body, url, via: 'egress' };
+}
+
+async function probeViaTor(url: string): Promise<ProbeOutcome | null> {
+  const tor = await torStatus();
+  if (!tor.available) return null;
+  try {
+    const page = await torFetchAny(url);
+    return { status: page.status, body: page.body.slice(0, 300_000), url, via: 'tor' };
+  } catch {
+    return null;
+  }
+}
+
+/** Last-resort path for third-party OSINT lookups: connect DIRECT (real IP visible
+ *  to the data platform — not a mission target). Kill-switch: T3MP3ST_OSINT_ALLOW_DIRECT=0. */
+function directAllowed(): boolean {
+  return !/^(0|false|no|off)$/i.test(process.env.T3MP3ST_OSINT_ALLOW_DIRECT ?? '1');
+}
+
+async function probeDirect(url: string, readBody: boolean): Promise<ProbeOutcome | null> {
+  if (!directAllowed()) return null;
+  try {
+    const res = await directFetch(url, {
+      headers: { 'user-agent': UA, accept: 'text/html,application/json;q=0.9,*/*;q=0.8' },
+      signal: AbortSignal.timeout(15_000),
+      redirect: 'follow',
+    } as never);
+    const body = readBody ? (await res.text().catch(() => '')).slice(0, 300_000) : undefined;
+    return { status: res.status, body, url, via: 'egress', note: '⚠ direct connection (real IP seen by platform) — set T3MP3ST_OSINT_ALLOW_DIRECT=0 to disable' };
+  } catch {
+    return null;
+  }
+}
+
+/** Extract a display name from a GitHub profile HTML page (fallback path when the API is rate-limited). */
+function githubDisplayNameFromHtml(html: string, username: string): string | undefined {
+  const title = html.match(/<title>([^<]+)<\/title>/)?.[1] || '';
+  const m = title.match(new RegExp(`${username} \\(([^)]+)\\)`, 'i'));
+  return m?.[1] || undefined;
+}
+
+async function probeSite(site: ResolvedSite, username: string, hints?: { name?: string }): Promise<UsernameHit> {
+  const enc = encodeURIComponent(username).replace(/%40/g, '@');
+  const url = site.probeUrlTemplate.replaceAll('{u}', enc);
+  const humanUrl = site.urlTemplate.replaceAll('{u}', enc);
   const base: UsernameHit = {
     site: site.name,
     category: site.category,
@@ -201,42 +386,74 @@ async function probeSite(site: ResolvedSite, username: string): Promise<Username
     status: 'unknown',
     confidence: site.reliability,
   };
+
+  // — Pass 1: primary probe over normal egress —
+  let outcome: ProbeOutcome | null = null;
   try {
-    const res = await osintFetch(url);
-    base.probeStatus = res.status;
-    const ok = res.status >= 200 && res.status < 300;
-    if (site.effectiveProbeType === 'status') {
-      if (ok) base.status = 'found';
-      else if (res.status === 404 || res.status === 410) base.status = 'absent';
-      else base.status = 'unknown';
-      return base;
-    }
-    if (!ok) {
-      base.status = res.status === 404 || res.status === 410 ? 'absent' : 'unknown';
-      return base;
-    }
-    if (site.effectiveProbeType === 'body_contains' || site.effectiveProbeType === 'body_missing') {
-      const body = (await res.text()).slice(0, 200_000);
-      const has = site.probeValue ? body.includes(site.probeValue) : false;
-      base.status = site.effectiveProbeType === 'body_contains' ? (has ? 'found' : 'absent') : has ? 'absent' : 'found';
-      return base;
-    }
-    if (site.effectiveProbeType === 'json_array_nonempty') {
-      const data = await res.json().catch(() => null);
-      base.status = Array.isArray(data) && data.length > 0 ? 'found' : 'absent';
-      return base;
-    }
-    if (site.effectiveProbeType === 'json_field') {
-      const data = await res.json().catch(() => null);
-      base.status = dig(data, site.probeValue || '') ? 'found' : 'absent';
-      return base;
-    }
-    return base;
-  } catch (error) {
-    base.status = 'unknown';
-    base.note = error instanceof Error ? error.message.slice(0, 80) : 'network error';
+    const needsBody = site.effectiveProbeType !== 'status';
+    const first = await probeEgress(url, needsBody);
+    if (first.status === 403 || first.status === 429 || first.status >= 500) outcome = null; // unclear — escalate
+    else outcome = first;
+  } catch {
+    outcome = null;
+  }
+
+  // — Pass 2: fallback probe (e.g. HTML page when the JSON API is rate-limited) —
+  let usedFallback = false;
+  if (!outcome && site.fallbackProbeUrlTemplate) {
+    try {
+      const fbUrl = site.fallbackProbeUrlTemplate.replaceAll('{u}', enc);
+      const res = await osintFetch(fbUrl, { signal: AbortSignal.timeout(18_000) });
+      if (res.status === 200 || res.status === 404 || res.status === 410) {
+        const text = res.status === 200 ? (await res.text().catch(() => '')).slice(0, 300_000) : '';
+        usedFallback = true;
+        outcome = { status: res.status, body: text, url: fbUrl, via: 'egress', note: 'API rate-limited — classified via HTML page' };
+      }
+    } catch { /* fallback failed — escalate to Tor */ }
+  }
+
+  // — Pass 3: primary probe over the Tor circuit (fresh exit beats WAF blocks) —
+  if (!outcome) {
+    outcome = (await probeViaTor(site.fallbackProbeUrlTemplate?.replaceAll('{u}', enc) || url))
+      || (await probeViaTor(url));
+  }
+
+  // — Pass 4: direct connection (real IP) — accuracy lever for platforms that
+  //   rate-limit/block the shared proxy and Tor exits. Marked on the hit. —
+  if (!outcome && directAllowed()) {
+    try {
+      const needsBody = (usedFallback ? (site.fallbackProbeType || site.effectiveProbeType) : site.effectiveProbeType) !== 'status';
+      const probeUrl = (usedFallback ? site.fallbackProbeUrlTemplate : site.probeUrlTemplate)?.replaceAll('{u}', enc) || url;
+      outcome = await probeDirect(probeUrl, needsBody);
+    } catch { /* direct failed too */ }
+  }
+
+  if (!outcome) {
+    base.note = 'unreachable via egress, Tor and direct (set T3MP3ST_OSINT_ALLOW_DIRECT=1 — default on)';
     return base;
   }
+
+  // — Classify —
+  const eff: ResolvedSite = usedFallback
+    ? { ...site, effectiveProbeType: (site.fallbackProbeType || site.effectiveProbeType) as EffectiveProbeType, probeValue: site.fallbackProbeValue || site.probeValue }
+    : site;
+  const classified = classifyOutcome(eff, outcome);
+  Object.assign(base, classified);
+
+  // — Corroborate identity on FOUND hits —
+  if (base.status === 'found') {
+    let profile: ProfileHint | null = null;
+    if (usedFallback && site.name === 'GitHub' && outcome.body) {
+      const dn = githubDisplayNameFromHtml(outcome.body, username);
+      if (dn) profile = { displayName: dn };
+    }
+    if (!profile && PROFILE_APIS[site.name]) {
+      profile = await corroborate(site.name, username);
+    }
+    if (profile) base.profile = profile;
+    base.identity = scoreIdentityMatch(hints || {}, profile);
+  }
+  return base;
 }
 
 export interface SweepResult {
@@ -255,7 +472,7 @@ export interface SweepResult {
  *  catalog — used by the unit tests to exercise the classifier against a local stub. */
 export async function runUsernameSweep(
   usernameRaw: string,
-  opts: { sites?: string[]; categories?: OsintSiteCategory[]; limit?: number; customSites?: OsintSite[] } = {}
+  opts: { sites?: string[]; categories?: OsintSiteCategory[]; limit?: number; customSites?: OsintSite[]; hints?: { name?: string } } = {}
 ): Promise<SweepResult> {
   const started = Date.now();
   const username = validateUsername(usernameRaw);
@@ -281,7 +498,7 @@ export async function runUsernameSweep(
   const results: UsernameHit[] = [];
   for (let i = 0; i < sites.length; i += SWEEP_CONCURRENCY) {
     const batch = sites.slice(i, i + SWEEP_CONCURRENCY);
-    results.push(...(await Promise.all(batch.map((s) => probeSite(s, username)))));
+    results.push(...(await Promise.all(batch.map((s) => probeSite(s, username, opts.hints)))));
   }
 
   const found = results.filter((r) => r.status === 'found');
@@ -1257,11 +1474,28 @@ export function buildDossierReport(d: OsintDossier): string {
   if (d.name) ids.push(['name', d.name]);
   if (ids.length === 0) L.push('- none detected in the subject string');
   for (const [k, v] of ids) L.push(`- **${k}:** ${v}`);
+  // Subject assessment — corroboration up front, not buried in a list.
+  const matched = d.socialAccounts.filter((h) => h.identity === 'name-match');
+  const mismatched = d.socialAccounts.filter((h) => h.identity === 'name-mismatch');
+  if (d.name || d.socialAccounts.length > 0) {
+    L.push('');
+    if (matched.length > 0) {
+      const strongest = matched[0];
+      L.push(`- **assessment:** ${matched.length} account(s) corroborate the subject's name — strongest signal: ${strongest.site} ("${strongest.profile?.displayName || 'name match'}"). ${mismatched.length} handle(s) belong to different people and are flagged.`);
+    } else if (d.socialAccounts.length > 0) {
+      L.push(`- **assessment:** ${d.socialAccounts.length} handle(s) claimed but NONE corroborated against a name — treat every hit as unverified (same handle ≠ same person).`);
+    } else {
+      L.push('- **assessment:** no corroborated accounts found');
+    }
+  }
   L.push('');
 
   L.push(`## 2. SOCIAL FOOTPRINT — ${d.socialAccounts.length} claimed account(s)`);
   if (d.socialAccounts.length === 0) L.push('- no public profiles found for the handles swept');
-  for (const h of d.socialAccounts) L.push(`- [${h.confidence}] **${h.site}** — ${h.url}`);
+  for (const h of d.socialAccounts) {
+    const ident = h.identity === 'name-match' ? '✓ IDENTITY MATCH' : h.identity === 'name-mismatch' ? '≠ NAME MISMATCH (likely someone else)' : 'handle-only';
+    L.push(`- [${h.confidence}] **${h.site}** — ${h.url}${h.profile?.displayName ? ` — "${h.profile.displayName}"` : ''} _(${ident})_`);
+  }
   L.push('');
 
   L.push('## 3. BREACH / DUMP EXPOSURE');
@@ -1421,7 +1655,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
 
   if (username) {
     jobs.push(
-      runUsernameSweep(username).then((sweep) => {
+      runUsernameSweep(username, { hints: { name: parsedInput.name } }).then((sweep) => {
         mergeChecked(sweep.details);
         socialAccounts.push(...sweep.found);
         for (const hit of sweep.found) {
@@ -1441,7 +1675,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
           perms = usernamePermutations(words[0], words[words.length - 1], { max: 12 });
         } catch { return; }
         for (const perm of perms) {
-          const sweep = await runUsernameSweep(perm, { limit: 25 }).catch(() => null);
+          const sweep = await runUsernameSweep(perm, { limit: 25, hints: { name: parsedInput.name } }).catch(() => null);
           if (sweep) {
             mergeChecked(sweep.details, perm);
             for (const hit of sweep.found) {
@@ -1513,7 +1747,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
   if (extraHandles.size > 0 && extraHandles.size <= 3) {
     for (const handle of extraHandles) {
       if (handle.toLowerCase() === (username || '').toLowerCase()) continue;
-      const sweep = await runUsernameSweep(handle, { limit: 20 }).catch(() => null);
+      const sweep = await runUsernameSweep(handle, { limit: 20, hints: { name: parsedInput.name } }).catch(() => null);
       if (sweep) {
         mergeChecked(sweep.details, handle);
         for (const hit of sweep.found) {
@@ -1524,11 +1758,16 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     }
   }
 
-  // Dedupe accounts (perm/secondary sweeps can double-hit), then score presence.
+  // Dedupe accounts (perm/secondary sweeps can double-hit), then score presence —
+  // corroborated (name-matched) accounts weigh double; clear mismatches don't count.
   const seenUrls = new Set<string>();
   const uniqueAccounts = socialAccounts.filter((h) => (seenUrls.has(h.url) ? false : (seenUrls.add(h.url), true)));
-  const weight = (h: UsernameHit) => (h.confidence === 'high' ? 2 : h.confidence === 'medium' ? 1 : 0.5);
-  const foundWeight = uniqueAccounts.reduce((acc, h) => acc + weight(h), 0);
+  const weight = (h: UsernameHit) =>
+    (h.confidence === 'high' ? 2 : h.confidence === 'medium' ? 1 : 0.5) +
+    (h.identity === 'name-match' ? 2 : h.identity === 'name-mismatch' ? -1.5 : 0);
+  const foundWeight = uniqueAccounts
+    .filter((h) => h.identity !== 'name-mismatch')
+    .reduce((acc, h) => acc + Math.max(weight(h), 0), 0);
   dossier.presenceScore = Math.min(100, Math.round((foundWeight / 40) * 100));
 
   // City-level public signals (Gravatar location text, NANP area notes) → map points.
@@ -1706,9 +1945,15 @@ export async function screenSubject(nameRaw: string): Promise<ScreeningResult> {
 // =============================================================================
 
 function fmtSweep(sweep: SweepResult): string {
-  const lines = sweep.found.map((h) => `  [${h.confidence}] ${h.site} (${h.category}): ${h.url}`);
+  const lines = sweep.found.map((h) => {
+    const ident = h.identity === 'name-match' ? ' [✓ IDENTITY MATCH]' : h.identity === 'name-mismatch' ? ' [≠ name mismatch — likely someone else]' : '';
+    const dn = h.profile?.displayName ? ` — "${h.profile.displayName}"` : '';
+    return `  [${h.confidence}] ${h.site}${ident}: ${h.url}${dn}`;
+  });
+  const corroborated = sweep.found.filter((h) => h.identity === 'name-match').length;
+  const mismatched = sweep.found.filter((h) => h.identity === 'name-mismatch').length;
   return [
-    `Username sweep for "${sweep.username}": ${sweep.found.length} found / ${sweep.absent} absent / ${sweep.unknown.length} unknown (${sweep.checked} sites, ${sweep.durationMs}ms)`,
+    `Username sweep for "${sweep.username}": ${sweep.found.length} found (${corroborated} corroborated as subject, ${mismatched} mismatched) / ${sweep.absent} absent / ${sweep.unknown.length} unknown (${sweep.checked} sites, ${sweep.durationMs}ms)`,
     ...lines,
     sweep.unknown.length ? `  unknown: ${sweep.unknown.map((u) => u.site).join(', ')}` : '',
   ].filter(Boolean).join('\n');
@@ -1722,12 +1967,14 @@ export const OSINT_TOOLS: CustomTool[] = [
     parameters: [
       { name: 'username', type: 'string', description: 'Username to sweep (no @)', required: true },
       { name: 'sites', type: 'string', description: 'Comma-separated site names to limit the sweep (default: all)', required: false },
+      { name: 'name', type: 'string', description: 'Known full name of the subject — enables identity corroboration on hits (recommended)', required: false },
     ],
     handler: async (context) => {
       const username = context.parameters.username as string;
       const sites = (context.parameters.sites as string | undefined)?.split(',').map((s) => s.trim()).filter(Boolean);
+      const name = context.parameters.name as string | undefined;
       try {
-        const sweep = await runUsernameSweep(username, { sites });
+        const sweep = await runUsernameSweep(username, { sites, hints: { name } });
         const findings = sweep.found.slice(0, 20).map((h) => ({
           title: `Social Account Found — ${h.site} (${sweep.username})`,
           severity: 'info' as const,

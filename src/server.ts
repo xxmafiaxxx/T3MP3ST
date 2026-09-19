@@ -70,8 +70,13 @@ import {
   fetchEarthquakes,
   fetchWeatherAlerts,
   fetchIss,
+  fetchSatellites,
+  SAT_GROUPS,
+  SAT_GROUP_LABELS,
+  isSatGroup,
   reverseGeocode,
   fetchPois,
+  fetchCellTowers,
   POI_KINDS,
   isPoiKind,
 } from './tools/public-gps.js';
@@ -7694,7 +7699,8 @@ app.post('/api/osint/username-sweep', async (req: Request, res: Response): Promi
   if (!username) { res.status(400).json({ error: 'username required' }); return; }
   try {
     console.log(`[T3MP3ST][OSINT] username sweep: ${username}${sites ? ` (${sites.length} sites)` : ''}`);
-    const sweep = await runUsernameSweep(username, { sites });
+    const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
+    const sweep = await runUsernameSweep(username, { sites, hints: { name } });
     for (const hit of sweep.found.slice(0, 20)) {
       upsertMissionFindingToLedger({
         title: `Social Account Found — ${hit.site} (${sweep.username})`,
@@ -8030,6 +8036,39 @@ app.get('/api/gps/poi', async (req: Request, res: Response): Promise<void> => {
   const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
   const feed = await fetchPois(lat, lon, Number.isFinite(radius) ? radius : 500, kind, { refresh });
   res.json({ success: true, ...feed });
+});
+
+// Cell-tower SITES (OpenCelliD, key-gated) — antenna registry positions only,
+// no device association. Same honest key-required note pattern as the dump lanes.
+app.get('/api/gps/towers', async (req: Request, res: Response): Promise<void> => {
+  const bbox = buildBbox(req.query.lamin, req.query.lomin, req.query.lamax, req.query.lomax);
+  if (!bbox) {
+    res.status(400).json({ error: 'bbox required: lamin,lomin,lamax,lomax (numeric, ≤10° span per axis)' });
+    return;
+  }
+  const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
+  const feed = await fetchCellTowers(bbox, { refresh });
+  res.json({ success: true, bbox, ...feed });
+});
+
+app.get('/api/gps/satellites/groups', (_req: Request, res: Response): void => {
+  res.json({ success: true, groups: SAT_GROUPS.map((g) => ({ id: g, label: SAT_GROUP_LABELS[g] || g })) });
+});
+
+app.get('/api/gps/satellites', async (req: Request, res: Response): Promise<void> => {
+  const rawGroup = String(req.query.group || 'visual');
+  const group = isSatGroup(rawGroup) ? rawGroup : null;
+  if (!group) {
+    res.status(400).json({ error: `unknown group '${rawGroup}' — use /api/gps/satellites/groups`, groups: SAT_GROUPS.slice() });
+    return;
+  }
+  const rawLimit = parseInt(String(req.query.limit || '200'), 10);
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 200;
+  const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
+  const bbox = buildBbox(req.query.lamin, req.query.lomin, req.query.lamax, req.query.lomax);
+  const feed = await fetchSatellites({ group, limit, refresh });
+  const points = bbox ? feed.points.filter((p) => bboxOverlaps(bbox, p.lat, p.lon)) : feed.points;
+  res.json({ success: true, group, limit, bbox: bbox || undefined, ...feed, points });
 });
 
 // --- Dark web direct — leak-site monitor + onion search/fetch (keyless lanes) ---
