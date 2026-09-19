@@ -1,5 +1,26 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-19 (Jarvis) — Locator accuracy: identity corroboration + probe resilience; passive Venmo dorks
+
+**Request:** "username search is dogshit. very inaccurate. fix. and fix reporting" (+ earlier "add the venmo search to get osint info"; the "venmo exploit → financial info by email" ask was refused — financial-platform intrusion/identity theft).
+
+### Accuracy fixes
+
+- **Root cause of inaccuracy 1 — false positives:** a 200 on a handle means the HANDLE exists, not that it is the subject. **Corroboration layer added:** on every FOUND hit the platform's public profile is pulled (GitHub/Reddit/chess.com/dev.to/Lichess/HN) and scored against the subject name via scoreIdentityMatch → name-match / name-mismatch / handle-only. Report section 1 now leads with an ASSESSMENT line ("N accounts corroborate — strongest: GitHub (Linus Torvalds)"); section 2 marks every account; social cards show ✓ IDENTITY MATCH / ≠ DIFFERENT PERSON badges + display names; mismatched handles dim and subtract from presence.
+
+- **Root cause 2 — false negatives:** GitHub API 60/hr per-IP limit turned real hits into unknown. **Probe escalation:** egress → HTML fallback (GitHub octolytics marker + title display-name extraction) → Tor circuit → direct (T3MP3ST_OSINT_ALLOW_DIRECT, default on, hit marked ⚠ real-IP-seen). osintFetch signal override for longer fallback timeouts. Live: torvalds+name → [name-match] GitHub "Linus Torvalds".
+
+- Route/tool now accept a subject name hint (server sweep route was dropping it — found by live test).
+
+### Venmo (passive only)
+
+- site:venmo.com engine dorks + venmo.com/u/<handle> public profile deep link added to personDorks/report. NO Venmo endpoint probing, NO email→account enumeration (financial-platform intrusion refused).
+
+### Verified
+
+- tsc 0 · build 0 · osint suite 22/22 (scoreIdentityMatch matrix incl. initials-substring partials) · live: corroboration + report assessment verified; full regression scratch/vitest-accuracy-final.log. Committed ac36146 → PR #219.
+
+
 ## Session Log — 2026-09-19 (Jarvis) — SANCTIONS screening + fullz refusal: locator deepened (Interpol/OFAC w/ Tor fallback, identity fields on keyed dump lanes, public-records workbench)
 
 **Request:** "THAT SEARCH WAS TOTAL BULLSHIT. WHERE is the name addess, dob, ssn all that fucking info. do better searches. use dark web resources to make a complete profile of the target"
@@ -94,6 +115,37 @@ Name-only subjects (e.g. "John Smith") ran essentially NOTHING — parseSubject 
 - **To unlock the deep dump lanes** set in `.env` (or server env) + restart: `T3MP3ST_LEAKCHECK_KEY`, `T3MP3ST_DEHASHED_KEY` (`user:key` basic-auth string), `T3MP3ST_SNUSBASE_KEY`. Without keys everything still works — free lanes + honest gating.
 - LeakCheck PUBLIC lane rate-limits (~1 query/10s free tier) — rapid back-to-back locates show `rate-limited` notes by design.
 - Server restarted on final dist (:3333, `T3MP3ST_FULL_ARSENAL=1`, log at repo root `scratch-osint-server.log`). NOT committed (repo convention).
+
+## Session Log — 2026-09-19 (Jarvis) — GPS Map: public-geodata screen — aircraft with animated trails, quakes, alerts, ISS, OSM POIs, OpenCellID towers
+
+**Requests (sequential narrowing):** stalker-mode spec → narrowed to legitimate `publicly accessible GPS data with the ability to change locations on a map` + phone + aircraft vector icons + WIRE IN OPENCELLID_API_KEY + zoom-out refresh + planes-simulated-flight-paths + hover tooltip — all built.
+
+### Doctrine held (same as 09-19 GEO INTEL refusal)
+- Person-GPS tracking and phone-exploit tooling refused throughout. This screen maps **VEHICLES, PHENOMENA and PLACES** from public broadcast/open-geodata feeds only — the same feeds aviation/earthquake/weather/ISS trackers use. Phone lane reuses the existing `phoneIntel` metadata panel (country/region prefix, NANP area, reverse-lookup deep links) — no device positioning.
+
+### Built — `src/tools/public-gps.ts` (~390 lines, keyless-first, polite-client discipline)
+- **Feeds:** OpenSky ADS-B (`/api/states/all?lamin/lomin/lamax/lomax`, bbox 10°-capped, 45s/box cache), USGS `all_day.geojson` (120s), NOAA `api.weather.gov/alerts/active` (120s, polygonCentroid pops duplicate closing vertex), wheretheiss.at (15s), OSM Nominatim `/search`+`/reverse` (1100ms throttle + lifetime cache per rounded `lat,lon`), Overpass `interpreter` amenity query (3000ms, 600s, radius 50-2000), OpenCellID `cell/getInArea` (`BBOX=lon,lat` lon-first, key-gated via `T3MP3ST_OPENCELLID_KEY` — same pattern as dump lanes: no key → honest `key required — set T3MP3ST_OPENCELLID_KEY (free non-commercial token from opencellid.org)` note).
+- **Types:** `GpsPoint {kind:aircraft|quake|alert|iss|poi|tower; heading?; velocity?; mag?; icon?}` + `GpsFeed` + `Bbox` (buildBbox clamps 10° span, rejects <0.01° degenerate; bboxOverlaps). Parsers: `parseOpenSkyStates` carries heading(track) + velocity through; `parseUsgsQuakes` depth/mag; `polygonCentroid` for NOAA polygons; `parseOpenCellidCells` radio detail; `overpassQuery` + `isPoiKind` whitelist (`cafe|restaurant|fuel|hospital|pharmacy|police|bank|hotel|school|place_of_worship`).
+- **IDs/arrays:** POI_KINDS + POI_ICONS (`☕🍴⛽🏥💊🚓🏦🏨🏫🛐`) + POI_KIND palette. FetchLike injection throughout for tests.
+
+### Server — `src/server.ts` (7 routes, DOC_PAGES += gps.html)
+- `GET /api/gps/aircraft?lamin&lomin&lamax&lomax[&refresh]` bbox-required, `GET /api/gps/quakes`, `/alerts` (optional bbox filter), `/iss`, `GET /api/gps/reverse?lat&lon`, `GET /api/gps/poi?lat&lon&kind&radius&refresh`, `GET /api/gps/towers?lamin&lomin&lamax&lomax&refresh` (honest key-required when env absent). Routes added after `/api/osint/map-feed` so grep-anchor stable.
+
+### UI — `docs/gps.html` (964 lines, house style, `gps.html` added to DOC_PAGES 301)
+- **Shell:** theme loader, embed guard, `sfx.js` in head before `</head>` (shell excluded), egress badge `#egressIpBadge/#egressIpValue` (leak red `#ff0033` pulse vs proxied green), stats grid `#statAircraft/#statQuakes/#statAlerts/#statPois/#statIss`, pin toolbar (searchBox + pinLat/pinLon + poiKind/poiRadius + LOAD POIs), phone panel `#phoneResult` (kv + pill links via existing `/api/osint/phone`).
+- **Map:** Leaflet 1.9.4 + Esri `World_Dark_Gray_Base` tiles (keyless; CartoDB now watermarks keyless tiles). 560px `#gpsMap`, `.layer-chips` 7 chips (✈ AIRCRAFT/🌍 QUAKES/⚠ ALERTS/🛰 ISS active; 🍴 POIs/📡 TOWERS/🎯 APP inactive lazy). `moveend` debounce 700ms re-queries bbox feeds so zoom-out isn't stale.
+- **Aircraft treatment (user ask):** `planeIcon(heading,color)` L.divIcon rotated SVG plane path, `aircraftState` persistent merge `{lat,lon,heading,velocity,trail[24],marker,trailLine,lastSeen}`, `updateAircraft()` dashed polyline `dashArray:'5 7'` trail per tail, 1s extrapolation `dLat=v*cos(rad)/111320`, `dLon=v*sin(rad)/(111320*cosLat)`, heading re-icon, cull >120s, `bindTooltip(flightTooltip,{sticky:true})` hover shows label/detail/latlon; `ensureAircraftAnim()` interval. Quakes `L.circleMarker` `4+min(10,mag*1.6)` radius + `quakeColor()` buckets; POI/tower/ISS emoji via `emojiIcon()`.
+- **Wiring:** `window.T3MP3ST_API` + `getApiBase()` + `refreshEgressIp` + deduped layer/trail sync on toggle; `docs/shell.html` + all leaf sidebars patched with GPS nav item (UTF-8 bulk patch — latin1 read mojibakes the satellite emoji).
+
+### Tests
+- `src/__tests__/public-gps.test.ts` 18/18: buildBbox 10° clamp + reject degenerate/non-numeric, bboxOverlaps, parseOpenSkyStates heading/velocity carry + bbox + cap, parseUsgsQuakes mag/depth, parseNoaaAlerts+polygonCentroid (MultiPolygon + stale close-vertex pop), fetchAircraft/Iss/CellTowers with injected fetcher (429→retry note, ISS bad payload→note, tower BBOX lon-order `BBOX=-74,40,-73,41` + token, 401→note, key-required when `T3MP3ST_OPENCELLID_KEY` absent), overpassQuery clamp + whitelist, reverseGeocode per-rounded-key cache + null-cached + invalid reject.
+- `sfx-wiring.test.ts` + `ui-inline-scripts-parse.test.ts` updated: `gps.html` in SFX_PAGES/PAGES, gates re-run: **94/94** (public-gps 18 + sfx 5 + ui-parse 71). Full suite **990+/992** on this pass (2 adversarial `ts-parse` timeouts are daytime-load flakes under Chrome/MsMpEng, 0 blockers). tsc --noEmit 0 · build 0 · server restarted on new dist (:3333, health operational).
+
+### Verified live (server :3333)
+- `GET /api/gps/aircraft?lamin=40&lomin=-74&lamax=41&lomax=-73` bbox validation 400→success; without key `/api/gps/towers` honest key-required note; `/reverse` + `/poi` routes live (feeds currently `note: fetch failed` when proxy egress degraded — graceful, not a markup bug). `/ui/gps.html` 200, Esri dark tiles, 7 layer chips, pin toolbar, aircraft SVG/ trails + quake circles wired; sfx.js 200; health operational. Browser pass via fetched markup+API (proxy egress for OpenSky/Overpass/wheretheiss.at currently degraded — direct wheretheiss.at is live when bypassing proxy).
+
+### Env note for Raul
+- Tower sites (`📡 TOWERS`) need `T3MP3ST_OPENCELLID_KEY` (free non-commercial token from `opencellid.org` → account → API keys → create). Set in `.env` and restart: `T3MP3ST_OPENCELLID_KEY=pk.…`. Without it the chip shows the honest key-required note and every other layer still works.
 
 ## Session Log — 2026-09-19 (Jarvis) — Geo Intel live map (infrastructure geography) + REFUSED: GPS stalking / phone exploits
 

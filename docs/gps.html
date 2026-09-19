@@ -262,6 +262,10 @@
             font-size: 26px; line-height: 26px; filter: drop-shadow(0 0 6px rgba(255, 193, 7, 0.8));
             cursor: grab;
         }
+        .gps-icon-marker {
+            text-align: center; text-shadow: 0 0 4px #04121a, 0 1px 3px rgba(0, 0, 0, 0.9);
+        }
+        .gps-plane { filter: drop-shadow(0 0 3px rgba(112, 161, 255, 0.85)); }
 
         .mobile-toggle {
             display: none; position: fixed; top: 14px; left: 14px; z-index: 200;
@@ -344,6 +348,7 @@
             <div class="page-content">
                 <div class="stats-grid">
                     <div class="stat-card"><div class="stat-value" id="statAircraft">—</div><div class="stat-label">Aircraft In View</div></div>
+                    <div class="stat-card"><div class="stat-value" id="statSats">—</div><div class="stat-label">Satellites Shown</div></div>
                     <div class="stat-card"><div class="stat-value" id="statQuakes">—</div><div class="stat-label">Quakes (24h)</div></div>
                     <div class="stat-card"><div class="stat-value" id="statAlerts">—</div><div class="stat-label">Weather Alerts</div></div>
                     <div class="stat-card"><div class="stat-value" id="statPois">—</div><div class="stat-label">POIs At Pin</div></div>
@@ -388,6 +393,28 @@
                     </div>
                 </div>
 
+                <div class="panel">
+                    <div class="panel-title">🛰 Public Satellites — CelesTrak GP TLE propagated live with SGP4 (keyless)</div>
+                    <div class="toolbar">
+                        <div class="field"><label>Constellation / group</label>
+                            <select id="satGroup" style="min-width:210px"></select>
+                        </div>
+                        <div class="field"><label>Show</label>
+                            <select id="satLimit">
+                                <option value="50">50 sats</option>
+                                <option value="100">100 sats</option>
+                                <option value="200" selected>200 sats</option>
+                                <option value="350">350 sats</option>
+                                <option value="500">500 sats</option>
+                            </select>
+                        </div>
+                        <button class="btn" onclick="loadSats(true)">🛰 LOAD SATS</button>
+                        <button class="btn ghost" onclick="fitSats()">⛶ FIT ALL</button>
+                        <button class="btn ghost" onclick="clearSats()">✕ CLEAR</button>
+                        <span class="status-line" id="satStatus" style="padding:0 4px">Pick a group and load — positions are propagated to now via satellite.js SGP4.</span>
+                    </div>
+                </div>
+
                 <div class="map-wrap">
                     <div id="gpsMap"></div>
                     <div class="pin-readout">
@@ -397,14 +424,16 @@
                     </div>
                     <div class="layer-chips">
                         <span class="layer-chip active" data-layer="aircraft" onclick="toggleLayer('aircraft')"><span class="dot" style="background:#70a1ff"></span>✈ AIRCRAFT <span class="count" id="cntAircraft">0</span></span>
+                        <span class="layer-chip" data-layer="sat" onclick="toggleLayer('sat')"><span class="dot" style="background:#ffd166"></span>🛰 SATS <span class="count" id="cntSat">0</span></span>
                         <span class="layer-chip active" data-layer="quake" onclick="toggleLayer('quake')"><span class="dot" style="background:#ffb142"></span>🌍 QUAKES <span class="count" id="cntQuakes">0</span></span>
                         <span class="layer-chip active" data-layer="alert" onclick="toggleLayer('alert')"><span class="dot" style="background:#ff4757"></span>⚠ ALERTS <span class="count" id="cntAlerts">0</span></span>
-                        <span class="layer-chip active" data-layer="iss" onclick="toggleLayer('iss')"><span class="dot" style="background:#2ed573"></span>🛰 ISS <span class="count" id="cntIss">0</span></span>
+                        <span class="layer-chip active" data-layer="iss" onclick="toggleLayer('iss')" ondblclick="locateIss()" title="ISS — live International Space Station position (wheretheiss.at). Click to toggle, double-click to fly to it."><span class="dot" style="background:#2ed573"></span>🛰 ISS <span class="count" id="cntIss">0</span></span><button class="btn ghost" style="padding:4px 8px;font-size:11px;" onclick="locateIss()" title="Center map on ISS now">◎ LOCATE ISS</button>
                         <span class="layer-chip" data-layer="poi" onclick="toggleLayer('poi')"><span class="dot" style="background:#b57bff"></span>🍴 POIs <span class="count" id="cntPois">0</span></span>
+                        <span class="layer-chip" data-layer="tower" onclick="toggleLayer('tower')"><span class="dot" style="background:#00d2d3"></span>📡 TOWERS <span class="count" id="cntTower">0</span></span>
                         <span class="layer-chip" data-layer="app" onclick="toggleLayer('app')"><span class="dot" style="background:#2fffd2"></span>🎯 APP TARGETS <span class="count" id="cntApp">0</span></span>
                     </div>
                 </div>
-                <div class="status-line" id="gpsStatus">Feeds: OpenSky ADS-B (anonymous tier) · USGS 24h · NOAA/NWS active alerts · wheretheiss.at · OpenStreetMap/Overpass. All keyless.</div>
+                <div class="status-line" id="gpsStatus">Feeds: OpenSky ADS-B (anonymous tier) · CelesTrak satellites (GP TLE + SGP4) · USGS 24h · NOAA/NWS active alerts · wheretheiss.at · OpenStreetMap/Overpass · OpenCelliD tower registry (key-gated: T3MP3ST_OPENCELLID_KEY). All keyless except towers.</div>
 
                 <div class="panel" style="margin-top:18px;">
                     <div class="panel-title">📱 Phone Number Intel — prefix metadata &amp; public reverse-lookup lanes</div>
@@ -510,10 +539,13 @@
         // ═══════════════════════════════════════════════════════════════
         // MAP + PIN
         // ═══════════════════════════════════════════════════════════════
-        var LAYERS = ['aircraft', 'quake', 'alert', 'iss', 'poi', 'app'];
-        var LAYER_COLORS = { aircraft: '#70a1ff', quake: '#ffb142', alert: '#ff4757', iss: '#2ed573', poi: '#b57bff', app: '#2fffd2' };
-        var layerOn = { aircraft: true, quake: true, alert: true, iss: true, poi: false, app: false };
+        var LAYERS = ['aircraft', 'sat', 'quake', 'alert', 'iss', 'poi', 'tower', 'app'];
+        var LAYER_COLORS = { aircraft: '#70a1ff', sat: '#ffd166', quake: '#ffb142', alert: '#ff4757', iss: '#2ed573', poi: '#b57bff', tower: '#00d2d3', app: '#2fffd2' };
+        var layerOn = { aircraft: true, sat: false, quake: true, alert: true, iss: true, poi: false, tower: false, app: false };
         var map = null;
+        var aircraftTrails = null;
+        var aircraftState = {};
+        var aircraftAnimTimer = null;
         var layerGroups = {};
         var pinMarker = null;
         var pin = null;              // {lat, lon}
@@ -530,11 +562,26 @@
                 attribution: 'Tiles &copy; Esri — Source: USGS Intermap, GIS User Community &middot; GEBCO &middot; Feeds: OpenSky/USGS/NOAA/OSM',
                 maxZoom: 17,
             }).addTo(map);
+            aircraftTrails = L.layerGroup();
+            if (layerOn.aircraft) aircraftTrails.addTo(map);
             LAYERS.forEach(function (k) {
                 layerGroups[k] = L.layerGroup();
                 if (layerOn[k]) layerGroups[k].addTo(map);
             });
             map.on('click', function (e) { movePin(e.latlng.lat, e.latlng.lng, false); });
+            // Pan/zoom must re-query the feeds for the new viewport (aircraft and
+            // towers are bbox-scoped; quakes/alerts bbox-filter). Debounced so a
+            // drag doesn't hammer the free tiers.
+            var moveTimer = null;
+            map.on('moveend', function () {
+                clearTimeout(moveTimer);
+                moveTimer = setTimeout(function () {
+                    loadAircraft(false);
+                    loadQuakes(false);
+                    loadAlerts(false);
+                    if (layerOn.tower) loadTowers(false);
+                }, 700);
+            });
             movePin(40.7, -73.97, true);
             refreshAll();
         }
@@ -548,9 +595,49 @@
                 else map.removeLayer(layerGroups[kind]);
             }
             if (kind === 'app' && layerOn[kind] && !layerGroups.app.getLayers().length) loadAppFeed();
+            if (kind === 'aircraft') {
+                if (layerOn.aircraft) { if (aircraftTrails) aircraftTrails.addTo(map); } else { if (aircraftTrails) map.removeLayer(aircraftTrails); }
+            }
+            if (kind === 'tower' && layerOn[kind] && !layerGroups.tower.getLayers().length) loadTowers(false);
+            if (kind === 'sat' && layerOn[kind] && !layerGroups.sat.getLayers().length) loadSats(false);
+            if (kind === 'iss' && layerOn[kind]) {
+                if (!layerGroups.iss.getLayers().length) loadIss(true).then(function(){ setTimeout(function(){ locateIss(false); }, 300); });
+                startIssPoll();
+            } else if (kind === 'iss' && !layerOn[kind]) {
+                stopIssPoll();
+            }
         }
 
         function setStatus(html) { var el = document.getElementById('gpsStatus'); if (el) el.innerHTML = html; }
+
+        function flightTooltip(p) {
+            var lines = ['<b>' + esc(p.label) + '</b>'];
+            if (p.detail) lines.push(esc(p.detail));
+            lines.push(p.lat.toFixed(3) + ', ' + p.lon.toFixed(3));
+            return lines.join('<br>');
+        }
+
+        function ensureAircraftAnim() {
+            if (aircraftAnimTimer) return;
+            aircraftAnimTimer = setInterval(function () {
+                var now = Date.now();
+                Object.values(aircraftState).forEach(function (s) {
+                    if (typeof s.velocity !== 'number' || typeof s.heading !== 'number' || s.velocity < 8) return;
+                    if (now - s.lastSeen > 55000) return;
+                    if (!s.marker || !s.trailLine) return;
+                    var rad = s.heading * Math.PI / 180;
+                    var dLat = (s.velocity * Math.cos(rad)) / 111320;
+                    var cosLat = Math.cos(s.lat * Math.PI / 180);
+                    if (Math.abs(cosLat) < 0.15) cosLat = 0.15 * (cosLat < 0 ? -1 : 1);
+                    var dLon = (s.velocity * Math.sin(rad)) / (111320 * cosLat);
+                    s.lat += dLat; s.lon += dLon;
+                    s.marker.setLatLng([s.lat, s.lon]);
+                    s.trail.push([s.lat, s.lon]);
+                    if (s.trail.length > 24) s.trail.shift();
+                    s.trailLine.setLatLngs(s.trail);
+                });
+            }, 1000);
+        }
 
         function viewBbox() {
             if (!map) return null;
@@ -629,24 +716,105 @@
         }
 
         // ── FEED LOADERS ─────────────────────────────────────────────
-        function feedPointMarker(p, color, radius) {
-            return L.circleMarker([p.lat, p.lon], {
-                radius: radius || 5, color: color, weight: 1.5,
-                fillColor: color, fillOpacity: 0.75,
+        // Markers should read like a map: rotated plane glyphs for aircraft,
+        // magnitude-scaled circles for quakes, emoji pins for icon-bearing kinds.
+        function planeIcon(heading, color) {
+            return L.divIcon({
+                className: '',
+                html: '<div class="gps-plane" style="width:20px;height:20px;transform:rotate(' + (typeof heading === 'number' ? heading : 0) + 'deg);">' +
+                    '<svg width="20" height="20" viewBox="0 0 24 24"><path d="M12 2 L13.6 8.6 L22 12.4 L13.6 13.6 L13.6 17.4 L16.4 20 L16.4 21.4 L12 19.8 L7.6 21.4 L7.6 20 L10.4 17.4 L10.4 13.6 L2 12.4 L10.4 8.6 Z" fill="' + color + '" stroke="#04121a" stroke-width="0.8"/></svg></div>',
+                iconSize: [20, 20], iconAnchor: [10, 10],
             });
         }
 
+        function emojiIcon(ch, size) {
+            var s = size || 18;
+            return L.divIcon({
+                className: '',
+                html: '<div class="gps-icon-marker" style="font-size:' + s + 'px;line-height:' + s + 'px;">' + ch + '</div>',
+                iconSize: [s, s], iconAnchor: [s / 2, s / 2],
+            });
+        }
+
+        function quakeColor(mag) {
+            if (typeof mag !== 'number') return '#9baeb8';
+            if (mag >= 6) return '#ff3355';
+            if (mag >= 4.5) return '#ff7b42';
+            if (mag >= 2.5) return '#ffb142';
+            return '#ffe084';
+        }
+
+        function feedPointMarker(p, kind) {
+            var color = LAYER_COLORS[kind];
+            if (kind === 'quake') {
+                var r = 4 + (typeof p.mag === 'number' ? Math.min(10, p.mag * 1.6) : 2);
+                var qc = quakeColor(p.mag);
+                return L.circleMarker([p.lat, p.lon], { radius: r, color: qc, weight: 1.5, fillColor: qc, fillOpacity: 0.6 });
+            }
+            if (p.icon) return L.marker([p.lat, p.lon], { icon: emojiIcon(p.icon, kind === 'iss' ? 22 : 17), title: p.label });
+            return L.circleMarker([p.lat, p.lon], { radius: 5, color: color, weight: 1.5, fillColor: color, fillOpacity: 0.75 });
+        }
+
         function renderFeed(kind, feed) {
+            if (kind === 'aircraft') { updateAircraft(feed); return; }
             var g = layerGroups[kind];
             if (!g) return;
             g.clearLayers();
             (feed.points || []).forEach(function (p) {
-                var m = feedPointMarker(p, LAYER_COLORS[kind], kind === 'iss' ? 8 : 5);
+                var m = feedPointMarker(p, kind);
                 m.bindPopup('<b>' + esc(p.label) + '</b><br>' + esc(p.detail || '') + '<br><span style="color:#6f8794">' + p.lat.toFixed(3) + ', ' + p.lon.toFixed(3) + '</span>');
+                if (kind !== 'quake') m.bindTooltip(flightTooltip(p), { direction: 'top', offset: [0, -8], sticky: true });
                 g.addLayer(m);
             });
             var cnt = document.getElementById('cnt' + kind.charAt(0).toUpperCase() + kind.slice(1));
             if (cnt) cnt.textContent = String((feed.points || []).length);
+        }
+
+        function updateAircraft(feed) {
+            ensureAircraftAnim();
+            var now = Date.now();
+            var seen = {};
+            (feed.points || []).forEach(function (p) {
+                seen[p.id] = true;
+                var s = aircraftState[p.id];
+                if (!s) {
+                    s = { id: p.id, trail: [[p.lat, p.lon]], lastSeen: now };
+                    aircraftState[p.id] = s;
+                    s.lat = p.lat; s.lon = p.lon; s.heading = p.heading; s.velocity = p.velocity;
+                    s.label = p.label; s.detail = p.detail;
+                    var m = L.marker([p.lat, p.lon], { icon: planeIcon(p.heading, LAYER_COLORS.aircraft) });
+                    m.bindPopup('<b>' + esc(p.label) + '</b><br>' + esc(p.detail || '') + '<br><span style="color:#6f8794">' + p.lat.toFixed(3) + ', ' + p.lon.toFixed(3) + '</span>');
+                    m.bindTooltip(flightTooltip(p), { direction: 'top', offset: [0, -10], sticky: true });
+                    s.marker = m; layerGroups.aircraft.addLayer(m);
+                    var line = L.polyline([[p.lat, p.lon]], { color: LAYER_COLORS.aircraft, weight: 1.6, opacity: 0.32, dashArray: '5 7' });
+                    s.trailLine = line; if (aircraftTrails) aircraftTrails.addLayer(line);
+                } else {
+                    var last = s.trail[s.trail.length - 1];
+                    if (!last || Math.abs(last[0] - p.lat) > 0.00008 || Math.abs(last[1] - p.lon) > 0.00008) {
+                        s.trail.push([p.lat, p.lon]);
+                        if (s.trail.length > 24) s.trail.shift();
+                        s.trailLine.setLatLngs(s.trail);
+                    }
+                    s.lat = p.lat; s.lon = p.lon; s.heading = p.heading; s.velocity = p.velocity;
+                    s.label = p.label; s.detail = p.detail; s.lastSeen = now;
+                    s.marker.setLatLng([p.lat, p.lon]);
+                    if (typeof p.heading === 'number') s.marker.setIcon(planeIcon(p.heading, LAYER_COLORS.aircraft));
+                    s.marker.setTooltipContent(flightTooltip(p));
+                    s.marker.getPopup().setContent('<b>' + esc(p.label) + '</b><br>' + esc(p.detail || '') + '<br><span style="color:#6f8794">' + p.lat.toFixed(3) + ', ' + p.lon.toFixed(3) + '</span>');
+                }
+                s.lastSeen = now;
+            });
+            Object.keys(aircraftState).forEach(function (id) {
+                if (seen[id]) return;
+                if (Date.now() - aircraftState[id].lastSeen > 120000) {
+                    try { layerGroups.aircraft.removeLayer(aircraftState[id].marker); } catch (e) {}
+                    try { if (aircraftTrails) aircraftTrails.removeLayer(aircraftState[id].trailLine); } catch (e) {}
+                    delete aircraftState[id];
+                }
+            });
+            var n = Object.keys(aircraftState).length;
+            var el = document.getElementById('cntAircraft'); if (el) el.textContent = String(n);
+            var st = document.getElementById('statAircraft'); if (st) st.textContent = String(n);
         }
 
         function esc(s) {
@@ -662,11 +830,28 @@
                     '&lamin=' + bbox.lamin.toFixed(3) + '&lomin=' + bbox.lomin.toFixed(3) +
                     '&lamax=' + bbox.lamax.toFixed(3) + '&lomax=' + bbox.lomax.toFixed(3));
                 renderFeed('aircraft', d);
-                document.getElementById('statAircraft').textContent = String((d.points || []).length);
                 var note = d.note ? ' · <span class="warn">aircraft: ' + esc(d.note) + '</span>' : '';
-                setStatus('aircraft <b>' + (d.points || []).length + '</b> in view' + note);
+                var cov = (bbox.lamax - bbox.lamin > 10.2 || bbox.lomax - bbox.lomin > 10.2)
+                    ? ' · coverage: center 10° of view (OpenSky anonymous cap)'
+                    : '';
+                setStatus('aircraft <b>' + (d.points || []).length + '</b> in view' + cov + note);
             } catch (e) {
                 setStatus('<span class="warn">aircraft feed: ' + esc(e.message || e) + '</span>');
+            }
+        }
+
+        async function loadTowers(refresh) {
+            if (!map) return;
+            var bbox = viewBbox();
+            if (!bbox) return;
+            try {
+                var d = await api('/api/gps/towers?refresh=' + (refresh ? 1 : 0) +
+                    '&lamin=' + bbox.lamin.toFixed(3) + '&lomin=' + bbox.lomin.toFixed(3) +
+                    '&lamax=' + bbox.lamax.toFixed(3) + '&lomax=' + bbox.lomax.toFixed(3));
+                renderFeed('tower', d);
+                if (d.note) setStatus('<span class="warn">cell towers: ' + esc(d.note) + '</span>');
+            } catch (e) {
+                setStatus('<span class="warn">tower feed: ' + esc(e.message || e) + '</span>');
             }
         }
 
@@ -700,9 +885,105 @@
                 renderFeed('iss', d);
                 var p = (d.points || [])[0];
                 document.getElementById('statIss').textContent = p ? p.lat.toFixed(1) + ', ' + p.lon.toFixed(1) : '—';
+                if (d.note) setStatus('<span class="warn">ISS: ' + esc(d.note) + '</span>');
+                else if (p && d.points.length) {
+                    // Give operator a hint that ISS is global — not in current viewport
+                    var b = map ? map.getBounds() : null;
+                    var inView = b && p.lat >= b.getSouth() && p.lat <= b.getNorth() && p.lon >= b.getWest() && p.lon <= b.getEast();
+                    if (!inView && layerOn.iss) setStatus('ISS at <b>' + p.lat.toFixed(2) + ', ' + p.lon.toFixed(2) + '</b> (' + esc(p.detail || '') + ') — off-screen, use <b>◎ LOCATE ISS</b> or double-click the 🛰 chip to fly there.');
+                }
+                return d;
             } catch (e) {
                 setStatus('<span class="warn">ISS feed: ' + esc(e.message || e) + '</span>');
+                return null;
             }
+        }
+
+        var issPollTimer = null;
+        function startIssPoll() {
+            if (issPollTimer) return;
+            issPollTimer = setInterval(function(){ if (layerOn.iss) loadIss(true); }, 15000);
+        }
+        function stopIssPoll() {
+            if (issPollTimer) { clearInterval(issPollTimer); issPollTimer = null; }
+        }
+        async function locateIss(fly) {
+            var doFly = fly !== false;
+            if (!map) ensureMap();
+            // Ensure layer is visible
+            if (!layerOn.iss) toggleLayer('iss');
+            var d = await loadIss(true);
+            var p = d && (d.points || [])[0];
+            if (!p) { setStatus('<span class="warn">ISS position unavailable right now — wheretheiss.at did not return a fix.</span>'); return; }
+            if (doFly && map) {
+                var targetZoom = Math.max(map.getZoom(), 3);
+                if (map.getZoom() < 3) targetZoom = 3;
+                map.flyTo([p.lat, p.lon], targetZoom, { duration: 1.1 });
+                setStatus('ISS at <b>' + p.lat.toFixed(2) + ', ' + p.lon.toFixed(2) + '</b> (' + esc(p.detail || '') + ') — map centered on station.');
+            }
+        }
+
+        // ── SATELLITES (CelesTrak TLE + SGP4) ─────────────────────────────────
+        async function initSatGroups() {
+            var sel = document.getElementById('satGroup');
+            if (!sel) return;
+            try {
+                var d = await api('/api/gps/satellites/groups');
+                var groups = d.groups || [];
+                sel.innerHTML = groups.map(function(g){ return '<option value="' + esc(g.id) + '">' + esc(g.label) + ' — ' + esc(g.id) + '</option>'; }).join('');
+                // sensible default: visual (brightest) is small and global
+                sel.value = 'visual';
+            } catch (e) {
+                sel.innerHTML = '<option value="visual">Brightest / visual — visual</option><option value="stations">Space stations — stations</option><option value="starlink">Starlink — starlink</option>';
+            }
+        }
+        async function loadSats(refresh) {
+            var sel = document.getElementById('satGroup');
+            var limEl = document.getElementById('satLimit');
+            var group = sel ? sel.value : 'visual';
+            var limit = limEl ? limEl.value : '200';
+            if (!layerOn.sat) toggleLayer('sat');
+            var satStatus = document.getElementById('satStatus');
+            if (satStatus) satStatus.textContent = 'fetching ' + group + ' — ' + limit + ' max via CelesTrak…';
+            setStatus('fetching satellites <b>' + esc(group) + '</b>…');
+            try {
+                var d = await api('/api/gps/satellites?group=' + encodeURIComponent(group) + '&limit=' + encodeURIComponent(limit) + (refresh ? '&refresh=1' : ''));
+                renderFeed('sat', d);
+                var n = (d.points || []).length;
+                document.getElementById('statSats').textContent = String(n);
+                var cntEl = document.getElementById('cntSat'); if (cntEl) cntEl.textContent = String(n);
+                var note = d.note ? ' · <span class="warn">' + esc(d.note) + '</span>' : '';
+                var src = d.source ? ' — <span style="color:#6f8794">' + esc(d.source) + '</span>' : '';
+                if (satStatus) satStatus.innerHTML = '<b>' + n + '</b> satellites loaded (' + esc(group) + ')' + src + note;
+                setStatus('satellites <b>' + n + '</b> (' + esc(group) + ')' + note);
+                // auto-fit the first load so scattered orbit points become visible
+                if (n && !refresh) setTimeout(function(){ fitSats(); }, 250);
+            } catch (e) {
+                if (satStatus) satStatus.innerHTML = '<span class="warn">' + esc(e.message || e) + '</span>';
+                setStatus('<span class="warn">satellites: ' + esc(e.message || e) + '</span>');
+            }
+        }
+        function fitSats() {
+            var g = layerGroups.sat;
+            if (!g || !map) return;
+            var latlngs = [];
+            g.eachLayer(function(m){
+                try {
+                    var ll = m.getLatLng ? m.getLatLng() : null;
+                    if (ll) latlngs.push(ll);
+                } catch(e){}
+            });
+            if (!latlngs.length) { setStatus('<span class="warn">no satellites to fit — load a group first</span>'); return; }
+            try { map.fitBounds(L.latLngBounds(latlngs).pad(0.12)); } catch(e){}
+        }
+        function clearSats() {
+            var g = layerGroups.sat;
+            if (g) g.clearLayers();
+            var cntEl = document.getElementById('cntSat'); if (cntEl) cntEl.textContent = '0';
+            document.getElementById('statSats').textContent = '—';
+            var satStatus = document.getElementById('satStatus');
+            if (satStatus) satStatus.textContent = 'cleared — pick a group and load again.';
+            setStatus('satellites cleared');
         }
 
         async function loadPois(refresh) {
@@ -729,7 +1010,7 @@
                 g.clearLayers();
                 (d.points || []).forEach(function (p) {
                     if (typeof p.lat !== 'number' || typeof p.lon !== 'number') return;
-                    var m = feedPointMarker(p, LAYER_COLORS.app, 6);
+                    var m = feedPointMarker(p, 'app');
                     m.bindPopup('<b>' + esc(p.label) + '</b><br>' + esc(p.detail || '') + (p.geoNote ? '<br><span style="color:#6f8794">' + esc(p.geoNote) + '</span>' : ''));
                     g.addLayer(m);
                 });
@@ -741,8 +1022,9 @@
             loadAircraft(false);
             loadQuakes(false);
             loadAlerts(false);
-            loadIss(false);
+            loadIss(false).then(function(){ if (layerOn.iss) startIssPoll(); });
             if (layerOn.app) loadAppFeed();
+            if (layerOn.tower) loadTowers(false);
         }
 
         function toggleAuto() {
@@ -802,6 +1084,7 @@
         refreshEgressIp(false);
         setInterval(function () { refreshEgressIp(false); }, 30000);
         ensureMap();
+        initSatGroups();
         setTimeout(function () { if (map) map.invalidateSize(); }, 250);
     </script>
     <script src="embed.js"></script>
