@@ -679,7 +679,7 @@ interface DumpRecord {
   records?: {
     email?: string; username?: string; password?: string; hash?: string; source?: string; date?: string;
     /** Identity fields the licensed dump services return when the source dump had them. */
-    dob?: string; address?: string; city?: string; state?: string; country?: string; phone?: string;
+    dob?: string; age?: string; address?: string; city?: string; state?: string; country?: string; phone?: string;
   }[];
   note?: string;
 }
@@ -794,7 +794,7 @@ async function dehashedDeep(query: string, kind: 'email' | 'username' | 'phone')
     found: j.total ?? 0,
     records: (j.entries || []).slice(0, 50).map((e) => ({
       email: str(e.email), username: str(e.username), password: str(e.password), hash: str(e.hashed_password),
-      dob: str(e.date_of_birth) || str(e.dob), address: str(e.address), city: str(e.city),
+      dob: str(e.date_of_birth) || str(e.dob), age: str(e.age), address: str(e.address), city: str(e.city),
       state: str(e.state), country: str(e.country), phone: str(e.phone),
       source: str(e.database),
     })),
@@ -1155,6 +1155,9 @@ export interface OsintDossier {
   emails: string[];
   phones: string[];
   addresses: string[];
+  /** Demographics from dump records (keyed lanes). */
+  ages: number[];
+  dobs: string[];
   gravatar?: GravatarProfile;
   emailIntel?: EmailIntelResult;
   phone?: PhoneIntelResult;
@@ -1743,6 +1746,8 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
   const emails: string[] = email ? [email.toLowerCase()] : [];
   const phones: string[] = phone ? [phone.trim()] : [];
   const addresses: string[] = [];
+  const ages: number[] = [];
+  const dobs: string[] = [];
   const photos: string[] = [];
   const locations: string[] = [];
   const identities: { source: string; detail: string }[] = [];
@@ -1771,6 +1776,8 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     emails,
     phones,
     addresses,
+    ages,
+    dobs,
     photos,
     locations,
     geoPoints: [],
@@ -1860,6 +1867,8 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
           addresses.push(addr);
           identities.push({ source: dep.service, detail: `address in dump records: ${addr}` });
         }
+        if (r.dob && !dobs.includes(r.dob)) dobs.push(r.dob);
+        if (r.age) { const a = parseInt(r.age, 10); if (!isNaN(a) && !ages.includes(a)) ages.push(a); }
         const u = validateUsername(r.username || '');
         if (u && !derivedHandles.some((c) => c.handle === u)) derivedHandles.push({ handle: u, source: dep.service });
       }

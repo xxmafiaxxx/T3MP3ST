@@ -372,6 +372,16 @@
         .src-chip { font-size: 10px; font-family: 'JetBrains Mono', monospace; padding: 2px 7px; border-radius: 3px; border: 1px solid var(--border-color); color: var(--text-muted); }
         .src-chip.found { color: var(--success); border-color: rgba(46,213,115,0.4); background: rgba(46,213,115,0.06); }
         .src-chip.unknown { color: var(--warning); border-color: rgba(255,177,66,0.4); }
+        .profile-card { display: flex; gap: 16px; align-items: center; background: var(--surface); border: 1px solid var(--border-glow); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .profile-photo { width: 96px; height: 96px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border-color); flex-shrink: 0; }
+        .profile-photo-empty { display: flex; align-items: center; justify-content: center; font-size: 40px; background: var(--bg-tertiary); }
+        .profile-main { flex: 1; min-width: 0; }
+        .profile-name { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; color: var(--text-primary); }
+        .profile-meta { font-size: 12px; color: var(--text-secondary); margin: 6px 0; font-family: 'JetBrains Mono', monospace; }
+        .profile-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+        .panel-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+        .panel-card-title { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 700; color: var(--accent); margin-bottom: 10px; letter-spacing: 0.5px; }
+
         .report-header {
             display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
             border: 1px solid var(--border-glow); background: var(--accent-dim); border-radius: 6px;
@@ -1003,7 +1013,7 @@
                 (d.durationMs / 1000).toFixed(1) + 's · ' + new Date(d.ranAt).toLocaleTimeString() + ' · ' +
                 ((d.sourcesChecked || []).length) + ' sources checked</span></div>';
 
-            // ── DATA FOUND — dedicated sections for the identity core ──
+            // ── SPOKEO-STYLE PROFILE REPORT ──
             const nameSet = [];
             const seenNames = new Set();
             const addName = function (n, src) {
@@ -1014,62 +1024,110 @@
             if (d.name) addName(d.name, 'operator input');
             if (d.emailIntel && d.emailIntel.gravatar && d.emailIntel.gravatar.displayName) addName(d.emailIntel.gravatar.displayName, 'Gravatar');
             (d.socialAccounts || []).forEach(function (h) { if (h.identity === 'name-match' && h.profile && h.profile.displayName) addName(h.profile.displayName, h.site + ' (corroborated)'); });
+            const primaryName = nameSet.length ? nameSet[0][0] : d.subject;
 
-            const emailsFound = [];
-            const seenEmails = new Set();
-            if (d.parsed && d.parsed.email) { emailsFound.push([d.parsed.email, 'subject input']); seenEmails.add(d.parsed.email); }
-            (d.emails || []).forEach(function (e) {
-                if (seenEmails.has(e)) return;
-                seenEmails.add(e);
-                const src = (d.identities || []).find(function (i) { return i.detail.includes(e); });
-                emailsFound.push([e, src ? src.source : 'records']);
-            });
-
-            const phonesFound = [];
-            const seenPhones = new Set();
-            if (d.parsed && d.parsed.phone) { phonesFound.push([d.parsed.phone, 'subject input']); seenPhones.add(d.parsed.phone); }
-            if (d.phone) { const e164 = d.phone.e164; if (!seenPhones.has(e164)) { phonesFound.push([e164, 'normalized']); seenPhones.add(e164); } }
-            (d.phones || []).forEach(function (p) {
-                if (seenPhones.has(p)) return;
-                seenPhones.add(p);
-                phonesFound.push([p, 'records/extraction']);
-            });
-
-            const addressesFound = (d.addresses || []).map(function (a) { return [a, 'dump records']; });
-            const locSignals = (d.locations || []);
-
+            const photo = (d.photos && d.photos[0]) || ((d.socialAccounts || []).find(function (h) { return h.profile && h.profile.imageUrl; }) || { profile: {} }).profile?.imageUrl;
+            const locSignalsAll = (d.locations || []);
+            const bestLoc = locSignalsAll.length ? locSignalsAll[0] : ((d.emailIntel && d.emailIntel.gravatar && d.emailIntel.gravatar.location) || '');
             const verifiedSocials = (d.socialAccounts || []).filter(function (h) { return h.identity === 'name-match'; });
             const unverifiedSocials = (d.socialAccounts || []).filter(function (h) { return h.identity !== 'name-match'; });
             const excluded = d.excludedAccounts || [];
+            const breachHits = (d.dumpLanes || []).reduce(function (acc, l) {
+                return acc + l.free.reduce(function (a, f) { return a + (typeof f.found === 'number' && f.found > 0 ? f.found : 0); }, 0);
+            }, 0);
+            const credCount = (d.dumpLanes || []).reduce(function (a, l) { return a + (l.credentials || []).length; }, 0);
 
+            html += '<div class="profile-card">' +
+                (photo ? '<img class="profile-photo" src="' + escapeHtml(photo) + '" alt="" onerror="this.style.display=\'none\'">' : '<div class="profile-photo profile-photo-empty">👤</div>') +
+                '<div class="profile-main">' +
+                '<div class="profile-name">' + escapeHtml(String(primaryName)) + '</div>' +
+                '<div class="profile-meta">' +
+                (bestLoc ? '📍 ' + escapeHtml(bestLoc) + ' &nbsp;·&nbsp; ' : '') +
+                (d.phone ? '☎ ' + escapeHtml(d.phone.e164) + ' &nbsp;·&nbsp; ' : '') +
+                (d.dobs && d.dobs.length ? '🎂 DOB ' + escapeHtml(d.dobs[0]) + ' &nbsp;·&nbsp; ' : '') +
+                (d.ages && d.ages.length ? 'age ' + d.ages[0] + ' &nbsp;·&nbsp; ' : '') +
+                '</div>' +
+                '<div class="profile-chips">' +
+                '<span class="conf-badge conf-high">✉ ' + (d.emails || []).length + ' emails</span>' +
+                '<span class="conf-badge conf-high">☎ ' + (d.phones || []).length + ' phones</span>' +
+                '<span class="conf-badge conf-high">🏠 ' + (d.addresses || []).length + ' addresses</span>' +
+                '<span class="conf-badge conf-medium">📡 ' + verifiedSocials.length + ' corroborated</span>' +
+                '<span class="conf-badge conf-medium">🕳 ' + breachHits + ' breach records</span>' +
+                (credCount ? '<span class="conf-badge conf-medium">🔑 ' + credCount + ' creds</span>' : '') +
+                '</div></div></div>';
 
+            // ── CONTACT INFORMATION card ──
+            html += '<div class="panel-card"><div class="panel-card-title">📞 CONTACT INFORMATION</div>';
+            const contactRows = [];
+            (d.phones || []).forEach(function (p) { contactRows.push(['☎', p, p === (d.parsed && d.parsed.phone) ? 'subject input' : 'records/extraction']); });
+            (d.emails || []).forEach(function (e) { contactRows.push(['✉', e, e === (d.parsed && d.parsed.email) ? 'subject input' : 'records/extraction']); });
+            html += contactRows.length
+                ? contactRows.map(function (r) { return '<div class="cred-row"><span style="color:var(--accent)">' + r[0] + '</span><span style="color:var(--text-primary)">' + escapeHtml(r[1]) + '</span><span class="meta">' + escapeHtml(r[2]) + '</span></div>'; }).join('')
+                : '<div class="dossier-empty">No contact data recovered yet. <b>Arm a dump key below (DeHashed = addresses/phones/DOB)</b> or open the public-records links.</div>';
+            html += '</div>';
 
-            html += '<div class="dossier-section-title">📛 NAMES FOUND <span class="count">' + nameSet.length + '</span></div>';
-            html += nameSet.length
-                ? '<div class="id-row">' + nameSet.map(function (r) { return '<span class="id-chip"><b>' + escapeHtml(r[0]) + '</b> <span style="color:var(--text-muted)">(' + escapeHtml(r[1]) + ')</span></span>'; }).join('') + '</div>'
-                : '<div class="dossier-empty">No name recovered — provide the name to unlock corroboration.</div>';
+            // ── ADDRESSES card ──
+            html += '<div class="panel-card"><div class="panel-card-title">🏠 ADDRESSES</div>';
+            html += (d.addresses || []).length
+                ? d.addresses.map(function (a) { return '<div class="cred-row"><span style="color:var(--accent)">📍</span><span style="color:var(--text-primary)">' + escapeHtml(a) + '</span><span class="meta">dump records</span></div>'; }).join('')
+                : '<div class="dossier-empty">No addresses in dump records. Address history: public-records workbench (browser) or keyed dump records.</div>';
+            html += '</div>';
 
-            html += '<div class="dossier-section-title" style="margin-top:16px;">✉ EMAILS FOUND <span class="count">' + emailsFound.length + '</span></div>';
-            html += emailsFound.length
-                ? '<table class="found-table"><tbody>' + emailsFound.map(function (r) { return '<tr><td><b>' + escapeHtml(r[0]) + '</b></td><td style="color:var(--text-muted)">' + escapeHtml(r[1]) + '</td></tr>'; }).join('') + '</tbody></table>'
-                : '<div class="dossier-empty">No emails extracted — arm dump keys (DeHashed) or check the public-records workbench.</div>';
+            // ── ONLINE PROFILES card ──
+            html += '<div class="panel-card"><div class="panel-card-title">📡 ONLINE PROFILES <span class="count">' + (d.socialAccounts || []).length + ' for this subject</span></div>';
+            html += (d.socialAccounts && d.socialAccounts.length)
+                ? '<div class="social-grid">' + d.socialAccounts.map(renderSocialCard).join('') + '</div>'
+                : '<div class="dossier-empty">No corroborated/handle profiles for the swept identifiers.</div>';
+            html += '</div>';
 
-            html += '<div class="dossier-section-title" style="margin-top:16px;">☎ PHONES FOUND <span class="count">' + phonesFound.length + '</span></div>';
-            html += phonesFound.length
-                ? '<table class="found-table"><tbody>' + phonesFound.map(function (r) { return '<tr><td><b>' + escapeHtml(r[0]) + '</b></td><td style="color:var(--text-muted)">' + escapeHtml(r[1]) + '</td></tr>'; }).join('') + '</tbody></table>'
-                : '<div class="dossier-empty">No phones extracted — same levers (keyed dump records, public records in browser).</div>';
+            // ── BREACH EXPOSURE card ──
+            html += '<div class="panel-card"><div class="panel-card-title">🕳️ BREACH &amp; DUMP EXPOSURE</div>';
+            let anyBreach = false;
+            for (const lane of d.dumpLanes || []) {
+                for (const f of lane.free) {
+                    html += '<div class="breach-card"><div style="display:flex;justify-content:space-between;gap:10px;"><span class="svc">' + escapeHtml(f.service) + '</span><span class="found">' + (f.found === 'unknown' ? '?' : f.found) + '</span></div>' +
+                        (f.sources && f.sources.length ? '<div class="src">' + escapeHtml(f.sources.slice(0, 5).join(' · ')) + '</div>' : '') +
+                        (f.note ? '<div class="keynote">' + escapeHtml(f.note) + '</div>' : '') + '</div>';
+                    anyBreach = true;
+                }
+                for (const dep of lane.deep) {
+                    if (dep.status === 'key-required') {
+                        html += '<div class="breach-card keyed"><div style="display:flex;justify-content:space-between;gap:10px;"><span class="svc">' + escapeHtml(dep.service) + '</span><span class="found">🔒 ARM</span></div><div class="keynote">' + escapeHtml(dep.note) + '</div></div>';
+                    } else {
+                        html += '<div class="breach-card keyed"><div style="display:flex;justify-content:space-between;gap:10px;"><span class="svc">' + escapeHtml(dep.service) + '</span><span class="found">' + dep.found + '</span></div>';
+                        if (dep.records && dep.records.length) {
+                            html += dep.records.slice(0, 20).map(function (r) {
+                                const geo = [r.city, r.state, r.country].filter(Boolean).join(', ');
+                                return '<div class="cred-row"><span>' + escapeHtml(r.email || r.username || '?') + '</span>' +
+                                    (r.password ? '<span class="pw">:' + escapeHtml(r.password) + '</span>' : '') +
+                                    (r.dob ? '<span class="meta">DOB ' + escapeHtml(r.dob) + '</span>' : '') +
+                                    (r.address ? '<span class="meta">' + escapeHtml(r.address) + '</span>' : '') +
+                                    (geo ? '<span class="meta">' + escapeHtml(geo) + '</span>' : '') +
+                                    (r.phone ? '<span class="meta">☎ ' + escapeHtml(r.phone) + '</span>' : '') +
+                                    '<span class="meta">' + escapeHtml(r.source || '') + '</span></div>';
+                            }).join('');
+                        }
+                        html += '</div>';
+                    }
+                    anyBreach = true;
+                }
+            }
+            if (!anyBreach) html += '<div class="dossier-empty">No breach lanes ran — add an email/phone/username identifier.</div>';
+            html += '</div>';
 
-            html += '<div class="dossier-section-title" style="margin-top:16px;">🏠 ADDRESSES &amp; LOCATIONS <span class="count">' + (addressesFound.length + locSignals.length) + '</span></div>';
-            html += (addressesFound.length + locSignals.length)
-                ? '<table class="found-table"><tbody>' +
-                  addressesFound.map(function (r) { return '<tr><td><b>address</b></td><td>' + escapeHtml(r[0]) + '</td><td style="color:var(--text-muted)">' + escapeHtml(r[1]) + '</td></tr>'; }).join('') +
-                  locSignals.map(function (l) { return '<tr><td><b>location signal</b></td><td colspan="2">' + escapeHtml(l) + '</td></tr>'; }).join('') +
-                  '</tbody></table>'
-                : '<div class="dossier-empty">No addresses/locations — address history lives in public records (workbench links below) and keyed dump records.</div>';
+            if (d.screening) html += renderScreening(d.screening);
 
-            if (verifiedSocials.length) {
-                html += '<div class="dossier-section-title" style="margin-top:16px;">✓ CORROBORATED ACCOUNTS <span class="count">' + verifiedSocials.length + '</span></div>';
-                html += '<div class="social-grid">' + verifiedSocials.map(renderSocialCard).join('') + '</div>';
+            if (unverifiedSocials.length) {
+                html += '<details style="margin-top:14px;border:1px solid var(--border-color);border-radius:6px;padding:10px 14px;background:var(--bg-primary);">' +
+                    '<summary style="cursor:pointer;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--text-muted);">📡 UNVERIFIED HANDLES — ' + unverifiedSocials.length +
+                    ' (handle exists; no name corroboration)</summary>' +
+                    '<div class="social-grid" style="margin-top:10px;opacity:0.7;">' + unverifiedSocials.map(renderSocialCard).join('') + '</div></details>';
+            }
+            if (excluded.length) {
+                html += '<details style="margin-top:10px;border:1px solid var(--border-color);border-radius:6px;padding:10px 14px;background:var(--bg-primary);">' +
+                    '<summary style="cursor:pointer;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--text-muted);">≠ EXCLUDED — ' + excluded.length +
+                    ' handle(s) belong to different people</summary>' +
+                    '<div class="social-grid" style="margin-top:10px;opacity:0.55;">' + excluded.map(renderSocialCard).join('') + '</div></details>';
             }
 
             // ── DETAILED REPORT ──
@@ -1094,31 +1152,6 @@
                 html += '<span class="src-chip ' + cls + '">' + mark + escapeHtml(s.name) + '</span>';
             });
             html += '</div></details>';
-
-            if (unverifiedSocials.length) {
-                html += '<details style="margin-top:14px;border:1px solid var(--border-color);border-radius:6px;padding:10px 14px;background:var(--bg-primary);">' +
-                    '<summary style="cursor:pointer;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--text-muted);">📡 UNVERIFIED HANDLES — ' + unverifiedSocials.length +
-                    ' (handle exists; no name corroboration — same handle ≠ same person)</summary>' +
-                    '<div class="social-grid" style="margin-top:10px;opacity:0.7;">' + unverifiedSocials.map(renderSocialCard).join('') + '</div></details>';
-            }
-            if (excluded.length) {
-                html += '<details style="margin-top:10px;border:1px solid var(--border-color);border-radius:6px;padding:10px 14px;background:var(--bg-primary);">' +
-                    '<summary style="cursor:pointer;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--text-muted);">≠ EXCLUDED — ' + excluded.length +
-                    ' handle(s) belong to different people (verified)</summary>' +
-                    '<div class="social-grid" style="margin-top:10px;opacity:0.55;">' + excluded.map(renderSocialCard).join('') + '</div></details>';
-            }
-
-            for (const lane of d.dumpLanes || []) html += renderDumpLane(lane);
-
-            if (d.screening) html += renderScreening(d.screening);
-
-            if (d.emailIntel && d.emailIntel.domain) {
-                const dm = d.emailIntel.domain;
-                html += '<div class="dossier-section-title" style="margin-top:18px;">🌐 MAIL DOMAIN — ' + escapeHtml(dm.name) + '</div>';
-                html += '<div class="id-row"><span class="id-chip"><b>mail:</b> ' + (dm.acceptsMail ? 'yes' : 'no MX') + '</span>' +
-                    '<span class="id-chip"><b>MX:</b> ' + escapeHtml(dm.mxRecords.join(', ') || '—') + '</span>' +
-                    (dm.aRecord ? '<span class="id-chip"><b>A:</b> ' + escapeHtml(dm.aRecord) + '</span>' : '') + '</div>';
-            }
 
             if (d.searchExtraction && d.searchExtraction.length) {
                 html += '<div class="dossier-section-title" style="margin-top:18px;">🔎 SEARCH EXTRACTION <span class="count">' + d.searchExtraction.length + ' query(ies)</span></div>';
