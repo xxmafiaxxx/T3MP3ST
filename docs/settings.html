@@ -3874,6 +3874,7 @@
                         <h2 class="settings-title">🔌 Local Agents</h2>
                         <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">Enlist agents you've already authed on this machine — <b style="color:#bcd;">no API keys needed</b>. T3MP3ST detects each CLI (<b style="color:#bcd;">Claude Code</b> / Codex / Hermes) and drives it as your LLM backbone using its own login. Connect one, then hit <b style="color:#2fd6ff;">☆ Use</b> to pin it as the <b style="color:#2fd6ff;">★ active backbone</b> for missions and analysis — a pinned local model outranks any stored API key.</p>
                         <div id="localAgentsCard" style="padding: 18px 20px; background: linear-gradient(135deg, rgba(0,200,255,0.06), rgba(160,90,255,0.04)); border: 1px solid rgba(0,200,255,0.25); border-radius: 12px;">
+                            <style>.la-connected-btn:hover{background:rgba(255,80,80,0.14)!important;border-color:rgba(255,80,80,0.5)!important;color:#ff8a8a!important}.la-connected-btn:hover .la-connected-label{display:none!important}.la-connected-btn:hover .la-disconnect-label{display:inline!important}</style>
                             <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
                                 <div style="font-size: 15px; font-weight: 800; color: #2fd6ff; letter-spacing: 0.4px; display:flex; align-items:center; gap:8px;">🔌 Connect Local Agents</div>
                                 <span id="localAgentsSummary" style="font-size: 11px; color:#7f90a0; font-weight:600;">— scanning —</span>
@@ -25193,7 +25194,7 @@ Be specific and actionable. Format as structured JSON.`;
       + pill(status, color)
       + (connected ? '<button onclick="setActiveLocalAgent(\''+a.id+'\')" title="Drive this agent as the LLM backbone for missions and analysis" style="padding:6px 11px;font-size:11px;font-weight:700;background:'+(isActive?'linear-gradient(135deg,#2fd6ff,#5b8cff)':'rgba(255,255,255,0.06)')+';border:1px solid '+(isActive?'transparent':'rgba(0,200,255,0.3)')+';border-radius:6px;color:'+(isActive?'#001624':'#bcd')+';cursor:pointer;white-space:nowrap;">'+(isActive?'★ Active':'☆ Use')+'</button>' : '')
       + (a.ready ? '<button onclick="pingOneLocalAgent(\''+a.id+'\')" title="send a real one-shot to verify it actually responds (spends a little quota)" style="padding:6px 11px;font-size:11px;font-weight:600;background:rgba(255,255,255,0.06);border:1px solid rgba(0,200,255,0.3);border-radius:6px;color:#bcd;cursor:pointer;white-space:nowrap;">Test</button>' : '')
-      + (connected ? '<button onclick="disconnectLocalAgent(\''+a.id+'\')" title="Disconnect this agent and remove its saved reconnect preference" style="padding:6px 13px;font-size:11px;font-weight:700;background:rgba(255,80,80,0.1);border:1px solid rgba(255,80,80,0.4);border-radius:6px;color:#ff8a8a;cursor:pointer;white-space:nowrap;">Disconnect</button>'
+      + (connected ? '<button onclick="disconnectLocalAgent(\''+a.id+'\')" class="la-connected-btn" title="Connected — click to disconnect" style="padding:6px 13px;font-size:11px;font-weight:700;background:rgba(0,255,136,0.14);border:1px solid rgba(0,255,136,0.4);border-radius:6px;color:#00ff88;cursor:pointer;white-space:nowrap;"><span class="la-connected-label">✓ Connected</span><span class="la-disconnect-label" style="display:none;">Disconnect</span></button>'
                    : (a.ready ? '<button onclick="connectOneLocalAgent(\''+a.id+'\')" style="padding:6px 13px;font-size:11px;font-weight:700;background:linear-gradient(135deg,#2fd6ff,#5b8cff);border:none;border-radius:6px;color:#001624;cursor:pointer;white-space:nowrap;">Connect</button>' : ''))
       + (a.custom ? '<button onclick="deleteCustomAgent(\''+a.id+'\')" title="Remove this custom agent definition" style="padding:6px 11px;font-size:11px;font-weight:700;background:rgba(255,80,80,0.06);border:1px solid rgba(255,80,80,0.3);border-radius:6px;color:#c66;cursor:pointer;white-space:nowrap;">🗑</button>' : '')
     + '</div>';
@@ -25225,6 +25226,27 @@ Be specific and actionable. Format as structured JSON.`;
     const live = Math.max(clientLive, serverLive);
     const sum = document.getElementById('localAgentsSummary');
     if (sum) sum.innerHTML = connectedIds.length+' active'+(live?' · '+live+' live':'')+' · '+ready+' ready · '+installed+'/'+agents.length+' installed';
+    // bulk button: Connected -> Disconnect toggle (user request: "should say connected and change to disconnect")
+    const bulkBtn = document.getElementById('localAgentsConnectAllBtn');
+    if (bulkBtn) {
+      if (connectedIds.length > 0) {
+        bulkBtn.textContent = '⏏ Disconnect';
+        bulkBtn.title = 'Disconnect all connected agents';
+        bulkBtn.onclick = window.disconnectAllLocalAgents;
+        bulkBtn.style.background = 'rgba(255,80,80,0.12)';
+        bulkBtn.style.border = '1px solid rgba(255,80,80,0.4)';
+        bulkBtn.style.color = '#ff8a8a';
+        bulkBtn.style.boxShadow = 'none';
+      } else {
+        bulkBtn.textContent = '⚡ Connect Selected';
+        bulkBtn.title = 'Connect selected agents';
+        bulkBtn.onclick = window.connectSelectedLocalAgents;
+        bulkBtn.style.background = 'linear-gradient(135deg,#2fd6ff,#5b8cff)';
+        bulkBtn.style.border = 'none';
+        bulkBtn.style.color = '#001624';
+        bulkBtn.style.boxShadow = '0 4px 14px rgba(0,200,255,0.28)';
+      }
+    }
     // expose live/connected counts separately. A plain connect is just a registration; only a
     // fresh successful ping proves the local model is currently usable.
     window.__t3mpLiveAgents = live; window.__t3mpConnectedAgents = connectedIds.length;
@@ -25391,6 +25413,18 @@ Be specific and actionable. Format as structured JSON.`;
     } catch(e) {
       if (window.toast) toast('Disconnect failed: '+e.message, 'error');
     }
+  };
+
+  window.disconnectAllLocalAgents = async function() {
+    const ids = (connectedIds || []).slice();
+    if (!ids.length) { if (window.toast) toast('No agents connected','info'); return; }
+    for (const id of ids) { try { await api('/api/agents/local/disconnect', { id: id }); delete pingStatus[id]; if (getActiveAgent() === id) setActiveAgentStored(''); } catch(e) {} }
+    const idsAfter = [];
+    persistConnected(idsAfter);
+    render(lastDetected, idsAfter);
+    if (window.toast) toast('Disconnected '+ids.length+' agent(s)', 'success');
+    if (typeof window.refreshSystemStatus === 'function') window.refreshSystemStatus();
+    if (typeof updatePreflightChecklist === 'function') { try { updatePreflightChecklist(); } catch(e) {} }
   };
 
   // Pin (or unpin) which connected agent drives missions + analysis as the LLM backbone.
