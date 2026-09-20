@@ -426,7 +426,7 @@ function createTempestCommandInstance(missionName: string, apiKey: string | unde
       // Only a LOCAL provider honors a per-request base URL (the operator's own
       // llama.cpp / Ollama host). Never set it for cloud providers — that would
       // let a request redirect a cloud call to an attacker-chosen endpoint.
-      ...(baseUrl && provider === 'local' ? { baseUrl } : {}),
+      ...(baseUrl && (provider === 'local' || provider === 'ollama') ? { baseUrl } : {}),
       maxTokens: 4096,
       temperature: 0.7,
     },
@@ -7365,6 +7365,7 @@ const ENV_APIKEY_MAP: Record<string, string> = {
   replicate: 'REPLICATE_API_TOKEN',
   github: 'GITHUB_TOKEN',
   local: 'TEMPEST_LOCAL_API_KEY',
+  ollama: 'OLLAMA_API_KEY',
   discord_webhook: 'DISCORD_WEBHOOK_URL',
   slack_webhook: 'SLACK_WEBHOOK_URL',
   siem_webhook: 'SIEM_WEBHOOK_URL',
@@ -7562,6 +7563,9 @@ app.delete('/api/config/env/:provider', async (req: Request, res: Response): Pro
     if (provider === 'local') {
       delete process.env.ZAI_API_KEY;
       delete process.env.ZHIPUAI_API_KEY;
+    }
+    if (provider === 'ollama') {
+      delete process.env.OLLAMA_API_KEY;
     }
     try { (config as any).removeApiKey?.(provider); } catch { /* ignore */ }
     console.log(`[config:env] ${provider} (${envVar}) removed from ${filePath}`);
@@ -9444,7 +9448,7 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
       return;
     }
   }
-  if (missionLLMConfig.provider === 'local') {
+  if (missionLLMConfig.provider === 'local' || missionLLMConfig.provider === 'ollama') {
     const localErr = await verifyLocalLLMServed(missionLLMConfig as any);
     if (localErr) {
       res.status(503).json({ error: localErr });
@@ -10316,7 +10320,7 @@ app.get('/api/credentials', (_req: Request, res: Response) => {
 let activeGeneral: OpGeneral | null = null;
 
 function providerNeedsApiKey(provider: string): boolean {
-  return !['codex', 'mock', 'local', 'local-agent'].includes(provider);
+  return !['codex', 'mock', 'local', 'ollama', 'local-agent'].includes(provider);
 }
 
 function providerRunsKeyless(provider: string): boolean {
@@ -10350,9 +10354,11 @@ function readGeneralTimeoutEnv(): number | undefined {
  * listing can't be interpreted (fail open for non-standard servers).
  */
 async function verifyLocalLLMServed(cfg: { provider: unknown; model: string; baseUrl?: string; apiKey?: string }): Promise<string | null> {
-  if (cfg?.provider !== 'local') return null;
+  if (cfg?.provider !== 'local' && cfg?.provider !== 'ollama') return null;
   const base = (cfg.baseUrl || 'http://localhost:11434/api').replace(/\/+$/, '');
-  const isOllama = /\/api$/.test(base);
+  // The named `ollama` provider (issue #164) always speaks Ollama native, whether the base
+  // was given bare (http://localhost:11434) or in the /api form; `local` keeps detecting it.
+  const isOllama = cfg.provider === 'ollama' || /\/api$/.test(base);
   const listUrl = isOllama ? `${base.replace(/\/api$/, '')}/api/tags` : `${base}/models`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 4000);
@@ -10420,7 +10426,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
   // llama.cpp / Ollama host). For any cloud provider it is ignored — never let a request
   // redirect a cloud call. A malformed/non-HTTP URL throws (callers already 400 on throw).
   let localBaseUrl: string | null = null;
-  if (selectedProvider === 'local') {
+  if (selectedProvider === 'local' || selectedProvider === 'ollama') {
     const bu = sanitizeLocalBaseUrl(baseUrl);
     if (!bu.ok) throw new Error(bu.error);
     localBaseUrl = bu.value;
@@ -10428,7 +10434,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
   // SECURITY: when a client picks the local base URL, never fall back to the
   // server-configured key (TEMPEST_LOCAL_API_KEY / ZAI_API_KEY / ZHIPUAI_API_KEY —
   // possibly a real cloud bearer). Only a client-supplied key reaches a client-chosen host.
-  const effectiveKey = (selectedProvider === 'local' && localBaseUrl)
+  const effectiveKey = ((selectedProvider === 'local' || selectedProvider === 'ollama') && localBaseUrl)
     ? (apiKey || undefined)
     : (apiKey || baseConfig.apiKey);
   if (providerNeedsApiKey(selectedProvider) && !effectiveKey) {
@@ -10441,7 +10447,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
     baseUrl: baseConfig.baseUrl,
     // Only override the configured URL for a local provider. Cloud providers keep
     // their own provider URL and cannot be redirected by a request.
-    ...(selectedProvider === 'local' && localBaseUrl ? { baseUrl: localBaseUrl } : {}),
+    ...((selectedProvider === 'local' || selectedProvider === 'ollama') && localBaseUrl ? { baseUrl: localBaseUrl } : {}),
     maxTokens: 8192,
     temperature: 0.4,
     timeout: readGeneralTimeoutEnv() ?? 300000, // General planning needs room (was a hardcoded 60s); override via env

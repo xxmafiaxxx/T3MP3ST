@@ -24930,7 +24930,10 @@ Be specific and actionable. Format as structured JSON.`;
   // API key but no server key/agent still triggered the "No agent or API backend" nudge
   // even while the header badge correctly read "API Connected" — the desync you reported.
   function hasBackend(){
-    // Prefer the canonical resolver if it's available — it already mirrors mission dispatch.
+    // Prefer the canonical resolver if it's available — it already mirrors mission dispatch.    // Server-truth: the API server's own LLM (.env-configured, health-verified) counts
+    // as a backend even when this browser holds no keys and no local agent is connected.
+    if (window.__t3ServerLlm) return true;
+
     try { if (typeof window.resolveLLMBackend === 'function') return window.resolveLLMBackend().kind !== 'none'; } catch (_) {}
     const api = (typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API) ? T3MP3ST_API : {};
     if (api.llmAvailable) return true;
@@ -25020,13 +25023,32 @@ Be specific and actionable. Format as structured JSON.`;
   function bootLocalAgents(){
     // detect, then silently re-establish previously-connected agents so a refresh "just works"
     setTimeout(async function(){ try { await window.detectLocalAgents(); await autoReconnect(); } catch(e) {} }, 700);
-    // poll for a backend; hide the nudge the moment one appears, and only nudge if NONE after ~12s
-    // (avoids a false nudge firing before checkHealth has resolved llmAvailable)
-    var tries = 0;
+    // Server-truth probe: /api/health llm.connected mirrors the SERVER's own LLM config
+    // (its .env) — a browser with no stored keys still has a backend when the server does.
+    function probeServerLlm(){
+      try {
+        var base = (typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API && T3MP3ST_API.baseUrl) ? T3MP3ST_API.baseUrl
+          : ((location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? location.protocol + '//' + location.hostname + ':3333' : '');
+        if (!base) { window.__t3ServerLlm = false; return; }
+        fetch(base + '/api/health').then(function(r){ return r.json(); }).then(function(d){
+          window.__t3ServerLlm = !!(d && d.llm && d.llm.connected);
+        }).catch(function(){ window.__t3ServerLlm = false; });
+      } catch (_) { window.__t3ServerLlm = false; }
+    }
+    probeServerLlm(); setInterval(probeServerLlm, 10000);
+    // Watchdog: nudge only if NOTHING answers (client keys/agents OR server LLM) within
+    // ~12s — and KEEP watching so a backend that appears later clears the banner.
+    var tries = 0, nudged = false;
     var iv = setInterval(function(){
       var nb = document.getElementById('noBackendNudge');
-      if (hasBackend()) { if (nb) nb.style.display = 'none'; clearInterval(iv); return; }
-      if (++tries >= 6) { clearInterval(iv); if (!hasBackend()) window.nudgeToSettings('No agent or API backend connected'); }
+      if (hasBackend()) {
+        if (nb) nb.style.display = 'none';
+        clearInterval(iv);
+        return;
+      }
+      tries++;
+      if (tries >= 6 && !nudged) { nudged = true; window.nudgeToSettings('No agent or API backend connected'); }
+      if (nudged && tries >= 300) clearInterval(iv);
     }, 2000);
   }
   if (document.readyState === 'complete' || document.readyState === 'interactive') bootLocalAgents();

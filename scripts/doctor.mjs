@@ -68,12 +68,30 @@ function scriptExists(pkg, scriptName) {
 
 async function main() {
   const startedAt = new Date().toISOString();
-  const major = Number(process.versions.node.split('.')[0]);
-  check('Node runtime is supported', major >= 18, `node ${process.version}`);
-
   const packageJsonExists = await fileExists('package.json');
   check('package.json exists', packageJsonExists);
   const pkg = packageJsonExists ? JSON.parse(await readFile('package.json', 'utf8')) : {};
+
+  // Honor the package's declared engines range instead of a hardcoded major, so a
+  // distro Node that is too old (e.g. Kali/Debian apt nodejs) is flagged BEFORE the
+  // confusing npm-install / syntax failures it causes. Coarse compare: range must be
+  // ">=X.Y.Z"; the running node must be at or above it.
+  const enginesNode = String(pkg?.engines?.node || '').trim();
+  const enginesMin = /^>=\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(enginesNode);
+  if (enginesMin) {
+    const [rmaj, rmin, rpat] = [Number(enginesMin[1]), Number(enginesMin[2] || 0), Number(enginesMin[3] || 0)];
+    const [nmaj, nmin, npat] = process.versions.node.split('.').map(Number);
+    const ok = nmaj > rmaj || (nmaj === rmaj && (nmin > rmin || (nmin === rmin && npat >= rpat)));
+    check(
+      'Node runtime is supported',
+      ok,
+      `node ${process.version} vs required ${enginesNode}${ok ? '' : ' — upgrade Node (e.g. NodeSource or nvm); a distro nodejs package is often older than the floor'}`,
+    );
+  } else {
+    const major = Number(process.versions.node.split('.')[0]);
+    check('Node runtime is supported', major >= 18, `node ${process.version}`);
+  }
+
   for (const script of ['doctor', 'server', 'typecheck', 'test', 'arsenal:smoke', 'field:drill', 'exploit:smoke', 'prompt:audit']) {
     check(`npm script: ${script}`, scriptExists(pkg, script), pkg.scripts?.[script] || 'missing');
   }
@@ -107,11 +125,19 @@ async function main() {
     ['nuclei', 'optional high-value scanner'],
     ['semgrep', 'optional supply-chain scanner'],
     ['promptfoo', 'optional AI eval runner'],
+    ['make', 'needed for native modules (build-essential on Kali)'],
+    ['g++', 'needed for native modules (build-essential on Kali)'],
+    ['pkg-config', 'needed for native modules'],
+    ['python3', 'needed for pipx/tools'],
+    ['pipx', 'needed for pipx-managed tools'],
+    ['go', 'needed for Go-based tools (httpx/nuclei)'],
   ];
   for (const [binary, detail] of commandChecks) {
     const path = await commandPath(binary);
     const required = ['git', 'node', 'npm', 'file', 'curl'].includes(binary);
-    check(`command: ${binary}`, Boolean(path), path || `missing - ${detail}`, required ? 'block' : 'warn');
+    // build-tool checks are warn-only: missing g++/make doesn't block server, just native rebuilds
+    const sev = ['make','g++','pkg-config','python3','pipx','go'].includes(binary) ? 'warn' : (required ? 'block' : 'warn');
+    check(`command: ${binary}`, Boolean(path), path || `missing - ${detail}`, sev);
   }
 
   let apiReachable = false;

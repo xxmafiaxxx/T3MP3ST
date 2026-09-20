@@ -3431,7 +3431,8 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
       }
     }
   } else {
-    // POSIX host batch query
+    // POSIX host batch query — `which` may be absent in minimal containers (issue #154),
+    // fall back to `command -v` via sh.
     let posixStdout = '';
     try {
       const res = await execFileAsync('which', needed, { timeout: 6000 });
@@ -3439,6 +3440,16 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
     } catch (err: unknown) {
       const e = err as { stdout?: string };
       posixStdout = (e && typeof e.stdout === 'string') ? e.stdout : '';
+    }
+    // If which is missing (empty stdout and no partial hits), try sh `command -v` fallback.
+    if (!posixStdout.trim()) {
+      try {
+        const probe = needed.map((n) => `command -v ${n} 2>/dev/null`).join('; ');
+        const res2 = await execFileAsync('sh', ['-c', probe], { timeout: 4000 });
+        posixStdout = res2.stdout || '';
+      } catch {
+        // keep empty — all tools will be marked unavailable
+      }
     }
 
     const posixFound = new Map<string, string>();

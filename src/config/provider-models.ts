@@ -25,7 +25,7 @@ const DEFAULT_MODEL_LIST_TIMEOUT_MS = 15_000;
 
 // Pseudo-providers with no remote model list (CLI-driven or in-process).
 const NO_REMOTE_LIST = new Set(['codex', 'mock', 'local-agent']);
-const OPENAI_COMPATIBLE_REMOTE_LIST = new Set(['openai', 'venice', 'xai', 'gemini', 'nanogpt', 'novita', 'local']);
+const OPENAI_COMPATIBLE_REMOTE_LIST = new Set(['openai', 'venice', 'xai', 'gemini', 'nanogpt', 'novita', 'local', 'ollama']);
 const DIRECT_REMOTE_LIST = new Set(['anthropic', 'openrouter']);
 
 const stripTrailingSlash = (u: string): string => u.replace(/\/+$/, '');
@@ -106,10 +106,15 @@ export async function listProviderModels(
     url = opts.baseUrl && opts.baseUrl.trim() ? `${stripTrailingSlash(opts.baseUrl)}/models` : OPENROUTER_MODELS_URL;
     if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
   } else {
-    // OpenAI-compatible: openai / venice / xai / gemini / local / litellm / openai-compat.
+    // OpenAI-compatible: openai / venice / xai / gemini / local / ollama / litellm / openai-compat.
     const base = opts.baseUrl && opts.baseUrl.trim() ? stripTrailingSlash(opts.baseUrl) : undefined;
     if (!base) throw new Error(`provider '${provider}' requires a baseUrl to list models`);
-    if (provider === 'local' && /\/api$/.test(base)) {
+    // The named `ollama` provider (issue #164) always speaks Ollama's native API, whether the
+    // operator typed the bare root (http://localhost:11434) or the /api form used by `local`.
+    if (provider === 'ollama') {
+      const root = base.replace(/\/api$/, '');
+      url = `${root}/api/tags`;
+    } else if (provider === 'local' && /\/api$/.test(base)) {
       // Ollama NATIVE api (base ends in /api): its model list is /api/tags → {models:[{name}]}
       // (there is no /api/models endpoint). Everything else speaks OpenAI /models → {data:[{id}]}.
       url = `${base}/tags`;

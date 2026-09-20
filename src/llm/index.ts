@@ -1739,6 +1739,9 @@ constructor(config: LLMConfig) {
         return new MockAdapter(config);
       case 'local':
         return new LocalAdapter(config);
+      case 'ollama':
+        // Named Ollama provider (issue #164) — same native wire protocol as `local`.
+        return new LocalAdapter(config);
       case 'local-agent':
         return new LocalAgentAdapter(config);
       default:
@@ -1822,7 +1825,7 @@ constructor(config: LLMConfig) {
           // re-hits the same cap after 1s+2s of pointless backoff, then finally advances to a
           // cloud fallback the operator may not want. Treat a local/local-agent timeout as
           // permanent so the ladder advances straight to the next hop instead of retrying in place.
-          const isLocalProvider = hop.provider === 'local' || hop.provider === 'local-agent';
+          const isLocalProvider = hop.provider === 'local' || hop.provider === 'ollama' || hop.provider === 'local-agent';
           const permanent = (error instanceof LLMApiError &&
             (error.status === 401 || error.status === 403 || error.status === 404)) ||
             !!options?.signal?.aborted ||
@@ -2074,6 +2077,16 @@ export function createMockBackbone(): LLMBackbone {
 export function createLocalBackbone(model?: string, baseUrl?: string): LLMBackbone {
   return new LLMBackbone({
     provider: 'local',
+    model: model || 'llama3',
+    baseUrl: baseUrl || 'http://localhost:11434/api',
+    maxTokens: 4096,
+    temperature: 0.7,
+  });
+}
+
+export function createOllamaBackbone(model?: string, baseUrl?: string): LLMBackbone {
+  return new LLMBackbone({
+    provider: 'ollama',
     model: model || 'llama3',
     baseUrl: baseUrl || 'http://localhost:11434/api',
     maxTokens: 4096,

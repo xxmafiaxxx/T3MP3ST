@@ -11,7 +11,7 @@ import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
 
-type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita' | 'local';
+type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita' | 'local' | 'ollama';
 
 // =============================================================================
 // CONFIGURATION SCHEMA
@@ -32,6 +32,7 @@ export interface TempestSettings {
     litellm?: string;
     novita?: string;
     local?: string;
+    ollama?: string;
   };
 
   // Default LLM settings
@@ -765,6 +766,16 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
       capabilities: ['reasoning', 'code', 'tools'],
     },
   ],
+  ollama: [
+    {
+      id: 'local/ollama',
+      name: 'Ollama model (served tag — set OLLAMA_MODEL, or pick from Fetch models)',
+      provider: 'Ollama',
+      contextWindow: 32000,
+      maxOutput: 4096,
+      capabilities: ['reasoning', 'code', 'tools'],
+    },
+  ],
   'local-agent': [
     // Connected local agent CLIs used AS the LLM backend — no API key (each uses its own login).
     // The chosen agent id (codex|claude|hermes|opencode|omp) travels in the `model` field.
@@ -968,6 +979,12 @@ class ConfigManager {
       if (localKey) return localKey;
       return this.config.get('apiKeys')[provider];
     }
+    // ollama provider: keyless by default; OLLAMA_API_KEY only for auth-fronted Ollama proxies.
+    if (provider === 'ollama') {
+      const ollamaKey = process.env.OLLAMA_API_KEY?.trim() || process.env.TEMPEST_LOCAL_API_KEY?.trim();
+      if (ollamaKey) return ollamaKey;
+      return this.config.get('apiKeys')[provider];
+    }
     const envVarMap = {
       openrouter: 'OPENROUTER_API_KEY',
       venice: 'VENICE_API_KEY',
@@ -1055,6 +1072,10 @@ class ConfigManager {
 
     // Mock and local are always available
     providers.push('mock', 'local');
+
+    // Named Ollama provider (issue #164) — keyless and available whenever an Ollama
+    // server is reachable; missions pre-verify the served model before launch.
+    providers.push('ollama');
 
     return providers;
   }
@@ -1159,12 +1180,21 @@ class ConfigManager {
         // /api/paas/v4) and TEMPEST_LOCAL_MODEL at the model tag you're serving.
         // Some OpenAI-compatible servers require a real bearer (Zhipu, Together, etc.) —
         // TEMPEST_LOCAL_API_KEY (or a provider-specific env like ZAI_API_KEY) provides it.
-        baseUrl = process.env.TEMPEST_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api';
+        baseUrl = process.env.TEMPEST_LOCAL_BASE_URL?.trim() || process.env.OLLAMA_BASE_URL?.trim() || 'http://localhost:11434/api';
         // Placeholder ids from AVAILABLE_MODELS / the static UI are not real served model tags.
         // Treat them as unset so TEMPEST_LOCAL_MODEL (or the llama3 default) wins; a real tag
         // passed in still takes priority.
-        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined) || process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3';
-        apiKey = process.env.TEMPEST_LOCAL_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || process.env.ZHIPUAI_API_KEY?.trim();
+        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined) || process.env.TEMPEST_LOCAL_MODEL?.trim() || process.env.OLLAMA_MODEL?.trim() || 'llama3';
+        apiKey = process.env.TEMPEST_LOCAL_API_KEY?.trim() || process.env.OLLAMA_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || process.env.ZHIPUAI_API_KEY?.trim();
+        break;
+      case 'ollama':
+        // First-class Ollama provider (issue #164): same native wire format as the `local`
+        // default (base URL ends in /api, model list at /api/tags), but selectable by name in
+        // the UI so self-hosters don't have to know Ollama hides behind `local`. Env
+        // precedence: OLLAMA_BASE_URL / OLLAMA_MODEL over the generic local vars.
+        baseUrl = process.env.OLLAMA_BASE_URL?.trim() || process.env.TEMPEST_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api';
+        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined) || process.env.OLLAMA_MODEL?.trim() || process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3';
+        apiKey = process.env.OLLAMA_API_KEY?.trim() || process.env.TEMPEST_LOCAL_API_KEY?.trim() || undefined;
         break;
       default:
         throw new Error(`Unknown provider: ${actualProvider}`);
@@ -1180,7 +1210,7 @@ class ConfigManager {
       // Local inference is far slower than cloud APIs, so it must not inherit the cloud-tuned
       // default timeout: floor it at 120s (matching the frontend llmTimeoutFor) and let the
       // operator override via TEMPEST_LOCAL_TIMEOUT for very slow reasoning models.
-      timeout: actualProvider === 'local'
+      timeout: actualProvider === 'local' || actualProvider === 'ollama'
         ? ((): number => {
             const parsed = Number(process.env.TEMPEST_LOCAL_TIMEOUT);
             return Number.isFinite(parsed) && parsed > 0
@@ -1273,6 +1303,9 @@ class ConfigManager {
         break;
       case 'local':
         this.config.set('defaultModel', process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3');
+        break;
+      case 'ollama':
+        this.config.set('defaultModel', process.env.OLLAMA_MODEL?.trim() || process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3');
         break;
     }
   }
