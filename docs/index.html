@@ -4731,42 +4731,53 @@
                         </div>
                     </div>
 
-                    <!-- Hidden compat elements -->
-                    <div id="targetList" style="display: none;"></div>
-                </div>
+                <!-- Benchmarks -->
+                <div class="page" id="page-benchmarks">
+                    <div class="card" style="margin-bottom: 18px;">
+                        <div class="card-header">
+                            <h3 class="card-title">📈 OBSIDIVM</h3>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-sm btn-secondary" onclick="resetBenchmarks()">Reset</button>
+                                <button class="btn btn-sm btn-secondary" onclick="runBenchmarks('config')" id="configBenchBtn">⚙️ Config Check</button>
+                                <button class="btn btn-sm btn-primary" onclick="runBenchmarks('live')" id="liveBenchBtn">🔴 Live Test</button>
+                            </div>
+                        </div>
 
-                <!-- Live Scan - per-agent execution progress -->
-                                <!-- Live Scan moved to standalone page: docs/live-scan.html -->
-                <script>
-        // State
-        const state = {
-            operators: [],
-            targets: [],
-            findings: [],
-            credentials: [],
-            activities: [],
-            settings: { openrouterKey: '', anthropicKey: '', openaiKey: '', selectedModel: 'z-ai/glm-5.3-flash', fallbackModel: 'anthropic/claude-opus-4.8', localHost: '127.0.0.1', localPort: '8080', localPath: '/v1', localModel: '', localApiKey: '', useLocal: false },
-            connected: false
-        };
+                        <!-- Quick Suite Presets -->
+                        <div style="margin-top: 8px; padding: 12px; background: rgba(var(--brand-rgb),0.08); border-radius: 8px; border: 1px solid rgba(var(--brand-rgb),0.25);">
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                                <span style="color: var(--brand); font-weight: bold; font-size: 13px;">Quick Launch</span>
+                                <span style="font-size: 11px; color: #888;">Pick a preset or build your own mix below</span>
+                            </div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('all')" style="background: rgba(255,255,255,0.08); border: 1px solid #555; font-size: 11px;">All Tests (48+)</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('owasp')" style="background: rgba(255,68,68,0.15); border: 1px solid rgba(255,68,68,0.4); color: #ff6666; font-size: 11px;">OWASP Top 10</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('mitre')" style="background: rgba(136,0,255,0.15); border: 1px solid rgba(136,0,255,0.4); color: #bb66ff; font-size: 11px;">MITRE ATT&CK</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('cwe')" style="background: rgba(255,136,0,0.15); border: 1px solid rgba(255,136,0,0.4); color: #ffaa44; font-size: 11px;">CWE Top 25</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('ctf')" style="background: rgba(0,136,255,0.15); border: 1px solid rgba(0,136,255,0.4); color: #44aaff; font-size: 11px;">CTF (HTB/CSAW)</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('web_only')" style="background: rgba(255,68,68,0.1); border: 1px solid rgba(255,68,68,0.3); color: #ff8888; font-size: 11px;">Web Only</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('xbow')" style="background: rgba(255,204,0,0.15); border: 1px solid rgba(255,204,0,0.4); color: #ffcc44; font-size: 11px;">XBOW</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('quick5')" style="background: rgba(0,204,255,0.15); border: 1px solid rgba(0,204,255,0.4); color: #44ddff; font-size: 11px;">Quick 5</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('cybench')" style="background: rgba(255,204,0,0.2); border: 1px solid rgba(255,204,0,0.5); color: #ffcc00; font-size: 11px;">Cybench</button>
+                                <button class="btn btn-sm" onclick="loadBenchmarkSuite('nyuctf')" style="background: rgba(255,204,0,0.2); border: 1px solid rgba(255,204,0,0.5); color: #ffdd44; font-size: 11px;">NYU CTF</button>
+                            </div>
+                            <div id="suiteDescription" style="margin-top: 8px; font-size: 11px; color: #888; display: none;"></div>
+                        </div>
 
-        // ═══════════════════════════════════════════════════════════════
-        // T3MP3ST API CLIENT
-        // ═══════════════════════════════════════════════════════════════
-        const T3MP3ST_API = {
-            // Determine if we can reach a local API server
-            // On HTTPS non-localhost (e.g. GitHub Pages), mixed-content blocks HTTP requests
-            _isLocal: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
-            _hasCustomUrl: !!localStorage.getItem('t3mp3st_api_url'),
-            _isStandalone: false,
-
-            baseUrl: localStorage.getItem('t3mp3st_api_url') ||
-                (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-                    ? `http://${window.location.hostname}:3333`
-                    : ''),  // Empty = standalone mode on remote hosts
-
-            connected: false,
-            llmAvailable: false,
-            serverLLM: null,
+                        <!-- Industry Benchmarks — Real CTF challenges from open-source repos -->
+                        <div style="margin-top: 8px; padding: 12px; background: rgba(255,204,0,0.08); border-radius: 8px; border: 1px solid rgba(255,204,0,0.25);">
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                                <span style="color: #ffcc00; font-weight: bold; font-size: 13px;">Industry Benchmarks</span>
+                                <span style="font-size: 11px; color: #888;">Real CTF challenges from Cybench &amp; NYU CTF Bench</span>
+                            </div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+                                <button class="btn btn-sm" onclick="loadRealBenchmarks('cybench')" style="background: rgba(var(--brand-rgb),0.15); border: 1px solid rgba(var(--brand-rgb),0.4); color: var(--brand); font-size: 11px;">Load Cybench (40 tasks)</button>
+                                <button class="btn btn-sm" onclick="loadRealBenchmarks('nyuctf')" style="background: rgba(0,136,255,0.15); border: 1px solid rgba(0,136,255,0.4); color: #44aaff; font-size: 11px;">Load NYU CTF (50 tasks)</button>
+                                <button class="btn btn-sm" onclick="clearBenchmarkCache()" style="background: rgba(255,255,255,0.05); border: 1px solid #444; color: #888; font-size: 10px;">Clear Cache</button>
+                                <span id="benchLoadStatus" style="font-size: 11px; color: #888; margin-left: 8px;"></span>
+                            </div>
+                            <div style="margin-top: 6px; font-size: 10px; color: #666;">Fetches real challenge descriptions, source code &amp; flags from GitHub. Scores are comparable to published results. Cached for 24h.</div>
+                        </div>
 
                         <!-- Run Options Row -->
                         <div style="margin-top: 12px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
@@ -6150,7 +6161,13 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
         <div class="llm-queue-log show" id="llmQueueLog"><div class="llm-queue-log-empty">In attesa di attività…</div></div>
     </div>
 
-    <script>
+                    <!-- Hidden compat elements -->
+                    <div id="targetList" style="display: none;"></div>
+                </div>
+
+                <!-- Live Scan - per-agent execution progress -->
+                                <!-- Live Scan moved to standalone page: docs/live-scan.html -->
+                <script>
         // State
         const state = {
             operators: [],
@@ -6158,7 +6175,7 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
             findings: [],
             credentials: [],
             activities: [],
-            settings: { openrouterKey: '', anthropicKey: '', openaiKey: '', selectedModel: 'anthropic/claude-opus-4.6', fallbackModel: 'nousresearch/hermes-3-llama-3.1-405b', localHost: '127.0.0.1', localPort: '8080', localPath: '/v1', localModel: '', localApiKey: '', useLocal: false },
+            settings: { openrouterKey: '', anthropicKey: '', openaiKey: '', selectedModel: 'z-ai/glm-5.3-flash', fallbackModel: 'anthropic/claude-opus-4.8', localHost: '127.0.0.1', localPort: '8080', localPath: '/v1', localModel: '', localApiKey: '', useLocal: false },
             connected: false
         };
 
@@ -6201,7 +6218,7 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                         text.textContent = 'Standalone Mode';
                     }
                     const standalone = { status: 'standalone', message: 'Direct LLM mode — no API server needed' };
-                    window.T3MP3STShell.updateReadiness(standalone);
+                    window.T3MP3STShell?.updateReadiness(standalone);
                     return standalone;
                 }
 
@@ -6240,7 +6257,7 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                         }
                     }
 
-                    window.T3MP3STShell.updateReadiness(data);
+                    window.T3MP3STShell?.updateReadiness(data);
                     return data;
                 } catch (e) {
                     this.connected = false;
@@ -6260,7 +6277,7 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                             text.textContent = 'Standalone Mode';
                         }
                         const standalone = { status: 'standalone', message: 'Direct LLM mode — configure API URL in Settings to connect' };
-                        window.T3MP3STShell.updateReadiness(standalone);
+                        window.T3MP3STShell?.updateReadiness(standalone);
                         return standalone;
                     }
 
@@ -6274,7 +6291,7 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                     }
 
                     const offline = { status: 'offline', error: e.message };
-                    window.T3MP3STShell.updateReadiness(offline);
+                    window.T3MP3STShell?.updateReadiness(offline);
                     return offline;
                 }
             },
@@ -6741,44 +6758,6 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                     return await res.json();
                 } catch {
                     return null;
-                }
-            },
-
-            /**
-             * Poll for mission status until complete
-             * A transient network hiccup must NOT read as "mission complete": getStatus
-             * resolves { active: false } on fetch failure, which would report the mission
-             * finished (0 findings) while the backend is still running. Tolerate a bounded
-             * streak of consecutive poll failures before concluding.
-             */
-            async pollUntilComplete(onUpdate, intervalMs = 3000) {
-                const MAX_CONSECUTIVE_FAILURES = 3;
-                return new Promise((resolve) => {
-                    let consecutiveFailures = 0;
-                    const poll = async () => {
-                        let status = await this.getStatus();
-                        if (!status) {
-                            // Transport failure — don't confuse it with mission completion.
-                            // hidden tabs: browser freezes fetches — never count toward the 3-strike cutoff
-                            if (document.hidden) { setTimeout(poll, intervalMs); return; }
-                            consecutiveFailures++;
-                            if (consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
-                                addMissionLog?.('warning', `Mission status poll failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}) — retrying`);
-                                setTimeout(poll, intervalMs);
-                                return;
-                            }
-                            status = { active: false, error: 'status poll failed ' + MAX_CONSECUTIVE_FAILURES + 'x in a row' };
-                        } else {
-                            consecutiveFailures = 0;
-                        }
-                        if (onUpdate) onUpdate(status);
-
-                        if (!status.active) {
-                            resolve(status);
-                            return;
-                        }
-                } finally {
-                    clearTimeout(timer);
                 }
             },
 
@@ -8229,9 +8208,6 @@ localStorage.setItem('t3mp3st', JSON.stringify({
         }
 
         document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => navigateTo(i.dataset.page)));
-        function navigateTo(page, options) {
-            return window.T3MP3STShell.navigate(page, options);
-        }
 
         function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
 
@@ -20821,6 +20797,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     }, 3000);
 
                     // Mission complete
+                    if (!finalStatus) return; // stopped locally; preserve the confirmed control outcome
                     if (finalStatus.error) {
                         // Lost contact with the server mid-mission — report failure honestly
                         // instead of dressing a dead poll stream up as "MISSION COMPLETE".
@@ -20828,7 +20805,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     }
                     if (finalStatus.paused && finalStatus.stallReason) {
                         throw new Error(finalStatus.stallReason);
-                    if (!finalStatus) return; // stopped locally; preserve the confirmed control outcome
+                    }
                     if (finalStatus.mission?.status !== 'completed') {
                         completeMission('Backend stopped without confirmed mission completion');
                         return;
@@ -21007,53 +20984,6 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
             if (run.starting) {
                 toast('Backend launch pending — retry the control after launch is confirmed', 'warning');
                 return false;
-            }
-
-            document.getElementById('cmdMissionStatus').textContent = 'PAUSED';
-            document.getElementById('cmdMissionStatus').style.color = '#ffaa00';
-            document.getElementById('cmdPauseBtn').textContent = '▶';
-            document.getElementById('cmdPauseBtn').onclick = resumeMission;
-
-            addIntel('COMMAND', 'Mission paused by operator.', 'warning');
-        }
-
-        // Resume mission
-        function resumeMission() {
-            if (typeof window.resumeActiveMission === 'function') {
-                window.resumeActiveMission();
-            } else if (BackendDispatch.isAvailable()) {
-                BackendDispatch.resumeMission();
-            }
-
-            document.getElementById('cmdMissionStatus').textContent = 'Engaging...';
-            document.getElementById('cmdMissionStatus').style.color = '#00ff88';
-            document.getElementById('cmdPauseBtn').textContent = '⏸';
-            document.getElementById('cmdPauseBtn').onclick = pauseMission;
-        }
-
-        // Abort mission — hard stop. Kills backend dispatch, the in-browser pipeline,
-        // and any polling so every scan actually stops. Old version only flipped the
-        // local missionRunning badge leaving backend recon/infiltrator/exfiltrator running.
-        function abortMission(skipConfirm) {
-            const wasRunning = missionRunning;
-            if (wasRunning && !skipConfirm && !confirm('Abort the current mission? All operator progress will be lost.')) return;
-            missionRunning = false;
-            PipelineOrchestrator.abortRequested = true;
-            if (missionTimer) { clearInterval(missionTimer); missionTimer = null; }
-            if (window._warGangPoll) { try { clearInterval(window._warGangPoll); } catch (_) {} window._warGangPoll = null; }
-            try { window.recordLiveScanEvent && window.recordLiveScanEvent({ id: `abort-${Date.now()}`, timestamp: Date.now(), kind: 'task_failed', operatorId: 'command', callsign: 'COMMAND', taskName: 'abort', detail: wasRunning ? 'ABORT requested — stopping all operators' : 'STOP fired — killing any active backend scans' }); } catch (_) {}
-            try { if (typeof BackendDispatch !== 'undefined' && BackendDispatch.stopMission) BackendDispatch.stopMission().catch(function(){}); } catch (_) {}
-            try { if (typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API.post) T3MP3ST_API.post('/api/mission/stop', {}).catch(function(){}); } catch (_) {}
-            document.getElementById('cmdMissionName').textContent = 'STANDBY';
-            const s = document.getElementById('cmdMissionStatus');
-            if (s) { s.textContent = wasRunning ? 'Mission aborted' : 'Awaiting orders'; s.style.color = wasRunning ? '#ff4444' : '#666'; }
-            resetEngageUI();
-            if (wasRunning) {
-                addIntel('COMMAND', 'Mission aborted. All operators standing down.', 'danger');
-                addMissionLog('error', 'MISSION ABORTED BY OPERATOR');
-                toast('Mission aborted', 'warning');
-            } else {
-                addIntel('COMMAND', 'Stop fired — killing any active backend scans.', 'warning');
             }
             if (!run.backend && action !== 'stop') {
                 toast('Pause/resume is unavailable for browser simulations', 'warning');
