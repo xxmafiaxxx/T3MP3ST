@@ -1,5 +1,38 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-19 (Jarvis) — GitHub issues #154/#162/#164/#215 fixed (Ollama provider, Kali, auth docs, UX spike)
+
+**Request:** "https://github.com/elder-plinius/T3MP3ST/issues FIX THESE ISSUES" — the four open issues.
+
+### #164 — first-class Ollama provider (the big one)
+- `LLMProvider |= 'ollama'` (types), `AVAILABLE_MODELS.ollama` static entry, `apiKeys.ollama` config field, `ApiKeyProvider` widened.
+- `getLLMConfig('ollama')`: OLLAMA_BASE_URL/OLLAMA_MODEL env (fallback TEMPEST_LOCAL_*, default http://localhost:11434/api + llama3), keyless (OLLAMA_API_KEY only for auth-fronted proxies), 120s local timeout floor. `local` also honors OLLAMA_* as fallback aliases. setDefaultModel/getApiKey/`case 'ollama'` wired everywhere.
+- `llm/index.ts`: LocalAdapter dispatch for 'ollama' + isLocalProvider fallback-ladder inclusion; new `createOllamaBackbone`.
+- `provider-models.ts`: 'ollama' always speaks native /api/tags (tolerates base with or without /api).
+- `server.ts`: providerNeedsApiKey, mission-launch baseUrl passthrough, verifyLocalLLMServed mission preflight, general-config sanitize/effectiveKey, ENV_APIKEY_MAP.OLLAMA_API_KEY + key-removal branch.
+- UI: UAC dropdown "Ollama · Local, keyless (native API)" + UAC_DEFAULT_BASE entry. Docs: GETTING_STARTED "Ollama as a named provider", MODEL_MATRIX "Local models (Ollama) in comparisons".
+- Tests: `src/__tests__/ollama-provider.test.ts` 8/8 (env precedence, keyless defaults, alias fallbacks, catalog, backbone, /api/tags wire via stubbed fetch). GOTCHA: the operator .env leaks TEMPEST_LOCAL_MODEL=qwen3:8b into process.env — the defaults test must clear all five env vars.
+- LIVE vs real LAN Ollama 192.168.1.162:11434: listProviderModels → 7 served tags via /api/tags with a bare base URL; getLLMConfig keyless + timeout floor; backbone validates.
+
+### #162 — authenticated testing (question-issue)
+- New "Quick start: testing an app behind a login" in AUTHENTICATED_WORKFLOWS.md: log in once → Cookie/Bearer into TEMPEST_TARGET_ORIGIN+TEMPEST_TARGET_HEADERS → verify via same-origin curl_request → re-auth on expiry. Automated login stays out of scope (manual_step_required boundary unchanged).
+
+### #154 — Kali
+- doctor.mjs Node check now parses package.json engines (>=22.19) instead of hardcoded major>=18 — a Kali apt Node now fails DOCTOR, not npm install. Verified live: "node v24.21.0 vs required >=22.19.0", 37/40, 0 blockers.
+- INSTALL_MATRIX.md Kali/Debian section (NodeSource/nvm, build-essential, arsenal:doctor, report-with-output guidance). Codebase audit: no Windows-only runtime paths — win32 branches are additive guards.
+
+### #215 — UX spike deliverable
+- `docs/UX_SPIKE_ISSUE_215.md`: four as-is journeys with file/line evidence (split-brain model pickers, silent zero-import failure, no persistent active-model surface, icon-only mission controls), grounded a11y audit (5 aria-labels vs 275 buttons in index.html), recommendations W1–W10 split quick-win vs structural, incremental sequence, testable acceptance criteria, open questions. Usability testing NOT performed — hypotheses labeled per the spike's own criteria.
+
+### PRE-EXISTING REGRESSION FOUND (docs/index.html — NOT from this session)
+- `ui-inline-scripts-parse`, `warroom-reporting-static`, `mission-controls`, `tool-call-boundary`, `mission-status-endpoint`, `ctf-rsa-static`, `cve-correlation`, `config-directory` (24 tests) fail on the COMMITTED tree. Bisected: b63543c = last good index.html; merge 002f405 ("resolve conflicts with origin/main") spliced body markup (Run Options Row / benchmark categories / llm-queue popup) INSIDE the state+T3MP3ST_API script right after `serverLLM: null,`, duplicated the whole state/API section, and dropped a pollUntilComplete middle hunk leaving an orphan `} finally { clearTimeout(timer); }` from a variant that exists in NO lineage.
+- Repair recipe: (1) delete each duplicated broken first script — from its `<script>` (below the Live-Scan comments) to the blank before the next intact `<script>` — relocating the markup chunk after `</html>` (its pre-merge home); there are TWO damaged copies, repeat per copy; (2) replace each orphan finally block (the 7 lines from `if (!status.active) {` through `}` before `async getStatus`) with the paused/stall branch + kill-chain + `setTimeout(poll, intervalMs); }; poll(); });` tail — present verbatim in b63543c and 92caa2e. CRLF-aware anchors required.
+- Working tree carries a partial fix (+28/−3: pollUntilComplete tail restored, orphan finally removed) LEFT UNCOMMITTED on purpose — docs/index.html is being concurrently rewritten by another session (a surgical write was clobbered mid-flight; that session committed 50a38f2 + 712a7f6 sweeping this session's files). Whoever owns the file: apply the recipe or coordinate.
+- config-directory + mission-status-endpoint failures look environment/state-dependent (child-spawn env isolation, status payload) — re-check after the parse fix.
+
+### Verified
+- tsc --noEmit 0 · provider suites 42/42 (ollama 8, provider-models, llm-local-fallback, litellm, novita, deepseek) · doctor engines check live · settings.html inline scripts parse 11/11. Full suite remains red ONLY on the pre-existing index.html regression above — none of it from these changes.
+
 ## Session Log — 2026-09-19 (Jarvis) — Settings: OSINT deep-dump-lane keys panel; GPS towers one-search fix + 📱 icon
 
 **Requests:** "in the settings section allow entry of the deep dump lanes api keys and osint info" (+ GPS-map follow-ups: cell icon → phone; OpenCellID "stop doing multiple pings… just one search and process results").
