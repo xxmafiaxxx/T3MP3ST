@@ -45,11 +45,18 @@ import { WebhookDispatcher } from './config/webhooks.js';
 import { CveFeedEngine } from './tools/cve-feed.js';
 import { getPayloadsForCve, CVE_PAYLOAD_CATALOG } from './tools/cve-payloads.js';
 import {
-  OSINT_SITES,
+  getMergedSiteCatalog,
   OSINT_TOOLS,
   runUsernameSweep,
   emailIntel,
+  hudsonRockEmail,
+  hibpBreachCatalog,
   phoneIntel,
+  phoneInfogaDorks,
+  phoneInfogaOvhCheck,
+  phoneInfogaScan,
+  phoneInfogaRemoteInfo,
+  phoneInfogaRemoteScan,
   dumpDatabaseLookup,
   locatePerson,
   usernamePermutations,
@@ -66,6 +73,16 @@ import {
   dumpKeyStatus,
   type GeoPoint,
 } from './tools/osint.js';
+import {
+  SHERLOCK_SOURCE,
+  SHERLOCK_LICENSE,
+  SHERLOCK_DATA_URL,
+} from './tools/sherlock-sites.js';
+import {
+  buildGoogleDorks,
+  googleDorkOperators,
+  googleDorkCatalog,
+} from './tools/google-dorks.js';
 import {
   ANDROID_SCRIPTS,
   ANDROID_FORENSICS_SOURCE,
@@ -7696,11 +7713,36 @@ app.post('/api/tools/sploitus', async (req: Request, res: Response): Promise<voi
 // authorization for the lookup; every run is audit-logged.
 // =============================================================================
 
-app.get('/api/osint/sites', (_req: Request, res: Response) => {
+app.get('/api/osint/sites', (req: Request, res: Response) => {
+  // The full catalog is the curated entries plus the vendored Sherlock database.
+  // `?catalog=curated` returns the hand-probed subset the old default exposed.
+  const want = String(req.query.catalog || 'full').toLowerCase();
+  const merged = getMergedSiteCatalog();
+  const pool = want === 'curated'
+    ? merged.catalog.filter((s) => s.source === 'curated')
+    : want === 'sherlock'
+      ? merged.catalog.filter((s) => s.source === 'sherlock')
+      : merged.catalog;
   res.json({
-    sites: OSINT_SITES.map((s) => ({ name: s.name, category: s.category, reliability: s.reliability, notes: s.notes })),
-    count: OSINT_SITES.length,
+    sites: pool.map((s) => ({
+      name: s.name,
+      category: s.category,
+      reliability: s.reliability,
+      source: s.source || 'curated',
+      adult: Boolean(s.adult),
+      notes: s.notes,
+    })),
+    count: pool.length,
     tools: OSINT_TOOLS.map((t) => ({ name: t.name, description: t.description })),
+    sherlock: {
+      source: SHERLOCK_SOURCE,
+      license: SHERLOCK_LICENSE,
+      dataUrl: SHERLOCK_DATA_URL,
+      curated: merged.curatedCount,
+      added: merged.sherlockCount,
+      byErrorType: merged.byErrorType,
+      skipped: merged.skipped,
+    },
   });
 });
 
@@ -7774,9 +7816,12 @@ app.post('/api/osint/username-sweep', async (req: Request, res: Response): Promi
     : undefined;
   if (!username) { res.status(400).json({ error: 'username required' }); return; }
   try {
-    console.log(`[T3MP3ST][OSINT] username sweep: ${username}${sites ? ` (${sites.length} sites)` : ''}`);
     const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
-    const sweep = await runUsernameSweep(username, { sites, hints: { name } });
+    const catalogRaw = typeof req.body?.catalog === 'string' ? req.body.catalog.toLowerCase() : 'full';
+    const catalog = (['curated', 'sherlock', 'full'].includes(catalogRaw) ? catalogRaw : 'full') as 'curated' | 'sherlock' | 'full';
+    const includeAdult = req.body?.includeAdult === true;
+    console.log(`[T3MP3ST][OSINT] username sweep: ${username}${sites ? ` (${sites.length} sites)` : ''} [${catalog}]`);
+    const sweep = await runUsernameSweep(username, { sites, hints: { name }, catalog, includeAdult });
     for (const hit of sweep.found.slice(0, 20)) {
       upsertMissionFindingToLedger({
         title: `Social Account Found — ${hit.site} (${sweep.username})`,
@@ -7817,12 +7862,126 @@ app.post('/api/osint/email', async (req: Request, res: Response): Promise<void> 
   }
 });
 
+app.post('/api/osint/infostealer', async (req: Request, res: Response): Promise<void> => {
+  const email = typeof req.body?.email === 'string' ? req.body.email : '';
+  if (!email) { res.status(400).json({ error: 'email required' }); return; }
+  try {
+    console.log(`[T3MP3ST][OSINT] infostealer check: ${email}`);
+    const r = await hudsonRockEmail(email);
+    if (r.infected) {
+      upsertMissionFindingToLedger({
+        title: `Infostealer Infection — ${email}`,
+        description: r.infections.map((i) => `${i.family || 'stealer'} on ${i.computerName || '?'} (${i.ip || '?'}) at ${i.date || '?'}${i.software?.length ? `; software: ${i.software.slice(0, 8).join(', ')}` : ''}`).join(' | '),
+        severity: 'high',
+        targetId: email,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `Hudson Rock: ${r.infections.length} infection record(s); ${r.corporateServices} corporate / ${r.userServices} user services exposed`, timestamp: Date.now(), metadata: { tool: 'osint_infostealer_check' } }],
+      });
+    }
+    res.json({ success: true, infostealer: r });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/breach-catalog', async (req: Request, res: Response): Promise<void> => {
+  const domain = typeof req.body?.domain === 'string' ? req.body.domain : undefined;
+  try {
+    console.log(`[T3MP3ST][OSINT] breach catalog${domain ? ` (${domain})` : ''}`);
+    const c = await hibpBreachCatalog(domain);
+    if (c.total > 0) {
+      upsertMissionFindingToLedger({
+        title: `Breach Catalogue — ${c.domain || 'all known breaches'} (${c.total})`,
+        description: c.entries.slice(0, 15).map((e) => `${e.name} (${e.breachDate || '?'}, ${e.pwnCount || '?'} accounts)`).join('; '),
+        severity: 'info',
+        targetId: c.domain || 'hibp-catalog',
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `HIBP catalogue: ${c.total} breach(es) via osint_breach_catalog`, timestamp: Date.now(), metadata: { tool: 'osint_breach_catalog' } }],
+      });
+    }
+    res.json({ success: true, catalog: c });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
 app.post('/api/osint/phone', (req: Request, res: Response) => {
   const phone = typeof req.body?.phone === 'string' ? req.body.phone : '';
   if (!phone) { res.status(400).json({ error: 'phone required' }); return; }
   console.log(`[T3MP3ST][OSINT] phone intel: ${phone}`);
   try {
-    res.json({ success: true, intel: phoneIntel(phone) });
+    const intel = phoneIntel(phone);
+    const dorks = phoneInfogaDorks(phone);
+    res.json({ success: true, intel, dorks, dorkStats: { total: dorks.length, social: dorks.filter(d=>d.category==='social').length, disposable: dorks.filter(d=>d.category==='disposable').length, reputation: dorks.filter(d=>d.category==='reputation').length, individuals: dorks.filter(d=>d.category==='individuals').length, general: dorks.filter(d=>d.category==='general').length } });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/phone/scan', async (req: Request, res: Response) => {
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone : '';
+  if (!phone) { res.status(400).json({ error: 'phone required' }); return; }
+  const useRemote = req.body?.remote === undefined ? true : req.body.remote === true;
+  console.log(`[T3MP3ST][OSINT] phone scan (PhoneInfoga${useRemote ? ' + remote' : ''}): ${phone}`);
+  try {
+    const scan = await phoneInfogaScan(phone, { remote: useRemote });
+    upsertMissionFindingToLedger({
+      title: `PhoneInfoga Scan — ${scan.e164}`,
+      description: `${scan.country} ${scan.valid ? 'valid' : 'invalid'}; ${scan.carrier ? `carrier ${scan.carrier}` : 'carrier unknown (numverify not configured)'}${scan.ovh?.found ? `; OVH VoIP ${scan.ovh.city || ''} ${scan.ovh.zipCode || ''}` : ''} — ${scan.dorks.length} dorks`,
+      severity: 'info',
+      targetId: scan.e164,
+      operatorId: 'osint-panel',
+      evidence: [{ type: 'log', content: `PhoneInfoga: ${scan.e164} valid:${scan.valid} ${scan.scanNote}`, timestamp: Date.now(), metadata: { tool: 'osint_phone_scan' } }],
+    });
+    res.json({ success: true, scan });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.get('/api/osint/phone/dorks', (req: Request, res: Response) => {
+  const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
+  if (!phone) { res.status(400).json({ error: 'phone query param required' }); return; }
+  try {
+    const dorks = phoneInfogaDorks(phone);
+    res.json({ success: true, phone, dorks, count: dorks.length });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.get('/api/osint/phone/ovh', async (req: Request, res: Response) => {
+  const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
+  if (!phone) { res.status(400).json({ error: 'phone query param required' }); return; }
+  try {
+    const ovh = await phoneInfogaOvhCheck(phone);
+    res.json({ success: true, ovh });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// ── Remote PhoneInfoga instance (REST API v2, swagger: web/docs/swagger.yaml) ──
+// Operators who run the real Go binary somewhere (docker/K8s/VPS) can point
+// T3MP3ST at it: T3MP3ST_PHONEINFOGA_URL + optional T3MP3ST_PHONEINFOGA_TOKEN.
+app.get('/api/osint/phoneinfoga/remote', async (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, remote: await phoneInfogaRemoteInfo() });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/phoneinfoga/remote/scan', async (req: Request, res: Response) => {
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone : '';
+  if (!phone) { res.status(400).json({ error: 'phone required' }); return; }
+  const scanners = Array.isArray(req.body?.scanners)
+    ? req.body.scanners.filter((s: unknown): s is string => typeof s === 'string')
+    : undefined;
+  const dryRun = req.body?.dryRun === true;
+  try {
+    console.log(`[T3MP3ST][OSINT] phoneinfoga remote scan${dryRun ? ' (dry-run)' : ''}: ${phone}`);
+    res.json({ success: true, remote: await phoneInfogaRemoteScan(phone, { scanners, dryRun }) });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || String(err) });
   }
@@ -7879,7 +8038,52 @@ app.post('/api/osint/dorks', (req: Request, res: Response) => {
     phone: typeof req.body?.phone === 'string' ? req.body.phone : undefined,
     domain: typeof req.body?.domain === 'string' ? req.body.domain : undefined,
   });
-  res.json({ success: true, dorks, count: dorks.length });
+  // Enrich with Google Dork technique (Recorded Future top-20 operators).
+  try {
+    const g = buildGoogleDorks({
+      name: typeof req.body?.name === 'string' ? req.body.name : undefined,
+      email: typeof req.body?.email === 'string' ? req.body.email : undefined,
+      username: typeof req.body?.username === 'string' ? req.body.username : undefined,
+      phone: typeof req.body?.phone === 'string' ? req.body.phone : undefined,
+      domain: typeof req.body?.domain === 'string' ? req.body.domain : undefined,
+      keyword: typeof req.body?.keyword === 'string' ? req.body.keyword : (typeof req.body?.name === 'string' ? req.body.name : typeof req.body?.domain === 'string' ? req.body.domain : undefined),
+      category: typeof req.body?.category === 'string' ? req.body.category : undefined,
+      operator: typeof req.body?.operator === 'string' ? req.body.operator : undefined,
+      limit: 80,
+    }).map((d: any) => ({ label: `DORK [${d.category}] ${d.label} (${d.operators.join(' ')})`, url: d.engines[0]?.url || `https://www.google.com/search?q=${encodeURIComponent(d.query)}`, query: d.query, category: d.category, severity: d.severity, operators: d.operators, engines: d.engines }));
+    const seen = new Set(dorks.map((x: any) => x.url));
+    const merged = [...dorks, ...g.filter((x: any) => !seen.has(x.url))];
+    res.json({ success: true, dorks: merged, count: merged.length, baseCount: dorks.length, dorkCount: g.length });
+  } catch {
+    res.json({ success: true, dorks, count: dorks.length });
+  }
+});
+
+// Google Dorks as a standalone OSINT search technique — operator fires in THEIR browser.
+app.all('/api/osint/google-dorks', (req: Request, res: Response) => {
+  const src: any = (req.method === 'GET' ? req.query : req.body) || {};
+  try {
+    // ?catalog=1 returns the raw template catalog + operators (for the UI cheat sheet).
+    if (String(src.catalog || '').toLowerCase() === '1' || String(src.catalog || '').toLowerCase() === 'true') {
+      res.json({ success: true, operators: googleDorkOperators(), catalog: googleDorkCatalog(), catalogCount: googleDorkCatalog().length });
+      return;
+    }
+    const dorks = buildGoogleDorks({
+      name: typeof src.name === 'string' ? src.name : undefined,
+      email: typeof src.email === 'string' ? src.email : undefined,
+      username: typeof src.username === 'string' ? src.username : undefined,
+      phone: typeof src.phone === 'string' ? src.phone : undefined,
+      domain: typeof src.domain === 'string' ? src.domain : undefined,
+      keyword: typeof src.keyword === 'string' ? src.keyword : undefined,
+      category: typeof src.category === 'string' ? src.category : undefined,
+      severity: typeof src.severity === 'string' ? src.severity : undefined,
+      operator: typeof src.operator === 'string' ? src.operator : undefined,
+      limit: typeof src.limit === 'string' ? parseInt(src.limit, 10) : typeof src.limit === 'number' ? src.limit : undefined,
+    });
+    res.json({ success: true, dorks, count: dorks.length, operators: googleDorkOperators().length });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || String(err) });
+  }
 });
 
 /** The full person-locator chain — sweeps socials, Gravatar identity, breach/dump
@@ -7900,6 +8104,15 @@ app.post('/api/osint/locate', async (req: Request, res: Response): Promise<void>
       onModule: (m) => {
         try { broadcastEvent('osint:module', { subject: subject || name || '', ...m, ts: Date.now() }); } catch { /* SSE optional */ }
       },
+      // Optional LLM assist over mined pages — routed through the CONFIGURED
+      // backbone, which is the operator's LOCAL gemma4 when useLocal is on.
+      // Bounded (≤2 pages/query) and kept as unverified second-opinion data.
+      llmChat: llm ? async (system: string, user: string) => {
+        const backbone = llm;
+        if (!backbone) return '';
+        return await backbone.prompt(user.slice(0, 4000), system);
+      } : undefined,
+      llmModel: llm ? String((llm as unknown as { activeModel?: string }).activeModel || 'configured backbone') : undefined,
     });
     if (dossier.socialAccounts.length > 0) {
       upsertMissionFindingToLedger({
@@ -12145,12 +12358,236 @@ app.use('/ui', express.static('docs', {
 const DOC_PAGES = new Set([
   'about.html', 'arsenal.html', 'configs.html', 'ctf.html', 'cves.html', 'dfir.html',
   'evidence.html', 'general.html', 'index.html', 'live-scan.html', 'obsidivm.html',
-  'operators.html', 'osint.html', 'gps.html', 'receipts.html', 'self-improve.html', 'settings.html', 'terminal.html', 'shell.html',
+  'operators.html', 'osint.html', 'gps.html', 'receipts.html', 'self-improve.html', 'settings.html', 'strix.html', 'terminal.html', 'shell.html',
 ]);
 app.get('/:page', (req: Request, res: Response, next: NextFunction) => {
   const page = String(req.params.page || '');
   if (DOC_PAGES.has(page)) return res.redirect(301, `/ui/${page}`);
   next();
+});
+
+// =============================================================================
+// STRIX — autonomous AI pentest runs (K:\coding\appDev\strix)
+// Reads strix_runs/ from disk (cwd or STRIX_RUNS_DIR) without spawning Python.
+// Viewer SPA is intentionally NOT re-served here — use `strix view` / app.strix.ai;
+// these endpoints surface the run inventory + artifacts as T3MP3ST JSON so the
+// Strix leaf page can render the cross-run history and ingest vulns to the vault.
+// =============================================================================
+import * as pathFs from 'path';
+import { readdirSync, existsSync as _existsSync } from 'fs';
+function strixBaseDirs(): string[] {
+  const env = process.env.STRIX_RUNS_DIR ? [process.env.STRIX_RUNS_DIR] : [];
+  const cwd = pathFs.join(process.cwd(), 'strix_runs');
+  const sibling = pathFs.resolve('K:/coding/appDev/strix/strix_runs');
+  const t3mp = pathFs.resolve('K:/coding/T3MP3ST/strix_runs');
+  // Dedicated, then preferred sibling (dev checkout), then cwd-relative.
+  const raw = [...env, sibling, cwd, t3mp];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of raw) { const k = pathFs.resolve(p).toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(p); } }
+  return out;
+}
+function strixFirstBase(): string | null {
+  for (const d of strixBaseDirs()) try { if (_existsSync(d)) return d; } catch {}
+  // no dir exists yet — advertise the preferred base so the UI can show it
+  return strixBaseDirs()[0] ?? null;
+}
+function strixIterRunDirs(base: string): string[] {
+  try {
+    const entries = readdirSync(base, { withFileTypes: true });
+    const dirs = entries.filter(e => e.isDirectory()).map(e => pathFs.join(base, e.name))
+      .filter(d => _existsSync(pathFs.join(d, 'run.json')));
+    dirs.sort((a, b) => {
+      try {
+        const at = _existsSync(pathFs.join(a, 'run.json')) ? require('fs').statSync(pathFs.join(a, 'run.json')).mtimeMs : 0;
+        const bt = _existsSync(pathFs.join(b, 'run.json')) ? require('fs').statSync(pathFs.join(b, 'run.json')).mtimeMs : 0;
+        return bt - at;
+      } catch { return 0; }
+    });
+    return dirs;
+  } catch { return []; }
+}
+function strixReadJson<T>(p: string, fallback: T): T {
+  try { const raw = readFileSync(p, 'utf-8'); const j = JSON.parse(raw); return j as T; } catch { return fallback; }
+}
+function strixSeverityCounts(vulns: any[]): Record<string, number> {
+  const c: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const v of vulns) {
+    const s = String((v && v.severity) || '').toLowerCase().trim();
+    const k = (c as any)[s] !== undefined ? s : 'low';
+    (c as any)[k] = ((c as any)[k] || 0) + 1;
+  }
+  return c;
+}
+function strixPrimaryTarget(rec: any): string | null {
+  const infos = rec && rec.targets_info;
+  if (Array.isArray(infos)) for (const e of infos) if (e && typeof e.original === 'string' && e.original) return e.original;
+  if (typeof rec?.target === 'string' && rec.target) return rec.target;
+  return null;
+}
+function strixRunEntry(dir: string): any {
+  const rec = strixReadJson<any>(pathFs.join(dir, 'run.json'), {});
+  const vulns: any[] = (() => { try { const j = strixReadJson<any>(pathFs.join(dir, 'vulnerabilities.json'), []); return Array.isArray(j) ? j : []; } catch { return []; } })();
+  const finished = ['completed', 'stopped', 'failed', 'interrupted'].includes(String(rec.status || '')) && !!rec.end_time;
+  return {
+    name: rec.run_name || pathFs.basename(dir),
+    dir,
+    target: strixPrimaryTarget(rec),
+    scan_mode: rec.scan_mode || null,
+    status: rec.status || null,
+    start_time: rec.start_time || null,
+    end_time: rec.end_time || null,
+    finished,
+    severity_counts: strixSeverityCounts(vulns),
+    vuln_count: vulns.length,
+  };
+}
+function strixCollectRuns(): { baseDir: string | null, source: string, runs: any[] } {
+  const preferred = strixBaseDirs();
+  for (const base of preferred) {
+    const runs = strixIterRunDirs(base);
+    if (runs.length) return { baseDir: base, source: base === preferred[0] ? 'env' : (base.includes('appDev') ? 'strix-checkout' : 'cwd'), runs: runs.map(strixRunEntry) };
+  }
+  // nothing found anywhere — expose first base that exists or would be created
+  const fb = strixFirstBase();
+  return { baseDir: fb, source: fb ? 'empty' : 'none', runs: [] };
+}
+app.get('/api/strix/status', (_req: Request, res: Response) => {
+  try {
+    const { baseDir, source, runs } = strixCollectRuns();
+    const viewerBuilt = (() => {
+      try {
+        const p = pathFs.resolve('K:/coding/appDev/strix/strix/interface/viewer/static/index.html');
+        return _existsSync(p);
+      } catch { return false; }
+    })();
+    const totalVulns = runs.reduce((n: number, r: any) => n + (r.vuln_count || 0), 0);
+    const liveCount = runs.filter((r: any) => !r.finished).length;
+    const finishedCount = runs.length - liveCount;
+    res.json({
+      ok: true,
+      baseDir, source, runs, count: runs.length,
+      totalVulns, liveCount, finishedCount,
+      viewerBuilt, viewerUrl: null,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+app.get('/api/strix/runs', (_req: Request, res: Response) => {
+  try {
+    const { baseDir, source, runs } = strixCollectRuns();
+    res.json({ count: runs.length, baseDir, source, runs });
+  } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }
+});
+app.get('/api/strix/run', (req: Request, res: Response) => {
+  try {
+    const name = String(req.query.run || '').trim();
+    if (!name) { res.status(400).json({ error: 'run query param required' }); return; }
+    const { baseDir } = strixCollectRuns();
+    if (!baseDir) { res.status(404).json({ error: 'no strix_runs base found' }); return; }
+    const dir = pathFs.join(baseDir, name);
+    const resolved = pathFs.resolve(dir);
+    const baseRes = pathFs.resolve(baseDir);
+    if (resolved === baseRes || !resolved.startsWith(baseRes + pathFs.sep) || !_existsSync(pathFs.join(resolved, 'run.json'))) {
+      res.status(404).json({ error: 'unknown run' }); return;
+    }
+    const rec = strixReadJson<any>(pathFs.join(resolved, 'run.json'), {});
+    const vulns: any[] = (() => { try { const j = strixReadJson<any>(pathFs.join(resolved, 'vulnerabilities.json'), []); return Array.isArray(j) ? j : []; } catch { return []; } })();
+    let markdown = '';
+    try { const p = pathFs.join(resolved, 'penetration_test_report.md'); if (_existsSync(p)) markdown = readFileSync(p, 'utf-8'); } catch {}
+    res.json({ name, dir: resolved, record: rec, vulnerabilities: vulns, markdown: markdown || null });
+  } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }
+});
+app.get('/api/strix/viewer', (req: Request, res: Response) => {
+  // T3MP3ST does not re-host Strix's token-gated viewer. Use `strix view` locally
+  // or the cloud viewer. This endpoint reports how to open it and, when a loopback
+  // viewer is actually reachable, proxies its authorized URL if the caller supplies
+  // ?token= or the server can discover it (best-effort).
+  const run = String(req.query.run || '').trim();
+  res.json({
+    ok: false,
+    message: 'Run `strix view' + (run ? ' --run ' + JSON.stringify(run) : '') + '` in your terminal (or `strix view --help`) to open the Strix viewer. Paste its http://127.0.0.1:PORT/?token=... URL into the Strix page viewer input to embed it.',
+    hint: 'The viewer SPA is a Python stdlib server (strix/interface/viewer/server.py) with a per-process session token — it must be started from Python, not this Node API.',
+    url: null,
+  });
+});
+app.post('/api/strix/launch', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body || {}) as any;
+    const target = String(body.target || '').trim();
+    if (!target) { res.status(400).json({ error: 'target is required (path, URL, GitHub, or OpenAPI spec)' }); return; }
+    const scan_mode = typeof body.scan_mode === 'string' ? body.scan_mode.trim() || undefined : undefined;
+    const llm = typeof body.llm === 'string' ? body.llm.trim() || undefined : undefined;
+    const instruction = typeof body.instruction === 'string' ? body.instruction.trim() || undefined : undefined;
+    const non_interactive = body.non_interactive !== false;
+    // Build a non-interactive command the operator can also run directly
+    const args: string[] = [];
+    if (non_interactive) args.push('-n');
+    args.push('--target', target);
+    if (scan_mode) args.push('--scan-mode', scan_mode);
+    if (llm) args.push('--model', llm);
+    if (instruction) args.push('--instruction', instruction);
+    const displayCmd = ['strix', ...args.map(a => (a.includes(' ') ? JSON.stringify(a) : a))].join(' ');
+    // Best-effort detached spawn so the Node server does not hold the child
+    let spawnOk = false, spawnError: string | null = null;
+    try {
+      const child = spawn('strix', args, {
+        detached: true, stdio: 'ignore',
+        env: { ...process.env, ...(llm ? { STRIX_LLM: llm } as any : {}) },
+        windowsHide: true,
+      } as any);
+      child.unref();
+      spawnOk = true;
+    } catch (e: any) { spawnError = e?.message || String(e); }
+    if (spawnOk) {
+      res.json({ ok: true, message: 'Strix launch requested — check your terminal / strix_runs for progress.', cmd: displayCmd });
+    } else {
+      res.json({
+        ok: true,
+        message: 'Launch command prepared — run it in a terminal with strix installed.',
+        cmd: displayCmd,
+        note: spawnError ? `Detached spawn failed (${spawnError}); run the command manually.` : undefined,
+      });
+    }
+  } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }
+});
+app.post('/api/strix/ingest', async (req: Request, res: Response) => {
+  try {
+    const name = String(((req.body as any)?.run) || (req.query as any)?.run || '').trim();
+    if (!name) { res.status(400).json({ error: 'run is required' }); return; }
+    const { baseDir } = strixCollectRuns();
+    if (!baseDir) { res.status(404).json({ error: 'no strix_runs base found' }); return; }
+    const dir = pathFs.join(baseDir, name);
+    const resolved = pathFs.resolve(dir);
+    const baseRes = pathFs.resolve(baseDir);
+    if (resolved === baseRes || !resolved.startsWith(baseRes + pathFs.sep) || !_existsSync(pathFs.join(resolved, 'run.json'))) {
+      res.status(404).json({ error: 'unknown run' }); return;
+    }
+    let vulns: any[] = [];
+    try { const j = strixReadJson<any>(pathFs.join(resolved, 'vulnerabilities.json'), []); vulns = Array.isArray(j) ? j : []; } catch {}
+    if (!vulns.length) { res.json({ ok: true, ingested: 0, message: 'No vulnerabilities in this run yet.' }); return; }
+    // Map Strix vulns → T3MP3ST findings (best-effort; keep the shape loose so future
+    // Strix fields do not break ingestion). Persist via the same path live-scan uses.
+    let ingested = 0;
+    for (const v of vulns) {
+      if (!v || typeof v !== 'object') continue;
+      try {
+        const title = String(v.title || v.name || v.id || 'Strix finding');
+        const severity = String(v.severity || 'medium').toLowerCase();
+        const sev: any = ['critical','high','medium','low','info','informational'].includes(severity) ? severity : 'medium';
+        upsertMissionFindingToLedger({
+            title, severity: sev,
+            description: String(v.description || v.summary || ''),
+            evidence: v.proof || v.evidence || v.url || '',
+            source: 'strix:' + name,
+            raw: v,
+          } as any);
+        ingested++;
+      } catch {}
+    }
+    res.json({ ok: true, ingested, total: vulns.length });
+  } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }
 });
 
 // =============================================================================

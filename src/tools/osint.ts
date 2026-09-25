@@ -16,6 +16,7 @@ import { promises as dns } from 'dns';
 import { directFetch } from '../net/proxy.js';
 import { buildSherlockMergedCatalog } from './sherlock-sites.js';
 import type { Credential, CustomTool } from '../types/index.js';
+import { buildGoogleDorks } from './google-dorks.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -1157,10 +1158,64 @@ export interface PhoneIntelResult {
   digits: string;
   countryCode: string;
   country: string;
+  /** ISO-3166 alpha-2 when we can infer it (FR, US, GB …), '' otherwise. */
+  countryIso: string;
   expectedLength: number;
   lengthValid: boolean;
+  /** Loose validity — length + country prefix known + NANP area sane. True libphonenumber validity needs the optional lib. */
+  valid: boolean;
+  /** National number without the country prefix. */
+  national: string;
+  /** PhoneInfoga "rawLocal" — national number (no country prefix). */
+  rawLocal: string;
+  /** Pretty international form: +CC national (spaced groups of 2-4). */
+  international: string;
+  /** Local form (international without the +CC, or national spaced). */
+  local: string;
+  carrier: string;
+  lineType: string;
+  location: string;
   nanp: { areaCode: string; exchange: string; validAreaCode: boolean } | null;
   searchLinks: { label: string; url: string }[];
+  /** Enriched only by phoneInfogaScan / the /phone endpoint with scan=true. */
+  ovh?: PhoneInfogaOvhResult | null;
+  numverify?: PhoneInfogaNumverifyResult | null;
+  dorks?: PhoneInfogaDork[];
+}
+
+export interface PhoneInfogaDork {
+  category: 'social' | 'disposable' | 'reputation' | 'individuals' | 'general';
+  label: string;
+  query: string;
+  url: string;
+}
+export interface PhoneInfogaOvhResult {
+  supported: boolean;
+  found: boolean;
+  country: string;
+  number?: string;
+  numberRange?: string;
+  city?: string;
+  zipCode?: string;
+  note?: string;
+}
+export interface PhoneInfogaNumverifyResult {
+  configured: boolean;
+  valid?: boolean;
+  carrier?: string;
+  lineType?: string;
+  location?: string;
+  countryName?: string;
+  error?: string;
+  raw?: Record<string, unknown>;
+}
+export interface PhoneInfogaScanResult extends PhoneIntelResult {
+  ovh: PhoneInfogaOvhResult | null;
+  numverify: PhoneInfogaNumverifyResult | null;
+  dorks: PhoneInfogaDork[];
+  scanNote: string;
+  /** Present only when a remote instance was reachable (T3MP3ST_PHONEINFOGA_URL). */
+  remote?: PhoneInfogaRemoteResult | null;
 }
 
 export function phoneIntel(phoneRaw: string): PhoneIntelResult {
@@ -1174,6 +1229,7 @@ export function phoneIntel(phoneRaw: string): PhoneIntelResult {
   // assumed '1' has to be reflected in the E.164 form we emit.
   let cc: string | null = null;
   let country = 'unknown';
+  let iso = '';
   let expected = 10;
   let national = digits;
   let e164 = `+${digits}`;
@@ -1189,6 +1245,7 @@ export function phoneIntel(phoneRaw: string): PhoneIntelResult {
     cc = '1'; country = 'US/Canada (NANP, assumed — no country code given)'; expected = 10; national = digits;
     e164 = `+1${digits}`;
   }
+  iso = cc ? phoneCountryIso(cc) : '';
   const nanp = cc === '1' && national.length === 10
     ? {
         areaCode: national.slice(0, 3),
@@ -1197,27 +1254,462 @@ export function phoneIntel(phoneRaw: string): PhoneIntelResult {
       }
     : null;
 
+  const lenValid = national.length === expected;
+  const valid = lenValid && cc !== null && country !== 'unknown' && (nanp ? nanp.validAreaCode : true) && national.length >= 6;
+  const spaced = national.replace(/(\d{2,4})(?=\d)/g, '$1 ').trim();
+  const international = cc && cc !== '?' ? `+${cc} ${spaced}` : `+${digits.slice(0, 2)} ${spaced}`;
+  const local = spaced;
+  const rawLocal = national;
   const bare = encodeURIComponent(digits);
+  const nationalEnc = encodeURIComponent(national);
+  const rawPlus = encodeURIComponent(e164);
+  // Search links — keep the original set for backward compat, add international/rawLocal variants
+  const searchLinks = [
+    { label: 'Google', url: `https://www.google.com/search?q=%22${bare}%22` },
+    { label: 'Google (international)', url: `https://www.google.com/search?q=%22${encodeURIComponent(international)}%22` },
+    { label: 'Bing', url: `https://www.bing.com/search?q=%22${bare}%22` },
+    { label: 'Yandex', url: `https://yandex.com/search/?text=%22${bare}%22` },
+    { label: 'Truecaller', url: `https://www.truecaller.com/search/global/${digits}` },
+    { label: 'Sync.me', url: `https://sync.me/search/?number=${digits}` },
+    { label: 'WhatsApp check', url: `https://wa.me/${digits}` },
+    { label: 'Telegram check', url: `https://t.me/+${digits}` },
+    { label: 'Facebook search', url: `https://www.facebook.com/search/top?q=%22${bare}%22` },
+    { label: 'LinkedIn posts', url: `https://www.linkedin.com/search/results/content/?keywords=%22${bare}%22` },
+  ];
+  void nationalEnc; void rawPlus;
   return {
     input: raw,
     e164,
     digits,
     countryCode: cc || '?',
     country,
+    countryIso: iso,
     expectedLength: expected,
-    lengthValid: national.length === expected,
+    lengthValid: lenValid,
+    valid,
+    national,
+    rawLocal,
+    international,
+    local,
+    carrier: '',
+    lineType: '',
+    location: '',
     nanp,
-    searchLinks: [
-      { label: 'Google', url: `https://www.google.com/search?q=%22${bare}%22` },
-      { label: 'Bing', url: `https://www.bing.com/search?q=%22${bare}%22` },
-      { label: 'Yandex', url: `https://yandex.com/search/?text=%22${bare}%22` },
-      { label: 'Truecaller', url: `https://www.truecaller.com/search/global/${digits}` },
-      { label: 'Sync.me', url: `https://sync.me/search/?number=${digits}` },
-      { label: 'WhatsApp check', url: `https://wa.me/${digits}` },
-      { label: 'Telegram check', url: `https://t.me/+${digits}` },
-      { label: 'Facebook search', url: `https://www.facebook.com/search/top?q=%22${bare}%22` },
-      { label: 'LinkedIn posts', url: `https://www.linkedin.com/search/results/content/?keywords=%22${bare}%22` },
-    ],
+    searchLinks,
+  };
+}
+
+// Minimal CC → ISO-3166 alpha-2 map — enough for the OVH scanner (FR/BE/GB/ES/CH)
+// Plus the common countries callers will hit. Unknown CC returns '' (unknown).
+const CC_TO_ISO: Record<string, string> = {
+  '1': 'US', '7': 'RU', '20': 'EG', '27': 'ZA', '30': 'GR', '31': 'NL', '32': 'BE', '33': 'FR',
+  '34': 'ES', '36': 'HU', '39': 'IT', '40': 'RO', '41': 'CH', '43': 'AT', '44': 'GB', '45': 'DK',
+  '46': 'SE', '47': 'NO', '48': 'PL', '49': 'DE', '51': 'PE', '52': 'MX', '53': 'CU', '54': 'AR',
+  '55': 'BR', '56': 'CL', '57': 'CO', '58': 'VE', '60': 'MY', '61': 'AU', '62': 'ID', '63': 'PH',
+  '64': 'NZ', '65': 'SG', '66': 'TH', '81': 'JP', '82': 'KR', '84': 'VN', '86': 'CN', '90': 'TR',
+  '91': 'IN', '92': 'PK', '93': 'AF', '94': 'LK', '95': 'MM', '98': 'IR', '212': 'MA', '213': 'DZ',
+  '216': 'TN', '233': 'GH', '234': 'NG', '351': 'PT', '352': 'LU', '353': 'IE', '380': 'UA',
+  '420': 'CZ', '421': 'SK', '852': 'HK', '853': 'MO', '880': 'BD', '886': 'TW', '971': 'AE',
+  '972': 'IL', '966': 'SA', '678': 'VU',
+};
+function phoneCountryIso(cc: string): string { return CC_TO_ISO[cc] || ''; }
+
+// =============================================================================
+// PHONEINFOGA — ported scanners (sundowndev/phoneinfoga, GPL-3.0)
+// =============================================================================
+// The Go original ships 5 scanners. We port all five to TS without a Go runtime:
+//   • local        → phoneIntel() (formatting, validity, country, NANP — above)
+//   • googlesearch → phoneInfogaDorks() (50 search-engine dorks across 5 categories)
+//   • ovh          → phoneInfogaOvhCheck() (free OVH Telecom VoIP range lookup)
+//   • numverify    → phoneInfogaNumverify() (optional, key-gated carrier/lineType)
+//   • googlecse    → optional Google Custom Search enrichment (key-gated, best-effort)
+//
+// Design choices vs the Go port:
+//   - No nyaruka/phonenumbers dependency is added; we reuse phoneIntel's own
+//     country routing so the module stays dependency-free. Formats are derived
+//     as: E164="+CCnational", International="+CC national (spaced)", RawLocal="national".
+//     This matches the Go FormatNumber regex `[\W_]+` behaviour without pulling Go.
+//   - Dork generation is string-template based like the Go Report() methods, not a
+//     dorkgen library — same queries, fewer allocations, no extra dep.
+//   - OVH and Numverify ride osintFetch (SOCKS-aware). Numverify/GoogleCSE are
+//     honest no-ops when their env keys are absent.
+//   - Licensed under GPL-3.0 attribution: this file ports sundowndev/phoneinfoga's
+//     scanner report templates, dork lists, and OVH matching logic verbatim.
+
+function gq(q: string): string { return `https://www.google.com/search?q=${encodeURIComponent(q)}`; }
+
+export function phoneInfogaDorks(phoneRaw: string): PhoneInfogaDork[] {
+  let intel: PhoneIntelResult;
+  try { intel = phoneIntel(phoneRaw); } catch { return []; }
+  const e164 = intel.e164;                // +CCnational
+  const intl = intel.international;        // +CC national (spaced)
+  const raw = intel.rawLocal;              // national only
+  const national = intel.national;
+  // Go's intl sometimes renders with spaces/dashes; we also emit a spaced local
+  const spacedLocal = intl.replace(/^\+\d+\s*/, '').trim();
+  const out: PhoneInfogaDork[] = [];
+  const push = (category: PhoneInfogaDork['category'], label: string, query: string) => {
+    out.push({ category, label, query, url: gq(query) });
+  };
+
+  // ── Social media (5) — PhoneInfoga: getSocialMediaDorks()
+  push('social', 'Facebook — phone in text', `site:facebook.com intext:"${e164}"`);
+  push('social', 'Twitter / X — phone in text', `site:twitter.com intext:"${e164}"`);
+  push('social', 'LinkedIn — phone in text', `site:linkedin.com intext:"${e164}"`);
+  push('social', 'Instagram — phone in text', `site:instagram.com intext:"${e164}"`);
+  push('social', 'VK — phone in text', `site:vk.com intext:"${e164}"`);
+
+  // ── Disposable providers (21-22) — getDisposableProvidersDorks(). Each site + "E.164 OR International"
+  const disposableSites = [
+    'hs3x.com', 'receive-sms-now.com', 'smslisten.com', 'smsnumbersonline.com', 'freesmscode.com',
+    'catchsms.com', 'smstibo.com', 'smsreceiving.com', 'getfreesmsnumber.com', 'sellaite.com',
+    'receive-sms-online.info', 'receivesmsonline.com', 'receive-a-sms.com', 'sms-receive.net',
+    'receivefreesms.com', 'receive-sms.com', 'receivetxt.com', 'freephonenum.com',
+    'freesmsverification.com', 'receive-sms-online.com', 'smslive.co',
+  ];
+  for (const site of disposableSites) {
+    push('disposable', `Disposable — ${site}`, `site:${site} ("${e164}" OR "${intl}")`);
+  }
+
+  // ── Reputation (10) — getReputationDorks()
+  push('reputation', 'Who called — who called (intitle)', `intitle:"who called" "${e164}"`);
+  push('reputation', 'whosenumber.info', `site:whosenumber.info "${e164}"`);
+  push('reputation', 'Phone fraud — intitle', `intext:"Phone Fraud" intitle:"${e164}"`);
+  push('reputation', 'findwhocallsme.com', `site:findwhocallsme.com intext:"${e164}"`);
+  push('reputation', 'yellowpages.ca — phone', `site:yellowpages.ca "${e164}"`);
+  push('reputation', 'phonenumbers.ie', `site:phonenumbers.ie intext:"${intl}"`);
+  push('reputation', 'who-calledme.com', `site:who-calledme.com "${intl}"`);
+  push('reputation', 'usphonesearch.net', `site:usphonesearch.net "${e164}"`);
+  push('reputation', 'whocalled.us — phone inurl', `site:whocalled.us inurl:"${e164}"`);
+  push('reputation', 'quinumero.info', `site:quinumero.info intext:"${e164}"`);
+
+  // ── Individuals (7) — getIndividualsDorks()
+  push('individuals', 'numinfo.net — individuals', `site:numinfo.net "${e164}"`);
+  push('individuals', 'sync.me — individuals', `site:sync.me "${intl}"`);
+  push('individuals', 'whocallsyou.de', `site:whocallsyou.de "${e164}"`);
+  push('individuals', 'Pastebin — phone', `site:pastebin.com "${e164}"`);
+  push('individuals', 'whycall.me', `site:whycall.me "${e164}"`);
+  push('individuals', 'locatefamily.com', `site:locatefamily.com "${e164}"`);
+  push('individuals', 'spytox.com — phone + name/address', `site:spytox.com "${e164}" intext:("name" OR "address")`);
+
+  // ── General (2 doc-oriented) — getGeneralDorks()
+  // Go's general dorks: ("E164" OR "local-spaced") + doc extensions, and raw national.
+  push('general', 'Documents mentioning phone (general)', `("${e164}" OR "${spacedLocal || raw}") (ext:doc OR ext:docx OR ext:odt OR ext:pdf OR ext:rtf OR ext:sxw OR ext:psw OR ext:ppt OR ext:pptx OR ext:pps OR ext:csv OR ext:txt OR ext:xls)`);
+  push('general', 'Documents mentioning national number', `"${national}" (ext:doc OR ext:docx OR ext:odt OR ext:pdf OR ext:rtf OR ext:sxw OR ext:psw OR ext:ppt OR ext:pptx OR ext:pps OR ext:csv)`);
+
+  return out;
+}
+
+export function phoneInfogaDorkStats(dorks: PhoneInfogaDork[]): Record<string, number> {
+  const m: Record<string, number> = {};
+  for (const d of dorks) m[d.category] = (m[d.category] || 0) + 1;
+  return m;
+}
+
+// ── OVH scanner ────────────────────────────────────────────────────────────
+// Mirrors suppliers/ovh.go + lib/remote/ovh_scanner.go
+// API: GET https://api.ovh.com/1.0/telephony/number/detailedZones?country={cc lower}
+// Response: [{ prefix:"33xxxx", city:"Paris", zipCode:"75000", number:"33..xxxx" ... }]
+// Matching: six-digit prefix (first 6 national digits + "xxxx") membership.
+const OVH_SUPPORTED = new Map<string, string>([
+  ['33', 'fr'], ['32', 'be'], ['44', 'gb'], ['34', 'es'], ['41', 'ch'],
+]);
+
+export async function phoneInfogaOvhCheck(phoneRaw: string): Promise<PhoneInfogaOvhResult> {
+  let intel: PhoneIntelResult;
+  try { intel = phoneIntel(phoneRaw); } catch (e: unknown) {
+    return { supported: false, found: false, country: '', note: e instanceof Error ? e.message : String(e) };
+  }
+  const mapped = OVH_SUPPORTED.get(intel.countryCode);
+  if (!mapped) {
+    return { supported: false, found: false, country: intel.countryIso || intel.countryCode, note: `OVH detailedZones only covers FR/BE/GB/ES/CH (got ${intel.countryCode || '?'})` };
+  }
+  const national = intel.national.replace(/\D/g, '');
+  if (national.length < 6) return { supported: true, found: false, country: mapped, note: 'National number too short for OVH prefix check (need ≥6 digits)' };
+  const prefix = national.slice(0, 6) + 'xxxx';
+  try {
+    const url = `https://api.ovh.com/1.0/telephony/number/detailedZones?country=${mapped}`;
+    const res = await osintFetch(url, { headers: { accept: 'application/json' } });
+    if (!res.ok) {
+      return { supported: true, found: false, country: mapped, note: `OVH API HTTP ${res.status}` };
+    }
+    const data = (await res.json()) as Array<{ number?: string; city?: string; zipCode?: string; prefix?: string }>;
+    const hit = Array.isArray(data) ? data.find((r) => r.number === prefix || r.prefix === prefix) : null;
+    if (hit) {
+      return { supported: true, found: true, country: mapped, number: hit.number || prefix, numberRange: hit.number || prefix, city: hit.city || '', zipCode: hit.zipCode || '' };
+    }
+    return { supported: true, found: false, country: mapped, note: 'No OVH VoIP range matched (number is not OVH-allocated under this prefix)' };
+  } catch (e: unknown) {
+    return { supported: true, found: false, country: mapped, note: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ── Numverify scanner ──────────────────────────────────────────────────────
+// Mirrors suppliers/numverify.go + lib/remote/numverify_scanner.go
+// Endpoint: https://api.apilayer.com/number_verification/validate?number={e164}
+// Header: Apikey: {T3MP3ST_NUMVERIFY_KEY | NUMVERIFY_API_KEY}
+function numverifyKey(): string {
+  return (process.env.T3MP3ST_NUMVERIFY_KEY || process.env.NUMVERIFY_API_KEY || '').trim();
+}
+
+export async function phoneInfogaNumverify(phoneRaw: string): Promise<PhoneInfogaNumverifyResult> {
+  const key = numverifyKey();
+  if (!key) return { configured: false, error: 'Numverify not configured — set T3MP3ST_NUMVERIFY_KEY (or NUMVERIFY_API_KEY) to enable carrier/line-type enrichment' };
+  let e164: string;
+  try { e164 = phoneIntel(phoneRaw).e164; } catch (e: unknown) {
+    return { configured: true, error: e instanceof Error ? e.message : String(e) };
+  }
+  try {
+    const url = `https://api.apilayer.com/number_verification/validate?number=${encodeURIComponent(e164)}`;
+    const res = await osintFetch(url, { headers: { Apikey: key, accept: 'application/json' } });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return { configured: true, error: `Numverify HTTP ${res.status}${body ? `: ${body.slice(0, 300)}` : ''}` };
+    }
+    const j = (await res.json()) as Record<string, unknown>;
+    if (j.valid === false && j.error) {
+      const er = j.error as Record<string, unknown>;
+      return { configured: true, error: String(er.info || er.type || JSON.stringify(er)).slice(0, 300) };
+    }
+    return {
+      configured: true,
+      valid: j.valid as boolean | undefined,
+      carrier: (j.carrier as string) || '',
+      lineType: (j.line_type as string) || '',
+      location: (j.location as string) || '',
+      countryName: (j.country_name as string) || (j.country as string) || '',
+      raw: j,
+    };
+  } catch (e: unknown) {
+    return { configured: true, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ── Remote PhoneInfoga instance adapter ────────────────────────────────────
+// PhoneInfoga ships a REST API (web/docs/swagger.yaml — v2). Operators can point
+// T3MP3ST at a self-hosted instance (DOCKER_HOST mode) and we drive its endpoints
+// instead of / in addition to the in-process port. Config:
+//   T3MP3ST_PHONEINFOGA_URL   e.g. http://127.0.0.1:5000
+//   T3MP3ST_PHONEINFOGA_TOKEN bearer token when the instance sits behind auth
+// Swagger routes we speak (v2 first, v1 deprecated routes as fallback):
+//   GET  /api/v2/scanners                       → [{ name, description }]
+//   POST /api/v2/numbers  {number}              → number.Number (libphonenumber truth)
+//   POST /api/v2/scanners/{scanner}/dryrun      → { success, error } (config check, no network)
+//   POST /api/v2/scanners/{scanner}/run         → { result: {...} }
+//   GET  /api/numbers/{number}/scan/{scanner}   → v1 fallback (local|googlesearch|ovh|numverify)
+export interface PhoneInfogaRemoteScanner { name: string; description: string }
+export interface PhoneInfogaRemoteResult {
+  configured: boolean;
+  reachable: boolean;
+  baseUrl: string;
+  version?: string;
+  scanners?: PhoneInfogaRemoteScanner[];
+  /** Scanner name → raw result payload, or the error string that scanner returned. */
+  results?: Record<string, unknown>;
+  /** Scanner → dry-run verdict from the remote instance. */
+  dryRuns?: Record<string, string>;
+  error?: string;
+}
+
+function phoneInfogaBaseUrl(): string {
+  return (process.env.T3MP3ST_PHONEINFOGA_URL || '').trim().replace(/\/+$/, '');
+}
+function phoneInfogaHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'content-type': 'application/json' };
+  const token = (process.env.T3MP3ST_PHONEINFOGA_TOKEN || '').trim();
+  if (token) h.authorization = `Bearer ${token}`;
+  return h;
+}
+async function phoneInfogaFetchJson(url: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; body: any }> {
+  try {
+    const r = await osintFetch(url, {
+      ...init,
+      headers: { accept: 'application/json', ...(init.headers || {}) },
+    });
+    const text = await r.text().catch(() => '');
+    let body: any = null;
+    try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+    return { ok: r.ok, status: r.status, body };
+  } catch (e: unknown) {
+    return { ok: false, status: 0, body: null, error: e instanceof Error ? e.message : String(e) } as any;
+  }
+}
+
+/** GET /api/v2/scanners + GET /api/ (health: version/commit/demo). */
+export async function phoneInfogaRemoteInfo(): Promise<PhoneInfogaRemoteResult> {
+  const base = phoneInfogaBaseUrl();
+  if (!base) return { configured: false, reachable: false, baseUrl: '', error: 'not configured — set T3MP3ST_PHONEINFOGA_URL to drive a self-hosted PhoneInfoga instance' };
+  const [health, scanners] = await Promise.all([
+    phoneInfogaFetchJson(`${base}/api/`),
+    phoneInfogaFetchJson(`${base}/api/v2/scanners`, { headers: phoneInfogaHeaders() }),
+  ]);
+  const version = health.ok && health.body ? String(health.body.version || health.body.commit || '') : '';
+  const list: PhoneInfogaRemoteScanner[] = Array.isArray(scanners.body?.scanners)
+    ? scanners.body.scanners
+    : Array.isArray(scanners.body) ? scanners.body : [];
+  return {
+    configured: true,
+    reachable: health.ok || scanners.ok,
+    baseUrl: base,
+    version,
+    scanners: list,
+    error: health.ok || scanners.ok ? undefined : (scanners.body?.error || health.body?.error || `HTTP ${scanners.status || health.status}`),
+  };
+}
+
+/** POST /api/v2/numbers — the remote instance's libphonenumber parse. */
+export async function phoneInfogaRemoteNumber(phoneRaw: string): Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string }> {
+  const base = phoneInfogaBaseUrl();
+  if (!base) return { ok: false, error: 'T3MP3ST_PHONEINFOGA_URL not set' };
+  const r = await phoneInfogaFetchJson(`${base}/api/v2/numbers`, {
+    method: 'POST', headers: phoneInfogaHeaders(), body: JSON.stringify({ number: phoneRaw }),
+  });
+  if (!r.ok) return { ok: false, error: String(r.body?.error || r.body || `HTTP ${r.status}`) };
+  return { ok: true, result: r.body as Record<string, unknown> };
+}
+
+/** POST /api/v2/scanners/{scanner}/dryrun — config check on the remote side. */
+export async function phoneInfogaRemoteDryRun(phoneRaw: string, scanner: string): Promise<{ ok: boolean; success: boolean; error?: string }> {
+  const base = phoneInfogaBaseUrl();
+  if (!base) return { ok: false, success: false, error: 'T3MP3ST_PHONEINFOGA_URL not set' };
+  const r = await phoneInfogaFetchJson(`${base}/api/v2/scanners/${encodeURIComponent(scanner)}/dryrun`, {
+    method: 'POST', headers: phoneInfogaHeaders(), body: JSON.stringify({ number: phoneRaw, options: {} }),
+  });
+  return { ok: r.ok, success: !!r.body?.success, error: r.body?.error ? String(r.body.error) : (r.ok ? undefined : `HTTP ${r.status}`) };
+}
+
+/** POST /api/v2/scanners/{scanner}/run — executes ONE scanner remotely.
+ *  v1 fallback: GET /api/numbers/{number}/scan/{scanner} (deprecated but shipped). */
+export async function phoneInfogaRemoteRun(phoneRaw: string, scanner: string): Promise<{ ok: boolean; result?: unknown; error?: string }> {
+  const base = phoneInfogaBaseUrl();
+  if (!base) return { ok: false, error: 'T3MP3ST_PHONEINFOGA_URL not set' };
+  const r = await phoneInfogaFetchJson(`${base}/api/v2/scanners/${encodeURIComponent(scanner)}/run`, {
+    method: 'POST', headers: phoneInfogaHeaders(), body: JSON.stringify({ number: phoneRaw, options: {} }),
+  });
+  if (r.ok) return { ok: true, result: r.body?.result ?? r.body };
+  // v1 fallback for instances still on the pre-v2 handlers
+  const v1 = await phoneInfogaFetchJson(`${base}/api/numbers/${encodeURIComponent(phoneRaw)}/scan/${encodeURIComponent(scanner)}`, { headers: phoneInfogaHeaders() });
+  if (v1.ok) return { ok: true, result: v1.body?.result ?? v1.body };
+  return { ok: false, error: String(r.body?.error || v1.body?.error || `HTTP ${r.status || v1.status}`) };
+}
+
+/** Google-search scanner run on the remote instance — returns the categorized
+ *  dork arrays in the swagger shape (social_media/disposable_providers/reputation/
+ *  individuals/general) so the UI can merge them with the local dork set. */
+export async function phoneInfogaRemoteGoogleDorks(phoneRaw: string): Promise<Record<string, Array<{ dork: string; url: string; number: string }>>> {
+  const run = await phoneInfogaRemoteRun(phoneRaw, 'googlesearch');
+  if (!run.ok || !run.result || typeof run.result !== 'object') return {};
+  const r = run.result as Record<string, any>;
+  const out: Record<string, Array<{ dork: string; url: string; number: string }>> = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (Array.isArray(v)) out[k] = v.filter((x: any) => x && (x.dork || x.url)).map((x: any) => ({ dork: String(x.dork || ''), url: String(x.url || ''), number: String(x.number || '') }));
+  }
+  return out;
+}
+
+/** Full remote run across every scanner the instance advertises (or the default set). */
+export async function phoneInfogaRemoteScan(phoneRaw: string, opts: { scanners?: string[]; dryRun?: boolean } = {}): Promise<PhoneInfogaRemoteResult> {
+  const info = await phoneInfogaRemoteInfo();
+  if (!info.configured || !info.reachable) return info;
+  const wanted = opts.scanners?.length ? opts.scanners : (info.scanners || []).map((s) => s.name);
+  const results: Record<string, unknown> = {};
+  const dryRuns: Record<string, string> = {};
+  const number = await phoneInfogaRemoteNumber(phoneRaw);
+  if (number.ok && number.result) results.local = number.result;
+  for (const scanner of wanted) {
+    if (scanner === 'local') continue;
+    if (opts.dryRun) {
+      const d = await phoneInfogaRemoteDryRun(phoneRaw, scanner);
+      dryRuns[scanner] = d.success ? 'ready' : (d.error || 'not ready');
+      continue;
+    }
+    const run = await phoneInfogaRemoteRun(phoneRaw, scanner);
+    results[scanner] = run.ok ? run.result : (run.error || 'failed');
+  }
+  return { ...info, results, dryRuns: Object.keys(dryRuns).length ? dryRuns : undefined };
+}
+
+// ── Composite PhoneInfoga scan ─────────────────────────────────────────────
+// Runs every scanner that doesn't require a paid key locally, plus optional
+// key-gated enrichments best-effort. A single call powers the OSINT Phone tab
+// and the new osint_phone_scan agent tool.
+export async function phoneInfogaScan(phoneRaw: string, opts: { remote?: boolean } = {}): Promise<PhoneInfogaScanResult> {
+  const base = phoneIntel(phoneRaw);
+  const dorks = phoneInfogaDorks(phoneRaw);
+  const [ovh, numverify] = await Promise.all([
+    phoneInfogaOvhCheck(phoneRaw),
+    phoneInfogaNumverify(phoneRaw),
+  ]);
+  // Optional: run a self-hosted PhoneInfoga REST instance (swagger v2) alongside
+  // the in-process port. Unconfigured = a null lane, never a failure.
+  let remote: PhoneInfogaRemoteResult | null = null;
+  if (opts.remote !== false && phoneInfogaBaseUrl()) {
+    try {
+      remote = await phoneInfogaRemoteScan(phoneRaw);
+    } catch (e: unknown) {
+      remote = { configured: true, reachable: false, baseUrl: phoneInfogaBaseUrl(), error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  // Fold numverify enrichments into the top-level intel when present
+  const numCarrier = numverify?.carrier || '';
+  const numLineType = numverify?.lineType || '';
+  const numLocation = numverify?.location || '';
+  // Remote numverify scanner result (swagger shape: line_type / location)
+  const rNum = remote?.results?.numverify as Record<string, any> | undefined;
+  const carrier = (numCarrier || rNum?.carrier || base.carrier || '').trim();
+  const lineType = (numLineType || rNum?.line_type || base.lineType || '').trim();
+  const location = (numLocation || rNum?.location || base.location || '').trim();
+  let valid = numverify?.valid !== undefined ? !!numverify.valid : base.valid;
+  if (numverify?.valid === undefined && rNum && typeof rNum.valid === 'boolean') valid = rNum.valid;
+  // Remote OVH scanner result (swagger shape: found / number_range / city / zip_code)
+  const rOvh = remote?.results?.ovh as Record<string, any> | undefined;
+  if (rOvh && typeof rOvh.found === 'boolean') {
+    ovh.found = rOvh.found;
+    ovh.supported = true;
+    ovh.numberRange = rOvh.number_range || ovh.numberRange;
+    ovh.city = rOvh.city || ovh.city;
+    ovh.zipCode = rOvh.zip_code || ovh.zipCode;
+    ovh.note = rOvh.found ? 'OVH VoIP range MATCHED (remote instance)' : 'OVH VoIP range checked, no match (remote instance)';
+  }
+  // Merge remote googlesearch dorks into the local set (dedupe by query)
+  const rDorks = remote?.results?.googlesearch as Record<string, any> | undefined;
+  if (rDorks && typeof rDorks === 'object') {
+    const catMap: Record<string, PhoneInfogaDork['category']> = {
+      social_media: 'social', disposable_providers: 'disposable', reputation: 'reputation',
+      individuals: 'individuals', general: 'general',
+    };
+    const seen = new Set(dorks.map((d) => d.query));
+    for (const [key, cat] of Object.entries(catMap)) {
+      const arr = rDorks[key];
+      if (!Array.isArray(arr)) continue;
+      for (const item of arr as Array<any>) {
+        const query = String(item?.dork || item?.query || '');
+        if (!query || seen.has(query)) continue;
+        seen.add(query);
+        dorks.push({ category: cat, label: `Remote — ${query.slice(0, 70)}`, query, url: String(item?.url || gq(query)) });
+      }
+    }
+  }
+  let scanNote = 'Local formatting + Google dorks (free) always run.';
+  if (ovh?.supported) scanNote += ovh.found ? ' OVH VoIP range MATCHED.' : ' OVH VoIP range checked (no match).';
+  else scanNote += ` OVH: ${ovh?.note || 'unsupported country'}.`;
+  scanNote += numverify?.configured ? (numverify.error ? ` Numverify: ${numverify.error.slice(0, 120)}.` : ` Numverify: carrier=${carrier || '?'} line=${lineType || '?'}.`) : ' Numverify: not configured (set T3MP3ST_NUMVERIFY_KEY to enrich).';
+  if (remote?.configured) scanNote += remote.reachable
+    ? ` Remote instance ${remote.baseUrl} reachable (${remote.version || 'version unknown'}, ${remote.scanners?.length || 0} scanners) — results folded in.`
+    : ` Remote instance ${remote.baseUrl} configured but UNREACHABLE: ${remote.error || 'no response'}.`;
+  else if (remote?.error) scanNote += ` Remote: ${remote.error}.`;
+  scanNote += ' Does NOT track phone in real time, does NOT get precise location, does NOT hack phone.';
+  return {
+    ...base,
+    carrier,
+    lineType,
+    location,
+    valid,
+    ovh: ovh || null,
+    numverify: numverify || null,
+    dorks,
+    remote,
+    scanNote,
   };
 }
 
@@ -1341,6 +1833,69 @@ export interface LocatorInput {
   domain?: string;
   /** Parsed from a subject that was a URL. */
   url?: string;
+  /** Sweep breadth. The locator defaults to the fast hand-probed catalog; 'full'
+   *  adds the ~430 vendored Sherlock platforms at roughly 3 minutes instead of ~30s. */
+  catalog?: 'curated' | 'sherlock' | 'full';
+  includeAdult?: boolean;
+  /** Live per-module progress callback (the server bridges it to SSE so the UI can
+   *  glow the module currently in use). */
+  onModule?: (m: LocateModuleStatus & { phase: 'start' | 'end' }) => void;
+  /** Optional chat bridge to the operator's configured backbone (local gemma4
+   *  when useLocal is on). Enables the UNVERIFIED LLM assist over mined pages. */
+  llmChat?: (system: string, user: string) => Promise<string>;
+  llmModel?: string;
+}
+
+/** One row of the locate run ledger — every module reports ok / skip / error with
+ *  timing, so a full locate visibly runs EVERY applicable lane and a failing one
+ *  is isolated instead of silently vanishing. */
+export interface LocateModuleStatus {
+  name: string;
+  status: 'running' | 'ok' | 'skip' | 'error';
+  ms: number;
+  note?: string;
+  found?: number;
+}
+
+/** Module-ledger factory for the full locate: every stage runs through `run`,
+ *  which records ok / skip(reason) / error + timing, isolates failures (one dead
+ *  lane never aborts the run), and emits start/end so the UI can glow the module
+ *  currently in use. */
+export function createModuleLedger(onModule?: (m: LocateModuleStatus & { phase: 'start' | 'end' }) => void) {
+  const log: LocateModuleStatus[] = [];
+  async function run(
+    name: string,
+    applicable: boolean,
+    skipNote: string,
+    fn: () => Promise<{ found?: number; note?: string } | void>,
+  ): Promise<void> {
+    const row: LocateModuleStatus = { name, status: 'running', ms: 0 };
+    if (applicable) {
+      log.push(row);
+      onModule?.({ ...row, phase: 'start' });
+    }
+    const t0 = Date.now();
+    if (!applicable) {
+      const skip: LocateModuleStatus = { name, status: 'skip', ms: 0, note: skipNote };
+      log.push(skip);
+      onModule?.({ ...skip, phase: 'start' });
+      onModule?.({ ...skip, phase: 'end' });
+      return;
+    }
+    try {
+      const r = (await fn()) || {};
+      row.status = 'ok';
+      row.ms = Date.now() - t0;
+      if (r.found !== undefined) row.found = r.found;
+      if (r.note) row.note = r.note;
+    } catch (e) {
+      row.status = 'error';
+      row.ms = Date.now() - t0;
+      row.note = String(e instanceof Error ? e.message : e).slice(0, 140);
+    }
+    onModule?.({ ...row, phase: 'end' });
+  }
+  return { log, run };
 }
 
 export interface OsintDossier {
@@ -1388,6 +1943,9 @@ export interface OsintDossier {
   modules: LocateModuleStatus[];
   /** Dark-web leak-site monitor result (ransomware victim posts for the subject). */
   darkWeb?: LeakMonitorResult;
+  /** LLM second-opinion extraction (operator's configured backbone — local gemma4
+   *  when useLocal is on). UNVERIFIED by design — kept out of the confident lists. */
+  llmAssisted?: LlmAssistedContacts & { sources: string[] };
   /** Operator-ready markdown report (the DETAILED REPORT section). */
   report: string;
   identities: { source: string; detail: string }[];
@@ -2150,9 +2708,20 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
   await runModule('SEARCH MINING', searchQueries.length > 0, 'no name/email/phone to search', async () => {
     let pages = 0;
     for (const { q, kind } of searchQueries.slice(0, 3)) {
-      const extraction = await searchExtract(q).catch(() => null);
+      const extraction = await searchExtract(q, {
+        llmAssist: input.llmChat ? async (system, user) => (input.llmChat!(system, user)) : undefined,
+      }).catch(() => null);
       if (!extraction) continue;
       pages += extraction.mined.filter((m) => m.fetched).length;
+      if (extraction.extracted.llmAssisted) {
+        dossier.llmAssisted = dossier.llmAssisted || { emails: [], phones: [], addresses: [], model: input.llmModel, pages: 0, sources: [] };
+        const a = extraction.extracted.llmAssisted;
+        dossier.llmAssisted.emails = MERGE_UNIQUE(dossier.llmAssisted.emails, a.emails);
+        dossier.llmAssisted.phones = MERGE_UNIQUE(dossier.llmAssisted.phones, a.phones);
+        dossier.llmAssisted.addresses = MERGE_UNIQUE(dossier.llmAssisted.addresses, a.addresses);
+        dossier.llmAssisted.pages += a.pages;
+        dossier.llmAssisted.sources.push(kind);
+      }
       dossier.searchExtraction.push({
         query: q, via: extraction.via, found: extraction.results.length,
         pagesFetched: extraction.mined.filter((m) => m.fetched).length,
@@ -2221,7 +2790,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
 
   if (primaryCandidates.length > 0) {
     for (const cand of primaryCandidates) {
-      const sweep = await runUsernameSweep(cand.handle, { hints: { name: parsedInput.name } }).catch(() => null);
+      const sweep = await runUsernameSweep(cand.handle, { hints: { name: parsedInput.name }, catalog: input.catalog || 'curated' }).catch(() => null);
       if (!sweep) continue;
       const tag = cand.primary ? undefined : cand.handle;
       mergeChecked(sweep.details, tag);
@@ -2250,7 +2819,9 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
       for (let i = 0; i < perms.length; i += 3) {
         const chunk = perms.slice(i, i + 3);
         const sweeps = await Promise.all(
-          chunk.map((perm) => runUsernameSweep(perm, { limit: 20, hints: { name: parsedInput.name } }).catch(() => null))
+          // Permutation fan-out stays on the curated catalog: 12 permutations ×
+          // the full 490-site surface would take tens of minutes for a name-only subject.
+          chunk.map((perm) => runUsernameSweep(perm, { limit: 20, hints: { name: parsedInput.name }, catalog: 'curated' }).catch(() => null))
         );
         for (const sweep of sweeps) {
           if (!sweep) continue;
@@ -2607,6 +3178,8 @@ export interface ExtractedContacts {
   phones: string[];
   addresses: string[];
   socialUrls: string[];
+  /** Optional LLM second opinion — kept OUT of the authoritative lists on purpose. */
+  llmAssisted?: LlmAssistedContacts;
 }
 
 const EMAIL_RE_GLOBAL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
@@ -2865,9 +3438,77 @@ export function correlateSocialSignals(accounts: { site: string; url: string; av
   return out.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'avatar' ? -1 : 1)).slice(0, 20);
 }
 
+/** LLM-assisted extraction — OPTIONAL second opinion over mined page text.
+ *  Deliberately segregated from the deterministic regex layer: the model is
+ *  asked for strict JSON, every value is re-validated with the same format
+ *  filters the regex lane uses, and results are labelled UNVERIFIED because an
+ *  LLM can invent a perfectly-formatted email. Runs on the operator's configured
+ *  backbone (local gemma4 when useLocal is on). */
+export interface LlmAssistedContacts { emails: string[]; phones: string[]; addresses: string[]; model?: string; pages: number }
+
+export function parseLlmContactJson(raw: string): { emails: string[]; phones: string[]; addresses: string[] } {
+  // tolerate fenced blocks + leading prose
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : raw;
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  if (start === -1 || end <= start) return { emails: [], phones: [], addresses: [] };
+  let j: Record<string, unknown>;
+  try { j = JSON.parse(body.slice(start, end + 1)) as Record<string, unknown>; } catch { return { emails: [], phones: [], addresses: [] }; }
+  const arr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  // Validate through the same extractors so garbage/hallucinated shapes die.
+  const emails = extractContacts(arr(j.emails).join(' ')).emails;
+  const phones = extractContacts(arr(j.phones).join(' ')).phones;
+  const addresses = extractContacts(arr(j.addresses).join(' ')).addresses;
+  return { emails, phones, addresses };
+}
+
+const LLM_EXTRACT_SYSTEM = [
+  'You extract contact details from raw web-page text. Return ONLY a JSON object',
+  'with keys "emails" (array of strings), "phones" (array of strings), "addresses" (array of strings).',
+  'Copy values VERBATIM from the text — never invent, complete, or guess one.',
+  'If a class is absent, return an empty array. No prose, no markdown outside one JSON object.',
+].join(' ');
+
+/** Run the assist across the first N successfully-fetched mined pages (bounded). */
+export async function llmAssistAcross(
+  mined: MinedPage[],
+  chat: (system: string, user: string) => Promise<string>,
+  opts: { maxPages?: number; chars?: number; model?: string } = {},
+): Promise<LlmAssistedContacts> {
+  const maxPages = Math.max(0, Math.min(opts.maxPages ?? 2, 4));
+  const chars = opts.chars ?? 1600;
+  const pages = mined.filter((m) => m.fetched).slice(0, maxPages);
+  const emails: string[] = []; const phones: string[] = []; const addresses: string[] = [];
+  for (const m of pages) {
+    // Re-fetch is avoided: the regex lane already validated what the page text
+    // contains; the assist gets a bounded slice of the mined summary + URL to
+    // reason over. (Full-text re-fetch would double the request budget.)
+    const prompt = [
+      `Page: ${m.title || m.url}`,
+      `URL: ${m.url}`,
+      'Page text (may be truncated):',
+      htmlToText((m as unknown as { html?: string }).html || m.title || '', chars),
+      'Regex pre-pass already found (verify/extend, do not trust blindly):',
+      `emails: ${m.emails.join(', ') || 'none'} | phones: ${m.phones.join(', ') || 'none'} | addresses: ${m.addresses.join(', ') || 'none'}`,
+    ].join('\n');
+    const raw = await chat(LLM_EXTRACT_SYSTEM, prompt).catch(() => '');
+    if (!raw) continue;
+    const parsed = parseLlmContactJson(raw);
+    emails.push(...parsed.emails); phones.push(...parsed.phones); addresses.push(...parsed.addresses);
+  }
+  return {
+    emails: [...new Set(emails)].slice(0, 10),
+    phones: [...new Set(phones)].slice(0, 6),
+    addresses: [...new Set(addresses)].slice(0, 6),
+    model: opts.model,
+    pages: pages.length,
+  };
+}
+
 /** Run a Bing search, then PARSE the linked result pages themselves for contact data —
  *  addresses, phones and emails mined from full page text, not just SERP snippets. */
-export async function searchExtract(queryRaw: string, opts: { maxPages?: number } = {}): Promise<{
+export async function searchExtract(queryRaw: string, opts: { maxPages?: number; llmAssist?: (system: string, user: string) => Promise<string> } = {}): Promise<{
   query: string;
   via: string;
   results: SearchResultItem[];
@@ -2908,6 +3549,16 @@ export async function searchExtract(queryRaw: string, opts: { maxPages?: number 
       addresses: MERGE_UNIQUE(snippetExtract.addresses, mined.flatMap((m) => m.addresses)),
       socialUrls: MERGE_UNIQUE(snippetExtract.socialUrls, mined.flatMap((m) => m.socialUrls)),
     };
+    // Optional LLM assist (operator's configured backbone — local gemma4 when
+    // useLocal is on). The regex layer stays authoritative: LLM findings land in
+    // a SEPARATE `llmAssisted` bucket, format-validated and labelled unverified,
+    // because models hallucinate contact-shaped strings.
+    if (opts.llmAssist) {
+      const assisted = await llmAssistAcross(mined, opts.llmAssist).catch(() => null);
+      if (assisted && (assisted.emails.length || assisted.phones.length || assisted.addresses.length)) {
+        extracted.llmAssisted = assisted;
+      }
+    }
     return { query, via: 'bing', results, extracted, mined };
   }
   return { query, via: 'blocked', results: [], extracted: { emails: [], phones: [], addresses: [], socialUrls: [] }, mined: [] };
@@ -3193,20 +3844,25 @@ export const OSINT_TOOLS: CustomTool[] = [
   },
   {
     name: 'osint_phone_lookup',
-    description: 'Phone number intelligence: E.164 normalization, country/carrier-plan routing, NANP area-code validation, and reverse-lookup deep links (Truecaller, Sync.me, engines).',
+    description: 'Phone number intelligence (PhoneInfoga — sundowndev/phoneinfoga, GPL-3.0): E.164 / international / local formatting, country/carrier routing, NANP validation, OVH VoIP hint + 50 categorized Google dorks (social / disposable / reputation / individuals / general) and reverse-lookup deep links. Does NOT track phone in real time, does NOT get precise location, does NOT hack phone.',
     category: 'osint',
     parameters: [
-      { name: 'phone', type: 'string', description: 'Phone number (any common format)', required: true },
+      { name: 'phone', type: 'string', description: 'Phone number (any common format, e.g. +33 6 12 34 56 78)', required: true },
     ],
     handler: async (context) => {
       const phone = context.parameters.phone as string;
       try {
         const intel = phoneIntel(phone);
+        const dorks = phoneInfogaDorks(phone);
+        const byStats = phoneInfogaDorkStats(dorks);
         const lines = [
-          `Phone intel for ${intel.input}:`,
-          `E.164: ${intel.e164} — country ${intel.country} (expected ${intel.expectedLength} national digits, got ${intel.digits.length - intel.countryCode.length})`,
+          `Phone intel for ${intel.input} (PhoneInfoga — sundowndev/phoneinfoga, GPL-3.0):`,
+          `E.164: ${intel.e164} | International: ${intel.international} | Local: ${intel.local} | National: ${intel.national}`,
+          `Country: ${intel.country} (CC +${intel.countryCode}, ISO ${intel.countryIso || '?'}) — expected ${intel.expectedLength} national digits, got ${intel.national.length} — valid: ${intel.valid ? 'yes' : 'no'}`,
           intel.nanp ? `NANP area ${intel.nanp.areaCode}, exchange ${intel.nanp.exchange}, area valid: ${intel.nanp.validAreaCode}` : '',
-          ...intel.searchLinks.map((l) => `  ${l.label}: ${l.url}`),
+          `Dorks: ${dorks.length} (social ${byStats.social || 0} · disposable ${byStats.disposable || 0} · reputation ${byStats.reputation || 0} · individuals ${byStats.individuals || 0} · general ${byStats.general || 0})`,
+          ...intel.searchLinks.slice(0, 6).map((l) => `  ${l.label}: ${l.url}`),
+          `  + ${dorks.length} PhoneInfoga dorks via osint_phone_scan`,
         ];
         return {
           success: true,
@@ -3214,11 +3870,55 @@ export const OSINT_TOOLS: CustomTool[] = [
           findings: [{
             title: `Phone Parsed — ${intel.e164}`,
             severity: 'info' as const,
-            details: `${intel.country}; length ${intel.lengthValid ? 'valid' : 'UNEXPECTED'}${intel.nanp ? `; NANP area ${intel.nanp.areaCode} (valid: ${intel.nanp.validAreaCode})` : ''}`,
+            details: `${intel.country}; length ${intel.lengthValid ? 'valid' : 'UNEXPECTED'}; ${intel.valid ? 'valid' : 'invalid'}${intel.nanp ? `; NANP area ${intel.nanp.areaCode} (valid: ${intel.nanp.validAreaCode})` : ''} — ${dorks.length} PhoneInfoga dorks ready`,
           }],
         };
       } catch (error) {
         return { success: false, error: `Phone lookup failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  },
+  {
+    name: 'osint_phone_scan',
+    description: 'Full PhoneInfoga scan (sundowndev/phoneinfoga, GPL-3.0): local formatting + country validity, OVH VoIP range check (free, FR/BE/GB/ES/CH), Numverify carrier/line-type/location enrichment (key-gated, T3MP3ST_NUMVERIFY_KEY), 50 categorized Google dorks (social/disposable/reputation/individuals/general), and — when T3MP3ST_PHONEINFOGA_URL points at a self-hosted PhoneInfoga REST instance (swagger v2) — that instance\'s scanner results folded in. Does NOT claim verified subscriber data, does NOT track phone in real time.',
+    category: 'osint',
+    parameters: [
+      { name: 'phone', type: 'string', description: 'Phone number (any common format, e.g. +1 202 555 0143)', required: true },
+      { name: 'remote', type: 'boolean', description: 'Also run the configured self-hosted PhoneInfoga REST instance (T3MP3ST_PHONEINFOGA_URL). Default true; ignored when unset.', required: false },
+    ],
+    handler: async (context) => {
+      const phone = context.parameters.phone as string;
+      const wantRemote = context.parameters.remote === undefined ? true : context.parameters.remote === true;
+      try {
+        const scan = await phoneInfogaScan(phone, { remote: wantRemote });
+        const lines = [
+          `PhoneInfoga scan for ${scan.input} (sundowndev/phoneinfoga, GPL-3.0):`,
+          `E.164: ${scan.e164} | International: ${scan.international} | National: ${scan.national} | Local: ${scan.local}`,
+          `Country: ${scan.country} (CC +${scan.countryCode}, ISO ${scan.countryIso || '?'}) — ${scan.valid ? 'valid' : 'invalid'} (expected ${scan.expectedLength}, got ${scan.national.length})${scan.nanp ? ` — NANP area ${scan.nanp.areaCode} valid:${scan.nanp.validAreaCode}` : ''}`,
+          scan.carrier || scan.lineType || scan.location ? `Carrier: ${scan.carrier || '?'} | Line: ${scan.lineType || '?'} | Location: ${scan.location || '?'}` : 'Carrier/line/location: needs Numverify key (T3MP3ST_NUMVERIFY_KEY)',
+          scan.ovh ? (scan.ovh.found ? `OVH VoIP: MATCH — ${scan.ovh.city || ''} ${scan.ovh.zipCode || ''} range ${scan.ovh.numberRange || scan.ovh.number || ''}` : `OVH VoIP: ${scan.ovh.supported ? 'checked — no OVH range match' : scan.ovh.note || 'unsupported country'}`) : 'OVH: not checked',
+          scan.numverify?.configured ? (scan.numverify.error ? `Numverify: ${scan.numverify.error.slice(0, 200)}` : `Numverify: valid=${scan.numverify.valid} carrier=${scan.numverify.carrier || '?'} line=${scan.numverify.lineType || '?'}`) : 'Numverify: not configured',
+          `Dorks: ${scan.dorks.length} generated — use pane or copy queries to search engine`,
+          ...scan.dorks.slice(0, 12).map((d) => `  [${d.category}] ${d.label}: ${d.query}`),
+          scan.dorks.length > 12 ? `  … +${scan.dorks.length - 12} more dorks` : '',
+          ...(scan.remote?.configured
+            ? [scan.remote.reachable
+              ? `Remote instance ${scan.remote.baseUrl}: v${scan.remote.version || '?'}, scanners ${(scan.remote.scanners || []).map((s) => s.name).join(', ') || '?'}; ran ${Object.keys(scan.remote.results || {}).join(', ') || 'none'}`
+              : `Remote instance ${scan.remote.baseUrl}: UNREACHABLE (${scan.remote.error || 'no response'})`]
+            : []),
+          scan.scanNote,
+        ];
+        const findings: Array<{ title: string; severity: 'info'|'low'|'medium'|'high'|'critical'; details: string }> = [{
+          title: `PhoneInfoga Scan — ${scan.e164}`,
+          severity: 'info',
+          details: `${scan.country} ${scan.valid ? 'valid' : 'invalid'}${scan.carrier ? ` carrier ${scan.carrier}` : ''}${scan.lineType ? ` (${scan.lineType})` : ''}${scan.ovh?.found ? ` OVH VoIP ${scan.ovh.city || ''} ${scan.ovh.zipCode || ''}` : ''} — ${scan.dorks.length} dorks`,
+        }];
+        if (scan.ovh?.found) {
+          findings.push({ title: `OVH VoIP Range — ${scan.e164}`, severity: 'info', details: `Number matches OVH allocated range ${scan.ovh.numberRange} — ${scan.ovh.city || ''} ${scan.ovh.zipCode || ''} (${scan.ovh.country})` });
+        }
+        return { success: true, output: lines.filter(Boolean).join('\n'), findings };
+      } catch (error) {
+        return { success: false, error: `Phone scan failed: ${error instanceof Error ? error.message : String(error)}` };
       }
     },
   },
@@ -3362,12 +4062,15 @@ export const OSINT_TOOLS: CustomTool[] = [
     parameters: [
       { name: 'subject', type: 'string', description: 'Anything: email, @handle, phone, profile URL, domain, or full name', required: true },
       { name: 'name', type: 'string', description: 'Known full name (improves dork generation)', required: false },
+      { name: 'catalog', type: 'string', description: 'Sweep breadth: "curated" (default, fast), "sherlock" (vendored database only), "full" (both — ~490 sites, minutes not seconds)', required: false },
     ],
     handler: async (context) => {
       const subject = context.parameters.subject as string;
       const name = context.parameters.name as string | undefined;
+      const catalogRaw = String(context.parameters.catalog || 'curated').toLowerCase();
+      const catalog = (['curated', 'sherlock', 'full'].includes(catalogRaw) ? catalogRaw : 'curated') as 'curated' | 'sherlock' | 'full';
       try {
-        const dossier = await locatePerson({ subject, name });
+        const dossier = await locatePerson({ subject, name, catalog });
         const lines = [
           `LOCATOR DOSSIER — ${dossier.subject} (${dossier.durationMs}ms, presence ${dossier.presenceScore}/100)`,
           `Parsed: ${Object.entries(dossier.parsed).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(' ') || 'nothing'}`,
@@ -3522,6 +4225,55 @@ export const OSINT_TOOLS: CustomTool[] = [
         };
       } catch (error) {
         return { success: false, error: `Onion fetch failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  },
+  {
+    name: 'osint_google_dorks',
+    description: 'Build Google Dork queries as an OSINT search technique — the Recorded Future top-20 operator catalog (site: filetype: intitle: inurl: intext: cache: related: before: after: AROUND(X) etc.) across 8 categories: people, documents, credentials & configs, admin portals, directory listings, infrastructure & sensitive endpoints, social & reputation, temporal/cache. Returns raw dork strings + ready-to-click engine URLs. The operator fires the search in their own browser — no automated scraping.',
+    category: 'osint',
+    parameters: [
+      { name: 'name', type: 'string', description: 'Person full name (for people dorks)', required: false },
+      { name: 'email', type: 'string', description: 'Email address', required: false },
+      { name: 'username', type: 'string', description: 'Handle / username', required: false },
+      { name: 'phone', type: 'string', description: 'Phone number', required: false },
+      { name: 'domain', type: 'string', description: 'Target domain or host (e.g. example.com)', required: false },
+      { name: 'keyword', type: 'string', description: 'Free keyword (company, topic, product) — powers social/paste/AROUND dorks', required: false },
+      { name: 'category', type: 'string', description: 'Category filter: people | documents | credentials | admin | directory | infrastructure | social | temporal (omit = all)', required: false },
+      { name: 'severity', type: 'string', description: 'Severity filter: info | low | medium | high | critical', required: false },
+      { name: 'operator', type: 'string', description: 'Operator filter (e.g. filetype, site, intitle, inurl)', required: false },
+      { name: 'limit', type: 'number', description: 'Max dorks to return (1-200, default 40)', required: false },
+    ],
+    handler: async (context) => {
+      const p = context.parameters as Record<string, unknown>;
+      try {
+        const { buildGoogleDorks: _b } = await import('./google-dorks.js');
+        const dorks = _b({
+          name: typeof p.name === 'string' ? p.name : undefined,
+          email: typeof p.email === 'string' ? p.email : undefined,
+          username: typeof p.username === 'string' ? p.username : undefined,
+          phone: typeof p.phone === 'string' ? p.phone : undefined,
+          domain: typeof p.domain === 'string' ? p.domain : undefined,
+          keyword: typeof p.keyword === 'string' ? p.keyword : undefined,
+          category: typeof p.category === 'string' ? p.category as never : undefined,
+          severity: typeof p.severity === 'string' ? p.severity as never : undefined,
+          operator: typeof p.operator === 'string' ? p.operator : undefined,
+          limit: typeof p.limit === 'number' ? p.limit : typeof p.limit === 'string' ? parseInt(p.limit as string, 10) : undefined,
+        });
+        if (!dorks.length) return { success: true, output: 'No dorks matched the filter/context — try broader inputs (add a domain or keyword).', findings: [] };
+        const lines = [
+          `Google Dorks — ${dorks.length} quer${dorks.length === 1 ? 'y' : 'ies'} (operator technique, not an automated search):`,
+          ...dorks.slice(0, 80).map((d) => `  [${d.category}/${d.severity}] ${d.label}\n    query:  ${d.query}\n    Google: ${d.engines[0]?.url || ''}`),
+          dorks.length > 80 ? `  … +${dorks.length - 80} more` : '',
+        ];
+        const findings = dorks.slice(0, 5).filter((d) => d.severity === 'critical' || d.severity === 'high').map((d) => ({
+          title: `Google Dork — ${d.label}`,
+          severity: d.severity === 'critical' ? 'critical' as const : d.severity === 'high' ? 'high' as const : 'medium' as const,
+          details: `${d.description} — query: ${d.query}`,
+        }));
+        return { success: true, output: lines.filter(Boolean).join('\n'), findings: findings.length ? findings : undefined };
+      } catch (error) {
+        return { success: false, error: `Google dorks failed: ${error instanceof Error ? error.message : String(error)}` };
       }
     },
   },

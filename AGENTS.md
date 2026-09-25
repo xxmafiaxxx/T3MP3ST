@@ -1,5 +1,33 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — PHONEINFOGA wired into OSINT: 5 scanner ports + swagger-v2 remote instance adapter
+
+**Request:** "wire this into the osint section https://github.com/sundowndev/phoneinfoga" + "integrate this in your searches https://petstore.swagger.io/?url=…/web/docs/swagger.yaml" + "push when done and do a PR".
+
+PhoneInfoga (sundowndev, GPL-3.0) is a Go framework; the port runs in-process (no Go binary) and can ALSO drive a real self-hosted instance over its own REST API. GPL attribution is kept in the code comment, the UI dork footer, and the agent tool descriptions.
+
+### In-process ports (`src/tools/osint.ts`)
+- **`PhoneIntelResult` extended**: `countryIso`, `valid`, `national`/`rawLocal`/`local`/`international` (the swagger `number.Number` field set), `carrier`/`lineType`/`location`, plus `ovh`/`numverify`/`dorks`/`remote`. `phoneIntel()` emits all forms (`+33 6 12 34 56 78` → E.164 `+33612345678`, International `+33 6123 4567 8`, ISO `FR`); NANP still assumes +1 for bare 10-digit input. New `CC_TO_ISO` map (one duplicate-key build break fixed: `91`/`92` listed twice).
+- **`phoneInfogaDorks()`** — the googlesearch scanner: **45 dorks across all 5 PhoneInfoga categories** (social 5 / disposable 21 / reputation 10 / individuals 7 / general 2), each a Google URL built from the E.164 + international forms. Unparseable input returns `[]`, never throws.
+- **`phoneInfogaOvhCheck()`** — free OVH Telecom `GET /1.0/telephony/number/detailedZones?country={fr|be|gb|es|ch}` for CC 33/32/44/34/41; matches `national[0:6]+"xxxx"` against `number`/`prefix`. Other CCs return an honest `supported:false` note.
+- **`phoneInfogaNumverify()`** — apilayer `number_verification/validate` with `Apikey: T3MP3ST_NUMVERIFY_KEY || NUMVERIFY_API_KEY`; key-gated with a plain not-configured result.
+- **`phoneInfogaScan()`** — composite: local + dorks + parallel OVH/Numverify, folds remote results, and always appends the doctrine disclaimer (does NOT track phone in real time / get precise location / hack phone).
+
+### Remote instance adapter (the swagger v2 contract)
+`T3MP3ST_PHONEINFOGA_URL` (+ optional `T3MP3ST_PHONEINFOGA_TOKEN`) points T3MP3ST at a running PhoneInfoga: `phoneInfogaRemoteInfo` (GET `/api/v2/scanners` + `/api/` health/version), `phoneInfogaRemoteNumber` (POST `/api/v2/numbers`), `phoneInfogaRemoteDryRun` (POST `…/dryrun`), `phoneInfogaRemoteRun` (POST `…/run`, **v1 `GET /api/numbers/{n}/scan/{scanner}` fallback**), `phoneInfogaRemoteGoogleDorks` (swagger `social_media`/`disposable_providers`/`reputation`/`individuals`/`general` arrays), `phoneInfogaRemoteScan` (all scanners, or dry-run verdicts). Results fold into the scan: remote **numverify** supplies carrier/line/location the unkeyed local port can't, remote **ovh** flips the VoIP verdict using its snake_case fields (`number_range`/`zip_code`), remote **googlesearch** dorks merge into the local set **deduped by query**. Unconfigured = `null` lane; unreachable = labeled failure in `scanNote`, never a crash.
+
+### Wiring
+- **Agent tools**: `osint_phone_lookup` upgraded (formats + validity + dork counts); new **`osint_phone_scan`** (full scan, `remote` param, OVH-match finding). Wired into the **recon** operator defaultTools — the `operator-toolkits` gate caught the omission.
+- **Server**: `POST /api/osint/phone` (+dorks/dorkStats), `POST /api/osint/phone/scan` (`remote` flag, ledger finding), `GET /api/osint/phone/dorks`, `GET /api/osint/phone/ovh`, `GET /api/osint/phoneinfoga/remote`, `POST /api/osint/phoneinfoga/remote/scan` (`scanners[]`, `dryRun`).
+- **UI** (`docs/osint.html`): PHONE pane gained `LOCAL` / `◈ FULL SCAN` buttons, validity badge, E.164/International/Local/National/ISO/CC chips, NANP, OVH + Numverify + REMOTE chips, and categorized dork groups (color-coded, per-dork open + copy, GPL source footer). `⟲ CHECK INSTANCE` probes the remote config.
+- **Honesty locks moved together**: arsenal headline **142 → 143** (README + `arsenal-count-honesty.test.ts`), osint registry **14 → 15** (`osint-tools.test.ts`).
+
+### Verified
+- `tsc --noEmit` 0 · `npm run build` 0 · **new suite `src/__tests__/phoneinfoga.test.ts` 16/16** — formatting/validity, all 5 dork categories, honest Numverify+OVH gates, tool registration, and the **remote adapter proven behaviorally against a live local HTTP stub speaking the exact swagger shapes** (discovery, remote numverify/ovh/googlesearch folding, dork dedupe, dry-run, unreachable-instance lane, single-scanner run, v1 fallback shape).
+- Gates: no-phantom + operator-toolkits + arsenal-count-honesty + ui-inline-scripts-parse + osint-tools + phoneinfoga = **135/135**.
+- **Live on :3333** (server restarted on the new dist): `/api/osint/phone` FR → 45 dorks (5/21/10/7/2); `/api/osint/phone/scan` US → valid, OVH unsupported honestly, Numverify unconfigured; **with `T3MP3ST_PHONEINFOGA_URL` set to the swagger stub** → remote info reachable (v2.11.0, 4 scanners), scan folded `carrier=Orange line=mobile loc=Lyon`, `ovh.found=true 336123xxxx Lyon 69000`, dorks 45→46 (1 remote dork merged, 1 deduped), remote-scan dryRun `googlesearch/ovh/numverify: ready`. Stub killed, server restored to unconfigured.
+- Full suite **1215 passed / 8 failed / 29 skipped** — the 8 are the standing parallel-session set (config-directory ×4, cve-correlation, mission-status-endpoint ×2, tool-call-boundary) + the Windows `python3` stub in ctf-rsa-static; **none OSINT/phone-related**.
+
 ## Session Log — 2026-09-25 (Jarvis) — FULL LOCATE runs ALL modules + glowing module rail (SSE)
 
 **Request:** "breach dump search not working. run full locate should run all the modules. and the running module should glow to indicate it is in use."

@@ -264,6 +264,26 @@
             50% { box-shadow: 0 0 10px 2px rgba(0,255,136,.55), 0 0 26px rgba(0,255,136,.25); background: rgba(0,255,136,.08); }
         }
 
+        /* Tool modules in use — the tab pulses and the panel header glows. */
+        .tool-tab.running {
+            color: var(--brand); border-color: var(--brand) !important;
+            animation: modGlow 1.15s ease-in-out infinite;
+        }
+        .tool-tab.running::after { content: ' ◉'; font-size: 9px; }
+        .tool-tab.done { color: var(--success); border-color: rgba(0,255,136,.4) !important; }
+        .panel-running { position: relative; border-color: var(--brand) !important; animation: panelGlow 1.3s ease-in-out infinite; }
+        @keyframes panelGlow {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(0,255,136,0), inset 0 0 0 0 rgba(0,255,136,0); }
+            50% { box-shadow: 0 0 14px 1px rgba(0,255,136,.4), 0 0 34px rgba(0,255,136,.14); }
+        }
+        .panel-running > .panel-header { color: var(--brand); }
+        .panel-running > .panel-header::before {
+            content: '◉ IN USE'; margin-left: auto; font-family: 'JetBrains Mono', monospace;
+            font-size: 10px; color: var(--brand); background: rgba(0,255,136,.1);
+            border: 1px solid var(--brand); border-radius: 10px; padding: 2px 8px;
+            animation: pulse 1.1s infinite;
+        }
+
         .dossier-empty {
             text-align: center; color: var(--text-muted); padding: 40px 20px;
             font-family: 'JetBrains Mono', monospace; font-size: 13px;
@@ -515,7 +535,7 @@
                 </div>
 
                 <!-- ══════════════════ LOCATOR ══════════════════ -->
-                <div class="panel">
+                <div class="panel" id="locatorPanel">
                     <div class="panel-header">
                         <div class="panel-title"><span class="accent">🎯</span> LOCATOR — FULL HUMAN LOOKUP</div>
                         <button class="btn primary" id="locateBtn" onclick="locateBtnClick()">▶ RUN FULL LOCATE</button>
@@ -532,8 +552,11 @@
                                 <input type="text" id="nameInput" placeholder="Known real name (optional — improves dorks)">
                             </div>
                         </div>
-                        <div class="hint-line">Auto-detects identifier type → sweeps 60+ social sites, pulls Gravatar identity + linked accounts, checks breach/dump exposure on every identifier, routes phone country, and generates operator deep-links.</div>
+                        <div class="hint-line">Auto-detects identifier type → sweeps ~490 social sites (hand-probed catalog + the vendored Sherlock platform database), pulls Gravatar identity + linked accounts, checks breach/dump exposure on every identifier, routes phone country, and generates operator deep-links.</div>
                         <div class="run-status" id="locateStatus"><span class="spinner">◈</span> <span id="locateStatusText">Running locator chain…</span></div>
+                        <!-- Module rail — every lane the full locate runs. The module
+                             currently in use glows (SSE 'osint:module' phase=start/end). -->
+                        <div id="moduleRail" class="module-rail" style="display:none;"></div>
                         <div id="dossierOut"><div class="dossier-empty">No dossier yet — enter a subject above and RUN FULL LOCATE.</div></div>
                     </div>
                 </div>
@@ -543,6 +566,7 @@
                     <button class="tool-tab active" data-pane="paneSweep" onclick="switchTool('paneSweep')">📡 USERNAME SWEEP</button>
                     <button class="tool-tab" data-pane="paneBreach" onclick="switchTool('paneBreach')">🕳️ BREACH &amp; DUMPS</button>
                     <button class="tool-tab" data-pane="paneDarkweb" onclick="switchTool('paneDarkweb')">🕸️ DARK WEB</button>
+                    <button class="tool-tab" data-pane="paneDorks" onclick="switchTool('paneDorks')">🎯 GOOGLE DORKS</button>
                     <button class="tool-tab" data-pane="paneEmail" onclick="switchTool('paneEmail')">✉️ EMAIL INTEL</button>
                     <button class="tool-tab" data-pane="panePhone" onclick="switchTool('panePhone')">📞 PHONE LOOKUP</button>
                     <button class="tool-tab" data-pane="paneGeo" onclick="switchTool('paneGeo')">🗺️ GEO INTEL</button>
@@ -563,7 +587,19 @@
                                     <span>@</span>
                                     <input type="text" id="sweepUser" placeholder="Username (no @)" onkeydown="if(event.key==='Enter')runSweep()">
                                 </div>
+                                <div class="search-box" style="max-width:230px;min-width:200px;">
+                                    <span>DB</span>
+                                    <select id="sweepCatalog" onchange="updateSweepCatalogHint()">
+                                        <option value="full">full — curated + Sherlock</option>
+                                        <option value="sherlock">sherlock only</option>
+                                        <option value="curated">curated only (fast)</option>
+                                    </select>
+                                </div>
+                                <label class="hint-line" style="margin:0;cursor:pointer;display:flex;align-items:center;gap:5px;">
+                                    <input type="checkbox" id="sweepAdult" onchange="updateSweepCatalogHint()"> include adult platforms
+                                </label>
                             </div>
+                            <div class="hint-line" id="sweepCatalogHint">Loading catalog…</div>
                             <div id="sweepOut" style="margin-top:14px;"></div>
                         </div>
                     </div>
@@ -671,6 +707,59 @@
                     </div>
                 </div>
 
+                <div class="tool-pane" id="paneDorks">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">🎯</span> GOOGLE DORKS — ADVANCED SEARCH OPERATORS</div>
+                            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                                <button class="btn" onclick="toggleDorkCheatSheet()" id="dorkCheatBtn">📖 CHEAT SHEET</button>
+                                <button class="btn primary" onclick="runDorks()">▶ BUILD DORKS</button>
+                            </div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="hint-line" style="margin:0 0 10px;">Recorded Future top-20 operators (<code>site:</code> <code>filetype:</code> <code>intitle:</code> <code>inurl:</code> <code>intext:</code> <code>cache:</code> <code>related:</code> <code>before:</code>/<code>after:</code> <code>AROUND(X)</code> <code>inanchor:</code>…) across 8 GHDB-style categories. Every dork is a <b>search-engine query you fire in your own browser</b> — no automated scraping, no bulk Google bot. Copy the raw query or click through to Google / Bing / DuckDuckGo.</div>
+                            <div id="dorkCheatSheet" style="display:none;background:var(--bg-primary);border:1px solid var(--border-color);border-radius:6px;padding:12px;margin-bottom:12px;max-height:320px;overflow:auto;"></div>
+                            <div class="locator-form" style="margin-bottom:10px;">
+                                <div class="search-box" style="min-width:160px;max-width:190px;"><span>👤</span><input type="text" id="dorkName" placeholder="Full name"></div>
+                                <div class="search-box" style="min-width:160px;"><span>✉</span><input type="text" id="dorkEmail" placeholder="email"></div>
+                                <div class="search-box" style="min-width:140px;"><span>@</span><input type="text" id="dorkUser" placeholder="username"></div>
+                                <div class="search-box" style="min-width:150px;"><span>📞</span><input type="text" id="dorkPhone" placeholder="phone"></div>
+                            </div>
+                            <div class="locator-form" style="margin-bottom:10px;">
+                                <div class="search-box" style="min-width:180px;"><span>🌐</span><input type="text" id="dorkDomain" placeholder="domain (example.com)"></div>
+                                <div class="search-box" style="min-width:160px;"><span>🔑</span><input type="text" id="dorkKeyword" placeholder="keyword / topic"></div>
+                                <div class="search-box" style="min-width:150px;max-width:170px;"><span>📂</span>
+                                    <select id="dorkCategory" style="color:var(--text-primary);font-family:'JetBrains Mono',monospace;">
+                                        <option value="">all categories</option>
+                                        <option value="people">people</option>
+                                        <option value="documents">documents</option>
+                                        <option value="credentials">credentials</option>
+                                        <option value="admin">admin</option>
+                                        <option value="directory">directory</option>
+                                        <option value="infrastructure">infrastructure</option>
+                                        <option value="social">social</option>
+                                        <option value="temporal">temporal</option>
+                                    </select>
+                                </div>
+                                <div class="search-box" style="min-width:140px;max-width:160px;"><span>⚡</span>
+                                    <select id="dorkSeverity" style="color:var(--text-primary);font-family:'JetBrains Mono',monospace;">
+                                        <option value="">any severity</option>
+                                        <option value="info">info</option>
+                                        <option value="low">low</option>
+                                        <option value="medium">medium</option>
+                                        <option value="high">high</option>
+                                        <option value="critical">critical</option>
+                                    </select>
+                                </div>
+                                <div class="search-box" style="min-width:140px;max-width:160px;"><span>◈</span><input type="text" id="dorkOperator" placeholder="op filter (e.g. filetype)"></div>
+                            </div>
+                            <div class="hint-line" style="margin:0 0 6px;">Tip: for the most sensitive checks (GHDB-style) enter a <b>domain</b> — e.g. <code>example.com</code> unlocks <code>.env / private keys / SQL dumps / .git / open directories</code>. Leave blank for generic, name-tied dorks.</div>
+                            <div id="dorkStats" class="hint-line" style="margin-bottom:10px;"></div>
+                            <div id="dorkOut"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="tool-pane" id="paneEmail">
                     <div class="panel">
                         <div class="panel-header">
@@ -692,17 +781,29 @@
                 <div class="tool-pane" id="panePhone">
                     <div class="panel">
                         <div class="panel-header">
-                            <div class="panel-title"><span class="accent">📞</span> PHONE INTELLIGENCE</div>
-                            <button class="btn" onclick="runPhone()">▶ LOOKUP</button>
+                            <div class="panel-title"><span class="accent">📞</span> PHONE INTELLIGENCE <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px;">PhoneInfoga · sundowndev/phoneinfoga (GPL-3.0)</span></div>
+                            <div style="display:flex;gap:6px;">
+                                <button class="btn" onclick="runPhone()">▶ LOCAL</button>
+                                <button class="btn btn-primary" onclick="runPhoneScan()" title="Full PhoneInfoga scan: OVH VoIP + Numverify (if configured) + 50 dorks">◈ FULL SCAN</button>
+                            </div>
                         </div>
                         <div class="panel-body">
                             <div class="locator-form">
                                 <div class="search-box">
                                     <span>#</span>
-                                    <input type="text" id="phoneInput" placeholder="+1 555 123 4567 / 5551234567" onkeydown="if(event.key==='Enter')runPhone()">
+                                    <input type="text" id="phoneInput" placeholder="+33 6 12 34 56 78 / +1 202 555 0143 / 5551234567" onkeydown="if(event.key==='Enter')runPhone()">
                                 </div>
                             </div>
+                            <div class="hint-line" style="margin-top:6px;font-size:11px;">Local = instant formatting + validity + 50 dorks. Full scan adds OVH VoIP (free, FR/BE/GB/ES/CH) + Numverify carrier/line-type if <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">T3MP3ST_NUMVERIFY_KEY</code> is set. Does NOT track phone in real time, does NOT get precise location.</div>
+                            <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
+                                <label class="hint-line" style="margin:0;cursor:pointer;display:flex;align-items:center;gap:5px;">
+                                    <input type="checkbox" id="phoneRemoteToggle" checked> <b>REMOTE INSTANCE</b>
+                                </label>
+                                <button class="btn" style="font-size:11px;padding:4px 10px;" onclick="checkPhoneInfogaRemote()" title="GET /api/v2/scanners + /api/ health on the configured self-hosted PhoneInfoga">⟲ CHECK INSTANCE</button>
+                                <span class="hint-line" id="phoneRemoteStatus" style="margin:0;">no remote instance checked</span>
+                            </div>
                             <div id="phoneOut" style="margin-top:14px;"></div>
+                            <div id="phoneDorksOut" style="margin-top:14px;"></div>
                         </div>
                     </div>
                 </div>
@@ -1174,7 +1275,15 @@
                 currentDossier = d.dossier;
                 renderDossier(d.dossier);
                 addDossierGeoPoints(d.dossier.geoPoints || []);
-                toast('Dossier assembled — ' + (d.dossier.report ? 'report built, ' : '') + d.dossier.socialAccounts.length + ' accounts, ' + (d.dossier.sourcesChecked || []).length + ' sources checked', 'success');
+                // Fill any module the SSE stream missed (e.g. an older server build).
+                (d.dossier.modules || []).forEach(function (m) {
+                    const icon = m.status === 'ok' ? '✓' : m.status === 'error' ? '✗' : '⤼';
+                    const extra = m.status === 'ok' && m.found !== undefined ? ' — ' + m.found + ' found' : (m.note ? ' — ' + m.note.slice(0, 40) : '');
+                    setChip(m.name, m.status, icon + ' ' + m.name + extra + ' (' + (m.ms / 1000).toFixed(1) + 's)');
+                });
+                const mods = d.dossier.modules || [];
+                const okN = mods.filter(function (m) { return m.status === 'ok'; }).length;
+                toast('Dossier assembled — ' + mods.length + ' modules run (' + okN + ' ok) · ' + d.dossier.socialAccounts.length + ' accounts', 'success');
             } catch (e) {
                 if (e.name === 'AbortError') {
                     out.innerHTML = '<div class="dossier-empty" style="color:var(--warning);">⏹ Scan stopped by operator' +
@@ -1370,6 +1479,18 @@
                 }).join('');
             }
 
+            // ── LLM assist (unverified second opinion; local model when useLocal is on) ──
+            if (d.llmAssisted && (d.llmAssisted.emails.length || d.llmAssisted.phones.length || d.llmAssisted.addresses.length)) {
+                html += '<div class="dossier-section-title" style="margin-top:18px;">🦙 LLM-ASSIST — UNVERIFIED <span class="count">' +
+                    escapeHtml(d.llmAssisted.model || 'configured backbone') + ' · ' + d.llmAssisted.pages + ' page(s) · via ' + escapeHtml((d.llmAssisted.sources || []).join(', ') || 'search') + '</span></div>';
+                html += '<div class="hint-line" style="margin:4px 0 8px;">Second-opinion extraction by the operator\'s configured LLM (local gemma4 when useLocal is on). Format-validated but NOT confirmed by a source page — verify before use.</div>';
+                var llmRows = '';
+                (d.llmAssisted.emails || []).forEach(function (x) { llmRows += '<div class="cred-row"><span>✉</span><span style="color:var(--warning);">' + escapeHtml(x) + '</span><span class="meta">llm · unverified</span></div>'; });
+                (d.llmAssisted.phones || []).forEach(function (x) { llmRows += '<div class="cred-row"><span>☎</span><span style="color:var(--warning);">' + escapeHtml(x) + '</span><span class="meta">llm · unverified</span></div>'; });
+                (d.llmAssisted.addresses || []).forEach(function (x) { llmRows += '<div class="cred-row"><span>📍</span><span style="color:var(--warning);">' + escapeHtml(x) + '</span><span class="meta">llm · unverified</span></div>'; });
+                html += llmRows;
+            }
+
             // ── Step 3/5 sections (ShadowDragon method) ──
             if (d.socialSignals && d.socialSignals.length) {
                 html += '<div class="dossier-section-title" style="margin-top:18px;">🖼️ CROSS-PLATFORM CORRELATION <span class="count">' + d.socialSignals.length + ' signal(s)</span></div>';
@@ -1428,17 +1549,83 @@
             if (paneId === 'paneGeo') ensureGeoMap();
         }
 
+        // ── Module-in-use glow ──
+        // Every tool runner marks its pane + tab as running for the duration of
+        // its call: the tab pulses (modGlow) and the panel header carries a
+        // "◉ IN USE" badge. Applied via a decorator so no runner can forget it.
+        function setPanelBusy(paneId, busy) {
+            const pane = document.getElementById(paneId);
+            if (pane) pane.classList.toggle('panel-running', !!busy);
+            const tab = document.querySelector('.tool-tab[data-pane="' + paneId + '"]');
+            if (tab) {
+                tab.classList.toggle('running', !!busy);
+                tab.classList.toggle('done', !busy && tab.dataset.ran === '1');
+            }
+            if (busy && tab) tab.dataset.ran = '1';
+        }
+        function withBusy(paneId, fn) {
+            return async function () {
+                setPanelBusy(paneId, true);
+                try { return await fn.apply(this, arguments); }
+                finally { setPanelBusy(paneId, false); }
+            };
+        }
+        [['paneSweep', 'runSweep'], ['paneBreach', 'runBreach'], ['paneEmail', 'runEmail'],
+         ['panePhone', 'runPhone'], ['paneDorks', 'runDorks'], ['paneDarkweb', 'runLeakCheck'],
+         ['paneDarkweb', 'runOnionSearch'], ['paneDarkweb', 'runOnionFetch'],
+         ['paneBreach', 'runInfostealerCheck'], ['paneBreach', 'runBreachCatalog'],
+         ['panePerms', 'runPermutations'], ['paneSites', 'loadSites'], ['paneAndroid', 'runAndroidForensics']].forEach(function (pair) {
+            const name = pair[1];
+            if (typeof window[name] === 'function') window[name] = withBusy(pair[0], window[name]);
+        });
+        // The locator is its own panel (no tool-tab) — its run lights the panel
+        // header and the module rail inside it.
+        const _locateBtnClick = window.locateBtnClick;
+        if (typeof _locateBtnClick === 'function') {
+            window.locateBtnClick = function () {
+                const panel = document.getElementById('locatorPanel');
+                if (panel) panel.classList.add('panel-running');
+                try { _locateBtnClick.apply(this, arguments); }
+                finally { setTimeout(function () { if (panel) panel.classList.remove('panel-running'); }, 300); }
+            };
+        }
+
+        let SWEEP_CATALOG_META = null;
+
+        function updateSweepCatalogHint() {
+            var hint = document.getElementById('sweepCatalogHint');
+            if (!hint) return;
+            if (!SWEEP_CATALOG_META) { hint.textContent = 'Loading catalog…'; return; }
+            var mode = document.getElementById('sweepCatalog').value;
+            var adult = document.getElementById('sweepAdult').checked;
+            var m = SWEEP_CATALOG_META;
+            var n = mode === 'curated' ? m.curated : mode === 'sherlock' ? m.added : m.curated + m.added;
+            var bits = [
+                n + ' sites (' + m.curated + ' hand-probed + ' + m.added + ' from the Sherlock database)',
+                m.byErrorType.message + ' soft-404 marker checks',
+                m.byErrorType.response_url + ' redirect-target checks'
+            ];
+            if (!adult) bits.push('adult platforms excluded');
+            hint.textContent = bits.join(' · ') + ' — ' + m.skipped.length + ' POST-only entries not mapped (' + escapeHtml(m.skipped.join(', ')) + ')';
+        }
+
         async function runSweep() {
             const username = document.getElementById('sweepUser').value.trim();
             const out = document.getElementById('sweepOut');
             if (!username) { toast('Enter a username', 'error'); return; }
-            out.innerHTML = '<div class="dossier-empty">◈ Sweeping ' + escapeHtml(username) + ' across the catalog…</div>';
+            const catalog = document.getElementById('sweepCatalog').value;
+            const includeAdult = document.getElementById('sweepAdult').checked;
+            out.innerHTML = '<div class="dossier-empty">◈ Sweeping ' + escapeHtml(username) + ' across the ' + escapeHtml(catalog) + ' catalog…</div>';
             try {
-                const d = await api('/api/osint/username-sweep', { username });
+                const d = await api('/api/osint/username-sweep', { username, catalog: catalog, includeAdult: includeAdult });
                 const s = d.sweep;
-                let html = '<div class="dossier-section-title">📡 ' + escapeHtml(s.username) + ' — ' + s.found.length + ' FOUND / ' + s.absent + ' absent / ' + s.unknown.length + ' unknown <span class="count">' + (s.durationMs / 1000).toFixed(1) + 's</span></div>';
+                let html = '<div class="dossier-section-title">📡 ' + escapeHtml(s.username) + ' — ' + s.found.length + ' FOUND / ' + s.absent + ' absent / ' + s.unknown.length + ' unknown <span class="count">' + s.checked + ' sites · ' + (s.durationMs / 1000).toFixed(1) + 's</span></div>';
                 if (s.found.length) html += '<div class="social-grid">' + s.found.map(renderSocialCard).join('') + '</div>';
-                if (s.unknown.length) html += '<div class="hint-line" style="margin-top:8px;">unknown (blocked/rate-limited): ' + escapeHtml(s.unknown.map(function (u) { return u.site; }).join(', ')) + '</div>';
+                if (s.skippedByShape && s.skippedByShape.length) {
+                    html += '<div class="hint-line" style="margin-top:8px;">not probed — the username cannot exist there (platform username rules): ' + escapeHtml(s.skippedByShape.join(', ')) + '</div>';
+                }
+                const blocked = s.unknown.filter(function (u) { return !u.note || u.note.indexOf('cannot exist') === -1; });
+                if (blocked.length) html += '<div class="hint-line" style="margin-top:8px;">unknown (blocked/rate-limited): ' + escapeHtml(blocked.map(function (u) { return u.site; }).join(', ')) + '</div>';
                 out.innerHTML = html;
                 toast(s.found.length + ' accounts found', s.found.length ? 'success' : '');
             } catch (e) {
@@ -1490,23 +1677,106 @@
             }
         }
 
+        function renderPhoneIntel(p, dorks) {
+            let html = '<div class="dossier-section-title">📞 ' + escapeHtml(p.e164) + ' <span class="count" style="background:' + (p.valid ? 'var(--success)' : 'var(--danger)') + ';color:#fff;">' + (p.valid ? 'valid' : 'invalid') + '</span> <span class="count">' + escapeHtml(p.country) + '</span></div>';
+            html += '<div class="id-row">' +
+                '<span class="id-chip"><b>E.164:</b> ' + escapeHtml(p.e164) + '</span>' +
+                '<span class="id-chip"><b>International:</b> ' + escapeHtml(p.international || p.e164) + '</span>' +
+                '<span class="id-chip"><b>Local:</b> ' + escapeHtml(p.local || p.national || '') + '</span>' +
+                '<span class="id-chip"><b>National:</b> ' + escapeHtml(p.national || p.rawLocal || '') + '</span>' +
+                '<span class="id-chip"><b>ISO:</b> ' + escapeHtml(p.countryIso || '?') + ' <b>CC:</b> +' + escapeHtml(String(p.countryCode)) + '</span>' +
+                '<span class="id-chip"><b>length:</b> ' + escapeHtml(String(p.national ? p.national.length : p.digits.length - String(p.countryCode).length)) + '/' + p.expectedLength + ' ' + (p.lengthValid ? '✓' : '✗') + '</span>' +
+                (p.nanp ? '<span class="id-chip"><b>NANP:</b> area ' + escapeHtml(p.nanp.areaCode) + ' exch ' + escapeHtml(p.nanp.exchange) + ' · ' + (p.nanp.validAreaCode ? 'valid' : 'INVALID') + '</span>' : '') +
+                (p.carrier ? '<span class="id-chip"><b>carrier:</b> ' + escapeHtml(p.carrier) + '</span>' : '') +
+                (p.lineType ? '<span class="id-chip"><b>line:</b> ' + escapeHtml(p.lineType) + '</span>' : '') +
+                '</div>';
+            html += '<div class="dork-list" style="margin-top:8px;">' + p.searchLinks.map(function (l) {
+                return '<div class="dork-item"><span class="label">' + escapeHtml(l.label) + '</span><a href="' + escapeHtml(l.url) + '" target="_blank" rel="noopener noreferrer">open ↗</a></div>';
+            }).join('') + '</div>';
+            if (dorks && dorks.length) html += renderPhoneDorks(dorks);
+            return html;
+        }
+        function renderPhoneDorks(dorks) {
+            if (!dorks || !dorks.length) return '';
+            const byCat = { social: [], disposable: [], reputation: [], individuals: [], general: [] };
+            dorks.forEach(function (d) { (byCat[d.category] = byCat[d.category] || []).push(d); });
+            const catLabel = { social: '📱 Social media (5)', disposable: '📦 Disposable providers', reputation: '⭐ Reputation', individuals: '👤 Individuals', general: '📄 General / docs' };
+            const catColor = { social: '#70a1ff', disposable: '#ffa502', reputation: '#2ed573', individuals: '#b57bff', general: '#ff6b81' };
+            let html = '<div class="dossier-section-title" style="margin-top:14px;">🔍 PhoneInfoga dorks <span class="count">' + dorks.length + '</span> <span style="font-size:10px;color:var(--text-muted);font-weight:400;">— sundowndev/phoneinfoga dork templates, fire in your browser</span></div>';
+            ['social','disposable','reputation','individuals','general'].forEach(function (cat) {
+                const arr = byCat[cat]; if (!arr || !arr.length) return;
+                html += '<div style="margin:10px 0 4px;font-size:11px;font-weight:700;color:' + catColor[cat] + ';">' + catLabel[cat] + ' <span class="count">' + arr.length + '</span></div>';
+                html += '<div class="dork-list">' + arr.map(function (d) {
+                    return '<div class="dork-item">'
+                        + '<span class="label" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(d.query) + '">' + escapeHtml(d.label) + '</span>'
+                        + '<code style="flex:1;font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(d.query) + '">' + escapeHtml(d.query) + '</code>'
+                        + '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer" title="Open Google search">open ↗</a>'
+                        + '<button class="btn" style="padding:2px 6px;font-size:10px;" onclick="navigator.clipboard.writeText(' + JSON.stringify(d.query).replace(/"/g,'&quot;') + ');toast(\'Dork copied\',\'success\')">copy</button>'
+                        + '</div>';
+                }).join('') + '</div>';
+            });
+            html += '<div class="hint-line" style="margin-top:6px;">Dork source: <a href="https://github.com/sundowndev/phoneinfoga" target="_blank" rel="noopener noreferrer">sundowndev/phoneinfoga</a> (GPL-3.0) — social/disposable/reputation/individuals/general scanners ported verbatim.</div>';
+            return html;
+        }
+        async function checkPhoneInfogaRemote() {
+            const st = document.getElementById('phoneRemoteStatus');
+            if (!st) return;
+            st.textContent = 'checking instance…';
+            try {
+                const d = await api('/api/osint/phoneinfoga/remote');
+                const r = d.remote;
+                if (!r.configured) { st.innerHTML = '<span style="color:var(--text-muted);">not configured — set <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">T3MP3ST_PHONEINFOGA_URL</code> to drive a self-hosted PhoneInfoga REST instance (swagger v2)</span>'; return; }
+                if (!r.reachable) { st.innerHTML = '<span style="color:var(--danger);">✗ ' + escapeHtml(r.baseUrl) + ' unreachable — ' + escapeHtml(r.error || 'no response') + '</span>'; return; }
+                st.innerHTML = '<span style="color:var(--success);">● ' + escapeHtml(r.baseUrl) + ' v' + escapeHtml(r.version || '?') + ' — ' + (r.scanners ? r.scanners.length : 0) + ' scanners: ' + escapeHtml((r.scanners || []).map(function (s) { return s.name; }).join(', ')) + '</span>';
+            } catch (e) { st.innerHTML = '<span style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</span>'; }
+        }
         async function runPhone() {
             const phone = document.getElementById('phoneInput').value.trim();
             const out = document.getElementById('phoneOut');
+            const dorksOut = document.getElementById('phoneDorksOut');
             if (!phone) { toast('Enter a phone number', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Running local intel…</div>'; if (dorksOut) dorksOut.innerHTML='';
             try {
                 const d = await api('/api/osint/phone', { phone });
-                const p = d.intel;
-                let html = '<div class="dossier-section-title">📞 ' + escapeHtml(p.e164) + '</div>';
-                html += '<div class="id-row">' +
-                    '<span class="id-chip"><b>country:</b> ' + escapeHtml(p.country) + '</span>' +
-                    '<span class="id-chip"><b>digits:</b> ' + p.digits.length + ' (expected ' + (p.digits.length - p.countryCode.length) + '/' + p.expectedLength + ')</span>' +
-                    (p.nanp ? '<span class="id-chip"><b>NANP:</b> area ' + escapeHtml(p.nanp.areaCode) + ' · ' + (p.nanp.validAreaCode ? 'valid' : 'INVALID') + '</span>' : '') +
-                    '</div>';
-                html += '<div class="dork-list">' + p.searchLinks.map(function (l) {
-                    return '<div class="dork-item"><span class="label">' + escapeHtml(l.label) + '</span><a href="' + escapeHtml(l.url) + '" target="_blank" rel="noopener noreferrer">open ↗</a></div>';
-                }).join('') + '</div>';
+                out.innerHTML = renderPhoneIntel(d.intel, d.dorks);
+                if (dorksOut) dorksOut.innerHTML='';
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+        async function runPhoneScan() {
+            const phone = document.getElementById('phoneInput').value.trim();
+            const out = document.getElementById('phoneOut');
+            const dorksOut = document.getElementById('phoneDorksOut');
+            if (!phone) { toast('Enter a phone number', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Full PhoneInfoga scan — local + OVH VoIP + Numverify (if configured) + 50 dorks…</div>'; if (dorksOut) dorksOut.innerHTML='';
+            try {
+                const remoteToggle = document.getElementById('phoneRemoteToggle');
+                const useRemote = !remoteToggle || remoteToggle.checked;
+                const d = await api('/api/osint/phone/scan', { phone, remote: useRemote });
+                const s = d.scan;
+                let html = renderPhoneIntel(s, null);
+                // Enrichment chips
+                html += '<div class="id-row" style="margin-top:10px;">';
+                if (s.ovh) {
+                    if (s.ovh.found) html += '<span class="id-chip" style="border-color:var(--success);color:var(--success);"><b>OVH VoIP:</b> MATCH ' + escapeHtml(s.ovh.city || '') + ' ' + escapeHtml(s.ovh.zipCode||'') + ' ' + escapeHtml(s.ovh.numberRange||s.ovh.number||'') + '</span>';
+                    else if (s.ovh.supported) html += '<span class="id-chip"><b>OVH VoIP:</b> no match — ' + escapeHtml(s.ovh.note||'checked') + '</span>';
+                    else html += '<span class="id-chip" style="opacity:.7;"><b>OVH:</b> ' + escapeHtml(s.ovh.note||'unsupported country') + '</span>';
+                }
+                if (s.numverify) {
+                    if (!s.numverify.configured) html += '<span class="id-chip" style="opacity:.7;"><b>Numverify:</b> not configured</span>';
+                    else if (s.numverify.error) html += '<span class="id-chip" style="border-color:var(--warning);"><b>Numverify:</b> ' + escapeHtml(s.numverify.error.slice(0,120)) + '</span>';
+                    else html += '<span class="id-chip"><b>Numverify:</b> carrier ' + escapeHtml(s.numverify.carrier||'?') + ' · ' + escapeHtml(s.numverify.lineType||'?') + ' · ' + escapeHtml(s.numverify.location||'?') + ' valid:' + (s.numverify.valid?'yes':'no') + '</span>';
+                }
+                if (s.remote) {
+                    if (!s.remote.configured) { /* silent — toggle hint covers it */ }
+                    else if (s.remote.reachable) html += '<span class="id-chip" style="border-color:var(--success);color:var(--success);" title="Self-hosted PhoneInfoga REST instance (swagger v2) — ' + escapeHtml(s.remote.baseUrl) + '"><b>REMOTE:</b> ' + escapeHtml(s.remote.baseUrl) + ' v' + escapeHtml(s.remote.version || '?') + ' · ' + (s.remote.scanners ? s.remote.scanners.length : 0) + ' scanners · ran ' + escapeHtml(Object.keys(s.remote.results || {}).join(', ') || 'none') + '</span>';
+                    else html += '<span class="id-chip" style="border-color:var(--danger);color:var(--danger);"><b>REMOTE:</b> ' + escapeHtml(s.remote.baseUrl) + ' unreachable — ' + escapeHtml(s.remote.error || 'no response') + '</span>';
+                }
+                html += '</div>';
+                if (s.scanNote) html += '<div class="hint-line" style="margin-top:6px;">' + escapeHtml(s.scanNote) + '</div>';
                 out.innerHTML = html;
+                if (dorksOut) dorksOut.innerHTML = renderPhoneDorks(s.dorks);
             } catch (e) {
                 out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
             }
@@ -1524,6 +1794,99 @@
                 out.innerHTML = '<div class="dossier-section-title">🔤 ' + d.count + ' PERMUTATIONS</div>' +
                     '<pre class="raw-output">' + escapeHtml(d.permutations.join('\n')) + '</pre>' +
                     '<div class="hint-line">Sweep them one by one in the Username Sweep pane (or hand them to a recon operator).</div>';
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // GOOGLE DORKS — OPERATOR TECHNIQUE (Recorded Future top-20)
+        // ═══════════════════════════════════════════════════════════════
+        let _dorkOpsLoaded = false;
+        function toggleDorkCheatSheet() {
+            const el = document.getElementById('dorkCheatSheet');
+            if (!el) return;
+            if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+            el.style.display = 'block';
+            if (_dorkOpsLoaded) return;
+            el.innerHTML = '<div class="dossier-empty">◈ Loading operator reference…</div>';
+            api('/api/osint/google-dorks?catalog=1').then(function (d) {
+                _dorkOpsLoaded = true;
+                let html = '<div class="dossier-section-title">📖 OPERATOR CHEAT SHEET — Recorded Future top-20 <span class="count">' + d.operators.length + ' operators</span></div>';
+                html += '<table class="ident-table" style="margin-bottom:12px;"><tr><th style="text-align:left;color:var(--accent);padding:4px 8px;">Operator</th><th style="text-align:left;color:var(--accent);padding:4px 8px;">Meaning</th></tr>';
+                html += d.operators.map(function (o) { return '<tr><td><code style="color:var(--accent);">' + escapeHtml(o.op) + '</code></td><td>' + escapeHtml(o.desc) + '</td></tr>'; }).join('');
+                html += '</table>';
+                html += '<div class="dossier-section-title">📚 GHDB CATALOG <span class="count">' + d.catalogCount + ' templates</span></div>';
+                html += '<div style="display:flex;flex-wrap:wrap;gap:5px;">' + d.catalog.map(function (t) {
+                    return '<span class="src-chip" title="' + escapeHtml(t.description) + '">' + escapeHtml(t.category) + '/' + escapeHtml(t.severity) + ' — ' + escapeHtml(t.label) + ' <code style="opacity:.7;">' + escapeHtml(t.operators.join(' ')) + '</code></span>';
+                }).join('') + '</div>';
+                el.innerHTML = html;
+            }).catch(function (e) { el.innerHTML = '<div style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>'; });
+        }
+        function sevColor(s) {
+            return s === 'critical' ? 'var(--danger)' : s === 'high' ? '#ff6b35' : s === 'medium' ? 'var(--warning)' : s === 'low' ? 'var(--info)' : 'var(--text-muted)';
+        }
+        function catIcon(c) {
+            return c === 'people' ? '👤' : c === 'documents' ? '📄' : c === 'credentials' ? '🔑' : c === 'admin' ? '🔐' : c === 'directory' ? '📁' : c === 'infrastructure' ? '🏗️' : c === 'social' ? '💬' : '🕰️';
+        }
+        async function runDorks() {
+            const name = document.getElementById('dorkName').value.trim();
+            const email = document.getElementById('dorkEmail').value.trim();
+            const username = document.getElementById('dorkUser').value.trim();
+            const phone = document.getElementById('dorkPhone').value.trim();
+            const domain = document.getElementById('dorkDomain').value.trim();
+            const keyword = document.getElementById('dorkKeyword').value.trim();
+            const category = document.getElementById('dorkCategory').value;
+            const severity = document.getElementById('dorkSeverity').value;
+            const operator = document.getElementById('dorkOperator').value.trim();
+            const out = document.getElementById('dorkOut');
+            const statEl = document.getElementById('dorkStats');
+            if (!name && !email && !username && !phone && !domain && !keyword) {
+                toast('Enter at least one identifier (name, email, username, phone, domain, or keyword)', 'error');
+                return;
+            }
+            out.innerHTML = '<div class="dossier-empty">◈ Building dorks…</div>';
+            if (statEl) statEl.textContent = '';
+            try {
+                const body = {};
+                if (name) body.name = name;
+                if (email) body.email = email;
+                if (username) body.username = username;
+                if (phone) body.phone = phone;
+                if (domain) body.domain = domain;
+                if (keyword) body.keyword = keyword;
+                if (category) body.category = category;
+                if (severity) body.severity = severity;
+                if (operator) body.operator = operator;
+                body.limit = 120;
+                const d = await api('/api/osint/google-dorks', body);
+                if (!d.dorks || !d.dorks.length) {
+                    out.innerHTML = '<div class="dossier-empty">No dorks matched — try broader inputs or clear the category/operator filter.</div>';
+                    return;
+                }
+                if (statEl) statEl.textContent = d.count + ' dork quer' + (d.count === 1 ? 'y' : 'ies') + ' — raw query + Google / Bing / DuckDuckGo. You fire the search in your browser.';
+                // Group by category for scan-ability
+                const byCat = {};
+                d.dorks.forEach(function (x) { (byCat[x.category] = byCat[x.category] || []).push(x); });
+                let html = '';
+                Object.keys(byCat).sort().forEach(function (cat) {
+                    const arr = byCat[cat];
+                    html += '<div class="dossier-section-title" style="margin-top:14px;">' + catIcon(cat) + ' ' + escapeHtml(cat.toUpperCase()) + ' <span class="count">' + arr.length + '</span></div>';
+                    html += arr.map(function (x) {
+                        const engines = (x.engines || []).map(function (e) { return '<a href="' + escapeHtml(e.url) + '" target="_blank" rel="noopener noreferrer" style="font-size:10px;padding:3px 7px;border-radius:4px;border:1px solid var(--border-color);background:var(--bg-tertiary);color:var(--info);text-decoration:none;">' + escapeHtml(e.label.replace('Search on ', '')) + ' ↗</a>'; }).join(' ');
+                        return '<div style="background:var(--bg-primary);border:1px solid var(--border-color);border-left:3px solid ' + sevColor(x.severity) + ';border-radius:6px;padding:10px 12px;margin-bottom:6px;">'
+                            + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">'
+                            + '<div><div style="font-family:JetBrains Mono,monospace;font-size:12px;font-weight:700;color:var(--text-primary);">' + escapeHtml(x.label) + ' <span style="font-size:9px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);border:1px solid var(--border-color);color:' + sevColor(x.severity) + ';">' + escapeHtml(x.severity) + '</span> <span style="font-size:9px;color:var(--text-muted);">' + escapeHtml((x.operators || []).join(' ')) + '</span>' + (x.tag ? ' <span style="font-size:9px;color:var(--text-muted);">· ' + escapeHtml(x.tag) + '</span>' : '') + '</div>'
+                            + '<div style="font-family:JetBrains Mono,monospace;font-size:11px;color:var(--text-secondary);margin-top:6px;word-break:break-all;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:4px;padding:6px 8px;">' + escapeHtml(x.query) + '</div>'
+                            + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtml(x.description || '') + '</div></div>'
+                            + '<div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;flex-shrink:0;">'
+                            + '<button class="btn" style="font-size:11px;padding:4px 10px;" onclick="navigator.clipboard.writeText(' + JSON.stringify(x.query).replace(/"/g, '&quot;') + ');toast(\'Query copied — paste into your search engine\',\'success\')">📋 COPY QUERY</button>'
+                            + '<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;">' + engines + '</div></div>'
+                            + '</div></div>';
+                    }).join('');
+                });
+                out.innerHTML = html;
+                toast(d.count + ' dorks built', 'success');
             } catch (e) {
                 out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
             }
@@ -1657,13 +2020,29 @@
             try {
                 const d = await api('/api/osint/sites');
                 document.getElementById('statSites').textContent = d.count;
+                SWEEP_CATALOG_META = d.sherlock;
+                updateSweepCatalogHint();
                 const byCat = {};
                 d.sites.forEach(function (s) { (byCat[s.category] = byCat[s.category] || []).push(s); });
                 let html = '';
+                if (d.sherlock) {
+                    const sh = d.sherlock;
+                    html += '<div class="dossier-section-title">🗃️ CATALOG PROVENANCE</div>' +
+                        '<div class="hint-line" style="margin:0 0 10px;">' + sh.curated + ' hand-probed entries (API endpoints + identity corroboration) merged with ' + sh.added +
+                        ' platforms from the vendored <a href="' + escapeHtml(sh.source) + '" target="_blank" rel="noopener" style="color:var(--info);">Sherlock</a> database (' + escapeHtml(sh.license) + '). ' +
+                        'Sherlock contributes three absence techniques the plain status check lacks: ' +
+                        '<b>' + (sh.byErrorType.message || 0) + '</b> soft-404 error-marker checks, ' +
+                        '<b>' + (sh.byErrorType.response_url || 0) + '</b> redirect-target checks, and a username-shape pre-filter that skips platforms where the handle cannot exist. ' +
+                        (sh.skipped.length ? 'Not mapped (POST-only, would mis-probe with GET): ' + escapeHtml(sh.skipped.join(', ')) + '.' : '') +
+                        '</div>';
+                }
                 Object.keys(byCat).sort().forEach(function (cat) {
                     html += '<div class="dossier-section-title" style="margin-top:12px;">' + escapeHtml(cat) + ' <span class="count">' + byCat[cat].length + '</span></div>';
                     html += '<div class="sites-catalog">' + byCat[cat].map(function (s) {
-                        return '<div class="site-pill"><span>' + escapeHtml(s.name) + '</span><span class="rel rel-' + s.reliability + '">' + s.reliability + '</span></div>';
+                        return '<div class="site-pill" title="' + escapeHtml(s.notes || '') + '"><span>' + escapeHtml(s.name) +
+                            (s.source === 'sherlock' ? ' <span style="color:var(--text-muted);font-size:9px;">SH</span>' : '') +
+                            (s.adult ? ' <span style="color:var(--danger);font-size:9px;">18+</span>' : '') +
+                            '</span><span class="rel rel-' + s.reliability + '">' + s.reliability + '</span></div>';
                     }).join('') + '</div>';
                 });
                 out.innerHTML = html;
