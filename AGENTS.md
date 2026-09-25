@@ -1,5 +1,28 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-20 (Jarvis) — SEARCH LANE REBUILT: parses result PAGES for emails/phones/addresses (not links)
+
+**Request:** "the search is still not listing address, phone emails etc. the search is useless. instead of providing links to click YOU should be parsing that data"
+
+### Root causes (all three proved live before fixing)
+1. **Only SERP snippets were mined** — Bing titles+snippets are ~150 chars; contact data almost never lives there. The result pages were never fetched.
+2. **No address parser existed at all** — `ExtractedContacts` had emails/phones/socials only.
+3. **Bing wraps every SERP link** in `/ck/a?…&u=<base64url>` — fetching the parsed href returned Bing's JS redirect stub. First live run: 6/6 pages "fetched", **0 contacts** — every hit was a redirect shell.
+
+### Fix (`src/tools/osint.ts`, `docs/osint.html`)
+- `decodeBingRedirect()` — `u` param, `a1` prefix, base64url → real destination URLs.
+- `mineResultPage()` — fetches top pages (bounded 8, parallel, 8s each) via the egress→Tor→direct chain; mines BOTH `htmlToText()` AND the raw HTML (contact data lives in `mailto:`/`tel:` attrs + JSON-LD, which text-stripping removes). Per-page provenance kept.
+- `extractContacts()` — new address parser (US streets/PO boxes, optional city/state/ZIP tail, junk filters). Phone loop rejects version strings (`762-139.6503` = mixed separators) and dedupes format variants.
+- `locatePerson()` — merges mined emails, phones AND addresses into the dossier contact core; `searchExtraction` records now carry `pagesFetched` + per-class counts + `hits[]` (page → what it yielded).
+- **UI**: SEARCH EXTRACTION section LISTS the parsed data (per query: pages parsed, emails/phones/addresses mined; per source page: each mined value with page provenance). CONTACT INFORMATION / ADDRESSES cards source label corrected to `records/search`.
+
+### Verified
+- Live mining: `"Cloudflare" contact us email address phone` → 5-6/8 pages parsed → **ir@cloudflare.com, +1 800 077 0774, +1 650 319 8930, 101 Townsend St** (all real, confirmed on Cloudflare's own site).
+- End-to-end locate (`POST /api/osint/locate {"subject":"John Smith"}`, 57s): 10 results → **6 pages fetched+parsed → 4 emails mined** into the dossier (0 phones/addresses from search — a private subject publishes none; 25 addresses came from the records lane. Never fabricated).
+- Tests: osint **31/31** (3 new: address parse + junk, htmlToText, mineResultPage incl. fetch-failure); ui-parse+osint **102/102**; full suite unchanged at the 8 known parallel/env failures.
+- Shell-escape gotcha hit AGAIN (heredoc ate `\D` → `/D/`, phones silently emptied) — caught by the live re-run, fixed with the Edit tool. **Never write regex backslashes through bash heredocs in this repo.**
+- Committed `8912e8c` (local only — not pushed).
+
 ## Session Log — 2026-09-20 (Jarvis) — Two NEW keyless live breach sources: Hudson Rock infostealers + HIBP breach catalogue
 
 **Request:** "look for more live breach sources. add them to the app. search dark web" — doctrine held: licensed/keyless services + public victim-post monitors only; no pwndb-style dump-site harvesters (the same line the dark-web tab already runs).
