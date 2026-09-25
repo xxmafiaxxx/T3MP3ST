@@ -1946,6 +1946,9 @@ export interface OsintDossier {
   /** LLM second-opinion extraction (operator's configured backbone — local gemma4
    *  when useLocal is on). UNVERIFIED by design — kept out of the confident lists. */
   llmAssisted?: LlmAssistedContacts & { sources: string[] };
+  /** LLM-directed search plan + ranked pages (the model DIRECTED these searches;
+   *  the deterministic layer executed and validated every result). */
+  searchPlan?: SearchDirectorResult;
   /** Operator-ready markdown report (the DETAILED REPORT section). */
   report: string;
   identities: { source: string; detail: string }[];
@@ -2946,6 +2949,46 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     return { found: dossier.historicalRecovery.length, note: `${snapshots} snapshot(s) across ${dossier.historicalRecovery.length} profile(s)` };
   });
 
+  // ── LLM SEARCH DIRECTOR — the model plans, ranks and directs the searches.
+  // Runs after the deterministic passes so it can plan against what we already
+  // have. It proposes queries/URLs; this code executes them, re-validates every
+  // contact through the same extractors, and files the plan + page ranking in
+  // the dossier so the operator can audit what the model decided.
+  await runModule('SEARCH DIRECTOR', Boolean(input.llmChat), 'no LLM configured — deterministic search only', async () => {
+    const domains = new Set<string>();
+    for (const u of [...emails, ...dossier.socialAccounts.map((a) => a.url)]) {
+      const m = String(u).match(/https?:\/\/([^/]+)/) || String(u).match(/@([^@.]+\.[^@]+)/);
+      if (m) domains.add(m[1].toLowerCase());
+    }
+    const director = await llmDirectSearch(input.llmChat!, {
+      subject: dossier.subject,
+      name: dossier.name,
+      email,
+      phone,
+      domain,
+      known: {
+        emails, phones, addresses,
+        domains: [...domains].slice(0, 10),
+        accounts: dossier.socialAccounts.map((a) => a.site).join(', ') || 'none',
+      },
+    }, { model: input.llmModel });
+    dossier.searchPlan = director;
+    for (const e of director.found.emails) {
+      if (!emails.includes(e)) { emails.push(e); identities.push({ source: 'llm-directed search', detail: `email found by LLM-planned query: ${e}` }); }
+    }
+    for (const p of director.found.phones) {
+      if (!phones.includes(p)) { phones.push(p); identities.push({ source: 'llm-directed search', detail: `phone found by LLM-planned query: ${p}` }); }
+    }
+    for (const a of director.found.addresses) {
+      if (!addresses.some((x) => x.toLowerCase() === a.toLowerCase())) { addresses.push(a); identities.push({ source: 'llm-directed search', detail: `address found by LLM-planned fetch: ${a}` }); }
+    }
+    const uniq = [...new Set(director.found.emails.filter((e) => !parsedInput.email || e !== parsedInput.email))];
+    return {
+      found: uniq.length + director.found.phones.length + director.found.addresses.length,
+      note: `${director.plan.length} planned step(s), ${director.pagesFetched} page(s) fetched, ${director.verdicts.length} page(s) ranked`,
+    };
+  });
+
   await runModule('OPERATOR DORKS', true, '', async () => {
     const base = personDorks({
       name: dossier.name,
@@ -3204,8 +3247,10 @@ export function extractContacts(text: string): ExtractedContacts {
     emails.add(e);
   }
   for (const m of text.match(PHONE_RE_GLOBAL) || []) {
-    // Mixed separators (e.g. "762-139.6503") are version strings, not phone numbers.
+    // Version strings / coords, not phones: mixed separators ("762-139.6503")
+    // or triple dot-groups ("377.728.2818").
     if (m.includes('-') && m.includes('.')) continue;
+    if (/^\d{2,4}\.\d{2,4}\.\d{3,5}$/.test(m.trim())) continue;
     const digits = m.replace(/\D/g, '');
     if (digits.length === 11 && digits.startsWith('1')) { if (!phoneKeys.has(digits)) { phoneKeys.add(digits); phones.add(m.trim()); } }
     else if (digits.length === 10 && !/^(19|20)\d{2}/.test(digits)) { if (!phoneKeys.has(digits)) { phoneKeys.add(digits); phones.add(m.trim()); } }
@@ -3508,6 +3553,155 @@ export async function llmAssistAcross(
     pages: pages.length,
   };
 }
+
+// =============================================================================
+// LLM SEARCH DIRECTOR — the model PLANS and RANKS the searches; the deterministic
+// layer executes and re-validates everything. The LLM never becomes the source of
+// truth: every proposed query/URL is sanitized here, every fetched page is mined
+// with the same format-validating extractors, and the plan itself is kept in a
+// SEPARATE dossier section so the operator can see what the model decided.
+// =============================================================================
+
+export interface LlmSearchPlanStep { query: string; intent: string; priority: number }
+export interface LlmPageVerdict { url: string; priority: number; reason: string }
+export interface SearchDirectorResult {
+  model?: string;
+  rounds: number;
+  plan: LlmSearchPlanStep[];
+  pagesFetched: number;
+  verdicts: LlmPageVerdict[];
+  /** What the directed searches actually FOUND (deterministically validated). */
+  found: { emails: string[]; phones: string[]; addresses: string[] };
+}
+
+/** SSRF-style guard for LLM-proposed DIRECT fetches: public http(s) only. */
+export function isPublicSearchUrl(urlRaw: string): boolean {
+  let u: URL;
+  try { u = new URL(urlRaw); } catch { return false; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+  const h = u.hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || h === 'metadata.google.internal') return false;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+  if (h === '0.0.0.0' || h === '::1' || h.startsWith('[')) return false;
+  return h.includes('.') || h.length > 3; // require a dotted public host
+}
+
+const PLAN_SYSTEM = [
+  'You are the search director for an OSINT investigation. Given the subject facts and what has already been found, decide the NEXT searches.',
+  'Return ONLY JSON: {"plan":[{"query":"<search string>","intent":"<why>","priority":<1-100>}],"pages":[{"url":"<public https URL>","priority":<1-100>,"reason":"<why>"}]}',
+  'Rules: at most 6 plan steps and 6 pages. Queries are plain search strings (quotes and site:/filetype: operators are fine). Pages must be public https URLs you are confident belong to the subject (profiles, contact pages, company pages). Never invent a URL you were not given or cannot infer; prefer fewer high-confidence steps. No prose.',
+].join(' ');
+
+const VERDICT_SYSTEM = [
+  'You rank fetched web pages by how likely each is to belong to the subject.',
+  'Return ONLY JSON: {"verdicts":[{"url":"<exact url as given>","priority":<1-100>,"reason":"<max 12 words>"}]}',
+  'Rank every given URL exactly once. No prose.',
+].join(' ');
+
+/** Tolerant parse + SANITIZE of the director plan (caps, string hygiene, SSRF guard). */
+export function parseLlmSearchPlan(raw: string): { plan: LlmSearchPlanStep[]; pages: LlmPageVerdict[] } {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : raw;
+  const s = body.indexOf('{'); const e = body.lastIndexOf('}');
+  if (s === -1 || e <= s) return { plan: [], pages: [] };
+  let j: Record<string, unknown>;
+  try { j = JSON.parse(body.slice(s, e + 1)) as Record<string, unknown>; } catch { return { plan: [], pages: [] }; }
+  const plan: LlmSearchPlanStep[] = [];
+  for (const item of (Array.isArray(j.plan) ? j.plan : []).slice(0, 6)) {
+    const o = item as Record<string, unknown>;
+    const query = String(o.query || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+    if (query.length < 3) continue;
+    plan.push({ query, intent: String(o.intent || '').slice(0, 140), priority: Math.max(1, Math.min(100, Number(o.priority) || 50)) });
+  }
+  const pages: LlmPageVerdict[] = [];
+  for (const item of (Array.isArray(j.pages) ? j.pages : []).slice(0, 6)) {
+    const o = item as Record<string, unknown>;
+    const url = String(o.url || '').trim();
+    if (!isPublicSearchUrl(url)) continue; // drop anything non-public / malformed
+    pages.push({ url, priority: Math.max(1, Math.min(100, Number(o.priority) || 50)), reason: String(o.reason || '').slice(0, 80) });
+  }
+  plan.sort((a, b) => b.priority - a.priority);
+  pages.sort((a, b) => b.priority - a.priority);
+  return { plan, pages };
+}
+
+export function parseLlmPageVerdicts(raw: string, allowedUrls: string[]): LlmPageVerdict[] {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : raw;
+  const s = body.indexOf('{'); const e = body.lastIndexOf('}');
+  if (s === -1 || e <= s) return [];
+  let j: Record<string, unknown>;
+  try { j = JSON.parse(body.slice(s, e + 1)) as Record<string, unknown>; } catch { return []; }
+  const allowed = new Set(allowedUrls);
+  const out: LlmPageVerdict[] = [];
+  for (const item of (Array.isArray(j.verdicts) ? j.verdicts : [])) {
+    const o = item as Record<string, unknown>;
+    const url = String(o.url || '').trim();
+    if (!allowed.has(url)) continue; // model can only RANK pages we actually fetched
+    out.push({ url, priority: Math.max(1, Math.min(100, Number(o.priority) || 50)), reason: String(o.reason || '').slice(0, 80) });
+  }
+  return out.sort((a, b) => b.priority - a.priority);
+}
+
+/** The director pass: plan → execute (queries + direct public pages) → rank. */
+export async function llmDirectSearch(
+  chat: (system: string, user: string) => Promise<string>,
+  ctx: {
+    subject: string;
+    name?: string; email?: string; phone?: string; domain?: string;
+    known: { emails: string[]; phones: string[]; addresses: string[]; domains: string[]; accounts: string };
+  },
+  opts: { model?: string; perQueryPages?: number } = {},
+): Promise<SearchDirectorResult> {
+  const ctxLine = [
+    `Subject: ${ctx.subject}`,
+    ctx.name ? `Name: ${ctx.name}` : '',
+    ctx.email ? `Email: ${ctx.email}` : '',
+    ctx.phone ? `Phone: ${ctx.phone}` : '',
+    `Already found — emails: ${ctx.known.emails.join(', ') || 'none'}`,
+    `phones: ${ctx.known.phones.join(', ') || 'none'}`,
+    `addresses: ${ctx.known.addresses.join(', ') || 'none'}`,
+    `domains seen: ${ctx.known.domains.join(', ') || 'none'}`,
+    `social accounts: ${ctx.known.accounts || 'none'}`,
+    'Plan the searches most likely to surface PUBLIC contact data (emails, phones, addresses) for this subject that we do not already have.',
+  ].filter(Boolean).join('\n');
+
+  const rawPlan = await chat(PLAN_SYSTEM, ctxLine).catch(() => '');
+  const { plan, pages } = parseLlmSearchPlan(rawPlan);
+  if (plan.length === 0 && pages.length === 0) return { model: opts.model, rounds: 1, plan: [], pagesFetched: 0, verdicts: [], found: { emails: [], phones: [], addresses: [] } };
+
+  // Execute the plan in priority order — deterministic execution, LLM direction.
+  let pagesFetched = 0;
+  const fetchedUrls: string[] = [];
+  const found = { emails: [] as string[], phones: [] as string[], addresses: [] as string[] };
+  for (const step of plan.slice(0, 6)) {
+    const r = await searchExtract(step.query, { maxPages: Math.max(1, Math.min(opts.perQueryPages ?? 3, 5)) }).catch(() => null);
+    if (!r) continue;
+    pagesFetched += r.mined.filter((m) => m.fetched).length;
+    fetchedUrls.push(...r.mined.filter((m) => m.fetched).map((m) => m.url));
+    found.emails.push(...r.extracted.emails); found.phones.push(...r.extracted.phones); found.addresses.push(...r.extracted.addresses);
+  }
+  for (const p of pages.slice(0, 6)) {
+    const m = await mineResultPage(p.url, p.reason || p.url).catch(() => null);
+    if (m && m.fetched) { pagesFetched++; fetchedUrls.push(m.url); found.emails.push(...m.emails); found.phones.push(...m.phones); found.addresses.push(...m.addresses); }
+  }
+
+  // Rank what we actually fetched (the model can only order real URLs).
+  const uniq = [...new Set(fetchedUrls)].slice(0, 14);
+  const verdicts = uniq.length
+    ? parseLlmPageVerdicts(await chat(VERDICT_SYSTEM, `Pages fetched:\n${uniq.join('\n')}`).catch(() => ''), uniq)
+    : [];
+
+  return {
+    model: opts.model, rounds: 1, plan, pagesFetched, verdicts,
+    found: {
+      emails: [...new Set(found.emails)].slice(0, 15),
+      phones: [...new Set(found.phones)].slice(0, 8),
+      addresses: [...new Set(found.addresses)].slice(0, 8),
+    },
+  };
+}
+
 
 /** Run a Bing search, then PARSE the linked result pages themselves for contact data —
  *  addresses, phones and emails mined from full page text, not just SERP snippets. */

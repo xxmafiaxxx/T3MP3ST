@@ -515,3 +515,50 @@ describe('local-LLM assist layer (unverified second opinion)', () => {
     expect(out.emails).toHaveLength(0);
   });
 });
+describe('LLM search director (plan/rank parsing + guards)', () => {
+  it('isPublicSearchUrl blocks private hosts, metadata and non-http schemes', async () => {
+    const { isPublicSearchUrl } = await import('../tools/osint.js');
+    expect(isPublicSearchUrl('https://www.cloudflare.com/contact')).toBe(true);
+    expect(isPublicSearchUrl('http://example.com/x')).toBe(true);
+    for (const bad of ['http://127.0.0.1:3333/api/health', 'http://localhost/x', 'http://192.168.1.5/admin', 'http://10.0.0.1', 'http://169.254.169.254/latest/meta-data', 'http://metadata.google.internal/x', 'file:///etc/passwd', 'javascript:alert(1)', 'not a url']) {
+      expect(isPublicSearchUrl(bad), bad).toBe(false);
+    }
+  });
+
+  it('parseLlmSearchPlan caps, sanitizes, sorts by priority and drops unsafe URLs', async () => {
+    const { parseLlmSearchPlan } = await import('../tools/osint.js');
+    const raw = JSON.stringify({
+      plan: [
+        { query: 'low priority thing', intent: 'x', priority: 10 },
+        { query: 'high priority "Katherine May" Cloudflare', intent: 'direct email hunt', priority: 95 },
+        { query: 'ab', intent: 'too short', priority: 99 },
+      ],
+      pages: [
+        { url: 'https://www.cloudflare.com/contact', priority: 80, reason: 'contact page' },
+        { url: 'http://127.0.0.1:3333/steal', priority: 99, reason: 'evil' },
+      ],
+    });
+    const { plan, pages } = parseLlmSearchPlan(raw);
+    expect(plan).toHaveLength(2);
+    expect(plan[0].priority).toBe(95);
+    expect(plan[0].query).toContain('Katherine May');
+    expect(plan[1].priority).toBe(10);
+    expect(pages).toHaveLength(1);
+    expect(pages[0].url).toContain('cloudflare.com');
+    expect(parseLlmSearchPlan('garbage').plan).toHaveLength(0);
+  });
+
+  it('parseLlmPageVerdicts only ranks URLs we actually fetched', async () => {
+    const { parseLlmPageVerdicts } = await import('../tools/osint.js');
+    const allowed = ['https://a.test/p1', 'https://a.test/p2'];
+    const raw = JSON.stringify({ verdicts: [
+      { url: 'https://a.test/p2', priority: 90, reason: 'strong' },
+      { url: 'https://a.test/p1', priority: 40, reason: 'weak' },
+      { url: 'https://never-fetched.test/x', priority: 100, reason: 'hallucinated' },
+    ] });
+    const v = parseLlmPageVerdicts(raw, allowed);
+    expect(v).toHaveLength(2);
+    expect(v[0].url).toContain('p2');
+    expect(v.some((x) => x.url.includes('never-fetched'))).toBe(false);
+  });
+});

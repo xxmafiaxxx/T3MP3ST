@@ -1479,6 +1479,32 @@
                 }).join('');
             }
 
+            // ── LLM SEARCH DIRECTOR: the model planned + ranked these searches ──
+            if (d.searchPlan) {
+                var sp = d.searchPlan;
+                html += '<div class="dossier-section-title" style="margin-top:18px;">🦙 SEARCH DIRECTOR — LLM-PLANNED <span class="count">' +
+                    escapeHtml(sp.model || 'configured backbone') + ' · ' + sp.plan.length + ' step(s) · ' + sp.pagesFetched + ' page(s) fetched · ' + sp.verdicts.length + ' ranked</span></div>';
+                html += '<div class="hint-line" style="margin:4px 0 8px;">The LLM chose these queries/pages and ranked what came back; the platform executed them and re-validated every contact. Plan shown for audit.</div>';
+                if (sp.plan && sp.plan.length) {
+                    html += '<div style="display:grid;gap:4px;margin-bottom:10px;">' + sp.plan.map(function (p) {
+                        return '<div class="dork-item"><span class="label">#' + p.priority + ' 🔎 ' + escapeHtml(p.query) + '</span><span style="color:var(--text-muted);font-size:10.5px;">' + escapeHtml(p.intent || '') + '</span></div>';
+                    }).join('') + '</div>';
+                }
+                if (sp.verdicts && sp.verdicts.length) {
+                    html += '<div class="dossier-section-title" style="font-size:11px;">📊 LLM PAGE RANKING</div><div style="display:grid;gap:3px;margin-bottom:10px;">' + sp.verdicts.slice(0, 8).map(function (v) {
+                        return '<div class="cred-row"><span style="color:var(--brand);font-weight:700;">' + v.priority + '</span><a href="' + escapeHtml(v.url) + '" target="_blank" rel="noopener" style="color:var(--info);">' + escapeHtml(v.url.slice(0, 58)) + ' ↗</a><span class="meta">' + escapeHtml(v.reason || '') + '</span></div>';
+                    }).join('') + '</div>';
+                }
+                if (sp.found && (sp.found.emails.length || sp.found.phones.length || sp.found.addresses.length)) {
+                    html += '<div class="dossier-section-title" style="font-size:11px;">🎯 FOUND BY DIRECTED SEARCHES</div>';
+                    var dirRows = '';
+                    sp.found.emails.forEach(function (x) { dirRows += '<div class="cred-row"><span>✉</span><span style="color:var(--text-primary);">' + escapeHtml(x) + '</span><span class="meta">llm-directed</span></div>'; });
+                    sp.found.phones.forEach(function (x) { dirRows += '<div class="cred-row"><span>☎</span><span style="color:var(--text-primary);">' + escapeHtml(x) + '</span><span class="meta">llm-directed</span></div>'; });
+                    sp.found.addresses.forEach(function (x) { dirRows += '<div class="cred-row"><span>📍</span><span style="color:var(--text-primary);">' + escapeHtml(x) + '</span><span class="meta">llm-directed</span></div>'; });
+                    html += dirRows;
+                }
+            }
+
             // ── LLM assist (unverified second opinion; local model when useLocal is on) ──
             if (d.llmAssisted && (d.llmAssisted.emails.length || d.llmAssisted.phones.length || d.llmAssisted.addresses.length)) {
                 html += '<div class="dossier-section-title" style="margin-top:18px;">🦙 LLM-ASSIST — UNVERIFIED <span class="count">' +
