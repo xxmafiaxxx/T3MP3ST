@@ -1,5 +1,63 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — FULL LOCATE runs ALL modules + glowing module rail (SSE)
+
+**Request:** "breach dump search not working. run full locate should run all the modules. and the running module should glow to indicate it is in use."
+
+### Breach-dump diagnosis (live, `/api/osint/breach` on test@example.com)
+- Free lanes WORK: LeakCheck public 1,394 records (23 field types listed), XposedOrNot 213.
+- Keyed lanes are the dead part: configured LeakCheck v2 key → API replies **"Active plan required"** (free/limited tier cannot pull records); DeHashed + Snusbase unset. That is why dump search "returns nothing" — an account/key issue, now surfaced per-module in the ledger note.
+
+### Full locate = every module + glow
+- `createModuleLedger(onModule)` (osint.ts, unit-testable): each stage runs ok / skip(with reason) / error + timing; a failing lane is isolated, never aborts the run. 14 modules: EMAIL INTEL · DUMP LANES (+USERNAME) · PHONE INTEL · DOMAIN/MX · BREACH CATALOG · DARK WEB MONITOR · SCREENING · PUBLIC RECORDS · SEARCH MINING · SOCIAL SWEEP · CORRELATION · HISTORICAL RECOVERY · OPERATOR DORKS.
+- Newly RUN by locate (were missing): BREACH CATALOG (HIBP, domain) + DARK WEB MONITOR (ransomware leak sites) — the user's "all the modules".
+- Server: locate route bridges `onModule` → `broadcastEvent('osint:module', …)` (SSE). UI: module rail — one chip per module; the chip in use pulses with a brand-colored glow (`modGlow` keyframe); final chips show ✓/✗/⤼ + found count + ms. The old client-side STAGED ticker (theater — guessed stages) is deleted; progress is now the server's real ledger.
+
+### Verified live
+- Subject "Raul Glasgow": 12-module ledger (SCREENING 13.1s, PUBLIC RECORDS 68.4s, SEARCH MINING 8 pages parsed+mined, 15 dorks; inapplicable lanes show their skip reason), 24 `osint:module` SSE events captured — exactly what drives the glow.
+- Subject "torvalds": 14 rows, DUMP LANES (USERNAME) 56 records, SOCIAL SWEEP 35 accounts / 18.1s.
+- Also fixed the parallel session's in-flight `osint_google_dorks` orphan (wired recon+analyst; count 141→142; documented input-optional exception in the registry test since it is a catalog generator).
+- osint suite 35/35 · affected 119/119 · full suite back to the 8 known parallel/env failures.
+
+## Session Log — 2026-09-25 (Jarvis) — SHERLOCK platform database merged into the OSINT sweep (67 → 493 sites)
+
+**Request:** "add these techniques into your search" + https://github.com/sherlock-project/sherlock
+
+### What was taken from Sherlock (not just the site list — the absence TECHNIQUES)
+`sherlock_project/resources/data.json` (482 platforms) is vendored verbatim at `tools/sherlock/` (+ LICENSE, + README with the refresh command). `src/tools/sherlock-sites.ts` (new) maps each entry into the existing `OsintSite` shape and merges it with the hand-curated catalog (**curated entries WIN on name collision** — they carry API probes + identity corroboration a generic page check cannot).
+
+| Sherlock field | Sites | What it bought us |
+|---|---|---|
+| `errorMsg` (soft-404 marker) | 125 | The page **200s when the user does NOT exist**; the body carries an error marker. Mapped to `absentMarkers` (any-of) — a plain 2xx check calls all 125 of those a false FOUND. |
+| `response_url` | 27 | The site **redirects** a missing profile to a known error page, so 2xx is meaningless and the FINAL url is the signal → `absentRedirectPrefix`. Requires the post-redirect URL, so `torFetchAny` now reads curl `%{url_effective}`. |
+| `regexCheck` | 84 | The platform only accepts usernames of a certain shape. Probing an impossible username manufactures a guaranteed-false ABSENT → the site is **SKIPPED, not probed**, and reported in `sweep.skippedByShape` + a UI line. |
+| `urlProbe` | 37 | A dedicated API/cleaner URL — probed instead of the human page. |
+| `isNSFW` | 19 | New `adult` category — catalogued but **excluded from default sweeps**, opt-in via a checkbox / `includeAdult`. |
+
+`errorMsg` is a bare STRING in 117 of the 125 message entries (an array in the rest) — the mapper normalizes both. A `message` entry that ships no usable marker is **refused, not guessed** (a wrong ABSENT is worse than an honest UNKNOWN). The 3 POST-only entries (Anilist/Discord/Holopin) are dropped rather than GET-probed into a false ABSENT, and the UI names them.
+
+### Engine changes (`src/tools/osint.ts`)
+- `OsintSite` += `absentMarkers` / `absentRedirectPrefix` / `usernameRegex` / `source` / `adult`; `OsintSiteCategory` += `adult`.
+- `classifyOutcome` reads the two new signals before the generic marker probes (a curated `body_contains` site keeps its old behavior).
+- `probeSite` skips regex-non-matching usernames and requests a body whenever the classifier reads one (the marker list rides on a 2xx).
+- `runUsernameSweep` takes `catalog: 'curated' | 'sherlock' | 'full'` (default **full** for an explicit sweep) + `includeAdult`; returns `skippedByShape`.
+- `getMergedSiteCatalog()` — cached merged catalog (67 curated + 426 Sherlock = **493**).
+- **Locator deliberately stays on `curated`**: it sweeps every name-permutation (12 perms × 3-wide chunks), so `full` there would be tens of minutes. `catalog` is now an explicit `LocatorInput` / `osint_person_locate` / `osint_username_sweep` parameter for when the operator wants the broad surface.
+
+### API / UI
+- `GET /api/osint/sites` returns the merged catalog + a `sherlock` provenance block (source, license, curated/added split, byErrorType counts, skipped names); `?catalog=curated|sherlock|full` filters. `POST /api/osint/username-sweep` takes `catalog` + `includeAdult`.
+- `docs/osint.html`: sweep panel gains a CATALOG selector (full / sherlock / curated) + adult checkbox with a live count line; site catalog tab shows a CATALOG PROVENANCE block, `SH` source badges, `18+` flags.
+
+### Two bugs my own tests caught
+1. `probeUrlTemplate` was assigned the **raw** `urlProbe` string — the `{}`→`{u}` normalizer only ran on the human page, so all 37 API-probe sites would have probed the literal string `{}`. Caught by asserting every mapped template contains `{u}`.
+2. Some entries (Gravatar among them) ship plaintext `http://` probe URLs. A public probe carries the username in the URL, so these are **upgraded to https** in the normalizer rather than loosened in the test.
+
+### Verified
+- `tsc` / `npm run build` 0 · new suite `src/__tests__/sherlock-sites.test.ts` **18/18** — mapper coverage for all three errorTypes, the string/array `errorMsg` split, regex passthrough + invalid-regex tolerance, urlProbe precedence, API-only entries, merge precedence, plus the three techniques proven **behaviorally against a live local HTTP stub** (soft-404 200 → absent, redirect-to-error → absent, regex-gated username → skipped, never probed).
+- osint-tools + ui-inline-scripts-parse + no-phantom + operator-toolkits **62/62**. Full suite **1199 passed / 8 failed** — the 8 are the standing parallel-session set (config-directory, mission-status-endpoint, tool-call-boundary, cve-correlation) + the Windows `python3` stub in ctf-rsa-static, none OSINT-related.
+- LIVE on :3333: `GET /api/osint/sites` → 493 sites, 19 adult flagged, provenance block intact · `POST /api/osint/username-sweep {catalog:"curated", sites:"GitHub,GitLab,Reddit,Keybase,Steam"}` on torvalds → GitHub/Keybase/Steam found · same endpoint with a 46-char username against 3 regex-gated Sherlock sites → `skippedByShape: ["1337x","Chess"]`, **0 absent recorded** (the pre-filter preventing two false ABSENTs) · direct engine run: curated sweep 67 sites/26.7s, a 90-site Sherlock slice 18 found / 54 absent / 18 unknown in 33.2s (full surface ≈ 3 min).
+- NOT committed. NOTE: a parallel session was editing `src/tools/osint.ts` throughout (social-correlation + historical-recovery work); its in-flight edits broke the build twice mid-session and the build was re-run after it settled. The Sherlock changes survived intact.
+
 ## Session Log — 2026-09-20 (Jarvis) — SEARCH LANE REBUILT: parses result PAGES for emails/phones/addresses (not links)
 
 **Request:** "the search is still not listing address, phone emails etc. the search is useless. instead of providing links to click YOU should be parsing that data"

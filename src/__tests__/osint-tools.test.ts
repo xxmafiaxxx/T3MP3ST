@@ -41,8 +41,12 @@ describe('osint site catalog', () => {
 });
 
 describe('osint agent tools', () => {
-  it('registers 13 tools in the osint category with required parameters', () => {
-    expect(OSINT_TOOLS.length).toBe(13);
+  it('registers 14 tools in the osint category with required parameters', () => {
+    expect(OSINT_TOOLS.length).toBe(14);
+    // Catalog generators are legitimately invocable bare (they emit a query
+    // library, they don't search one subject) — documented exception to the
+    // "every tool has a required input" rule.
+    const INPUT_OPTIONAL = new Set(['osint_google_dorks']);
     const names = new Set<string>();
     for (const t of OSINT_TOOLS) {
       expect(names.has(t.name), `duplicate tool ${t.name}`).toBe(false);
@@ -50,7 +54,7 @@ describe('osint agent tools', () => {
       expect(t.category).toBe('osint');
       expect(typeof t.handler).toBe('function');
       const required = (t.parameters || []).filter((p) => p.required);
-      expect(required.length).toBeGreaterThanOrEqual(1);
+      if (!INPUT_OPTIONAL.has(t.name)) expect(required.length).toBeGreaterThanOrEqual(1);
     }
     for (const expected of [
       'osint_username_sweep',

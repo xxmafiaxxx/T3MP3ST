@@ -7892,7 +7892,15 @@ app.post('/api/osint/locate', async (req: Request, res: Response): Promise<void>
   if (!subject && !name) { res.status(400).json({ error: 'subject required (email, @handle, phone, URL, domain, or name)' }); return; }
   try {
     console.log(`[T3MP3ST][OSINT] person locate: ${subject || name}`);
-    const dossier = await locatePerson({ subject: subject || undefined, name });
+    // Live per-module progress over SSE so the OSINT panel can glow the module
+    // currently in use (run phase=start → glow, phase=end → final state).
+    const dossier = await locatePerson({
+      subject: subject || undefined,
+      name,
+      onModule: (m) => {
+        try { broadcastEvent('osint:module', { subject: subject || name || '', ...m, ts: Date.now() }); } catch { /* SSE optional */ }
+      },
+    });
     if (dossier.socialAccounts.length > 0) {
       upsertMissionFindingToLedger({
         title: `OSINT Dossier — ${dossier.subject} (${dossier.socialAccounts.length} accounts found)`,

@@ -242,6 +242,28 @@
         }
         .run-status .spinner { animation: pulse 1s infinite; }
 
+        /* Module rail — one chip per lane the full locate runs. The chip of the
+           module currently in use pulses with a brand-colored glow. */
+        .module-rail { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .mod-chip {
+            font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
+            padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border-color);
+            background: var(--bg-secondary); color: var(--text-muted);
+            white-space: nowrap; transition: all .25s ease;
+        }
+        .mod-chip.pending { opacity: .55; }
+        .mod-chip.running {
+            color: var(--brand); border-color: var(--brand);
+            animation: modGlow 1.15s ease-in-out infinite;
+        }
+        .mod-chip.ok { color: var(--success); border-color: rgba(0,255,136,.35); }
+        .mod-chip.skip { color: var(--text-muted); border-style: dashed; }
+        .mod-chip.error { color: var(--danger); border-color: rgba(255,77,109,.5); }
+        @keyframes modGlow {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(0,255,136,0); background: var(--bg-secondary); }
+            50% { box-shadow: 0 0 10px 2px rgba(0,255,136,.55), 0 0 26px rgba(0,255,136,.25); background: rgba(0,255,136,.08); }
+        }
+
         .dossier-empty {
             text-align: center; color: var(--text-muted); padding: 40px 20px;
             font-family: 'JetBrains Mono', monospace; font-size: 13px;
@@ -1097,24 +1119,54 @@
             status.style.display = 'flex';
             out.innerHTML = '<div class="dossier-empty">◈ Chain starting…</div>';
 
-            // Staged progress — the chain runs server-side in one call; these are its
-            // real stages, shown as they plausibly execute, with an honest elapsed clock.
-            const stages = [
-                'Parsing subject & identifiers',
-                'Sweeping social platforms',
-                'Pulling Gravatar identity & linked accounts',
-                'Checking breach & dump lanes',
-                'Resolving phone & geo signals',
-                'Scoring presence & building the report',
-            ];
-            let stageIdx = 0;
+            // REAL per-module progress over SSE — every lane the full locate runs
+            // gets a chip; the one in use glows. (The old ticker guessed stages
+            // client-side; this is the server's actual module ledger.)
+            const rail = document.getElementById('moduleRail');
+            rail.style.display = 'flex';
+            rail.innerHTML = '';
+            const chips = new Map();
+            const ensureChip = function (name) {
+                if (chips.has(name)) return chips.get(name);
+                const el = document.createElement('span');
+                el.className = 'mod-chip pending';
+                el.dataset.module = name;
+                rail.appendChild(el);
+                chips.set(name, el);
+                return el;
+            };
+            const setChip = function (name, cls, label) {
+                const el = ensureChip(name);
+                el.className = 'mod-chip ' + cls;
+                el.textContent = label;
+            };
             const t0 = Date.now();
-            document.getElementById('locateStatusText').textContent = '[1/' + stages.length + '] ' + stages[0] + '… (0s)';
+            let runningName = '';
+            document.getElementById('locateStatusText').textContent = 'starting modules… (0s)';
+            const es = new EventSource((typeof getApiBase === 'function' ? getApiBase() : '') + '/api/events');
+            const onMod = function (ev) {
+                let m;
+                try { m = JSON.parse(ev.data); } catch (_) { return; }
+                const secs = ((Date.now() - t0) / 1000).toFixed(0);
+                if (m.phase === 'start') {
+                    if (m.status === 'skip') { setChip(m.name, 'skip', '⤼ ' + m.name + ' — ' + (m.note || 'skipped')); return; }
+                    runningName = m.name;
+                    chips.forEach(function (el, n) { if (n !== m.name && el.classList.contains('running')) el.className = 'mod-chip pending'; });
+                    setChip(m.name, 'running', '◉ ' + m.name + '…');
+                    document.getElementById('locateStatusText').textContent = 'running ' + m.name + '… (' + secs + 's elapsed)';
+                } else {
+                    const icon = m.status === 'ok' ? '✓' : m.status === 'error' ? '✗' : '⤼';
+                    const extra = m.status === 'ok' && m.found !== undefined ? ' — ' + m.found + ' found' : (m.note ? ' — ' + m.note.slice(0, 40) : '');
+                    setChip(m.name, m.status, icon + ' ' + m.name + extra + ' (' + (m.ms / 1000).toFixed(1) + 's)');
+                    if (runningName === m.name) { runningName = ''; document.getElementById('locateStatusText').textContent = 'assembling dossier… (' + secs + 's elapsed)'; }
+                }
+            };
+            es.addEventListener('osint:module', onMod);
             const ticker = setInterval(function () {
-                const elapsed = Math.round((Date.now() - t0) / 1000);
-                if (elapsed > (stageIdx + 1) * 4.5 && stageIdx < stages.length - 1) stageIdx++;
-                document.getElementById('locateStatusText').textContent =
-                    '[' + (stageIdx + 1) + '/' + stages.length + '] ' + stages[stageIdx] + '… (' + elapsed + 's elapsed)';
+                if (runningName) {
+                    document.getElementById('locateStatusText').textContent =
+                        'running ' + runningName + '… (' + ((Date.now() - t0) / 1000).toFixed(0) + 's elapsed)';
+                }
             }, 1000);
 
             try {
@@ -1134,6 +1186,7 @@
                 }
             } finally {
                 clearInterval(ticker);
+                try { es.removeEventListener('osint:module', onMod); es.close(); } catch (_) {}
                 locateAbort = null;
                 setLocateButton(false);
                 status.style.display = 'none';

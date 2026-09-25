@@ -1384,6 +1384,10 @@ export interface OsintDossier {
   /** ShadowDragon Step 5 — Wayback recovery of deleted profile pages, mined for contacts. */
   historicalRecovery: { url: string; snapshotCount: number; recoveredAt?: string; recoveredUrl?: string; emails: string[]; phones: string[]; addresses: string[] }[];
   peopleRecords: PersonRecord[];
+  /** Per-module run ledger for the full locate (ok/skip/error + timing). */
+  modules: LocateModuleStatus[];
+  /** Dark-web leak-site monitor result (ransomware victim posts for the subject). */
+  darkWeb?: LeakMonitorResult;
   /** Operator-ready markdown report (the DETAILED REPORT section). */
   report: string;
   identities: { source: string; detail: string }[];
@@ -1997,6 +2001,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     searchExtraction: [],
     socialSignals: [],
     historicalRecovery: [],
+    modules: [],
     peopleRecords: [],
     report: '',
     identities,
@@ -2011,72 +2016,99 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
   // breach/dump exposure, screening). Socials are deliberately LAST and
   // derive from whatever wave 1 confirms.
   // ─────────────────────────────────────────────────────────────────
+  // Every stage runs through runModule(): a failing lane is recorded as
+  // 'error' and the locate continues; a full run visibly exercises every
+  // module (ok / skip-with-reason / error) and reports timing.
+  const { log: moduleLog, run: runModule } = createModuleLedger(input.onModule);
   const jobs: Promise<void>[] = [];
 
   if (email) {
-    jobs.push(
-      emailIntel(email).then((intel) => {
-        dossier.gravatar = intel.gravatar;
-        dossier.emailIntel = intel;
-        if (intel.gravatar.exists) {
-          photos.push(intel.gravatar.avatarUrl);
-          if (intel.gravatar.displayName) identities.push({ source: 'Gravatar', detail: `display name: ${intel.gravatar.displayName}` });
-          if (intel.gravatar.location) locations.push(intel.gravatar.location);
-        }
-      }).catch(() => undefined)
-    );
-    jobs.push(dumpDatabaseLookup(email, 'email').then((r) => { dumpLanes.push(r); }).catch(() => undefined));
+    jobs.push(runModule('EMAIL INTEL', true, '', async () => {
+      const intel = await emailIntel(email);
+      dossier.gravatar = intel.gravatar;
+      dossier.emailIntel = intel;
+      if (intel.gravatar.exists) {
+        photos.push(intel.gravatar.avatarUrl);
+        if (intel.gravatar.displayName) identities.push({ source: 'Gravatar', detail: `display name: ${intel.gravatar.displayName}` });
+        if (intel.gravatar.location) locations.push(intel.gravatar.location);
+      }
+      return { found: intel.breaches.reduce((a, b) => a + (typeof b.found === 'number' ? b.found : 0), 0) + (intel.infostealer.infected ? intel.infostealer.infections.length : 0) };
+    }));
+    jobs.push(runModule('DUMP LANES', true, '', async () => {
+      const r = await dumpDatabaseLookup(email, 'email');
+      dumpLanes.push(r);
+      const armed = r.deep.filter((d) => 'found' in d).length;
+      return { found: r.free.reduce((a, f) => a + (typeof f.found === 'number' ? f.found : 0), 0), note: armed ? `${armed} keyed lane(s) returned records` : r.deep.length ? 'keyed lanes returned no records (key-required or plan-limited)' : undefined };
+    }));
+  } else {
+    jobs.push(runModule('EMAIL INTEL', false, 'no email identifier parsed', async () => undefined));
+    jobs.push(runModule('DUMP LANES', false, 'no email identifier parsed (username/phone lanes run below)', async () => undefined));
   }
   if (phone) {
-    jobs.push(
-      (async () => {
-        try {
-          const pi = phoneIntel(phone);
-          dossier.phone = pi;
-          if (pi.nanp && pi.nanp.validAreaCode) locations.push(`NANP area code ${pi.nanp.areaCode} (region lookup: npa ${pi.nanp.areaCode})`);
-          dumpLanes.push(await dumpDatabaseLookup(pi.e164, 'phone').catch(() => ({ query: pi.e164, kind: 'phone' as const, free: [], deep: [], credentials: [] })));
-        } catch { /* invalid phone — skip */ }
-      })()
-    );
+    jobs.push(runModule('PHONE INTEL', true, '', async () => {
+      const pi = phoneIntel(phone);
+      dossier.phone = pi;
+      if (pi.nanp && pi.nanp.validAreaCode) locations.push(`NANP area code ${pi.nanp.areaCode} (region lookup: npa ${pi.nanp.areaCode})`);
+      dumpLanes.push(await dumpDatabaseLookup(pi.e164, 'phone').catch(() => ({ query: pi.e164, kind: 'phone' as const, free: [], deep: [], credentials: [] })));
+      return { found: 1 };
+    }));
+  } else {
+    jobs.push(runModule('PHONE INTEL', false, 'no phone identifier parsed', async () => undefined));
   }
   if (username) {
-    jobs.push(
-      dumpDatabaseLookup(username, 'username').then((r) => { dumpLanes.push(r); }).catch(() => undefined)
-    );
+    jobs.push(runModule('DUMP LANES (USERNAME)', true, '', async () => {
+      const r = await dumpDatabaseLookup(username, 'username');
+      dumpLanes.push(r);
+      return { found: r.free.reduce((a, f) => a + (typeof f.found === 'number' ? f.found : 0), 0) };
+    }));
   }
   if (domain) {
-    jobs.push(
-      dns.resolveMx(domain).then((mx) => {
-        if (mx.length) identities.push({ source: `MX ${domain}`, detail: `mail handled by ${mx.map((m) => m.exchange).join(', ')}` });
-      }).catch(() => undefined)
-    );
+    jobs.push(runModule('DOMAIN / MX', true, '', async () => {
+      const mx = await dns.resolveMx(domain);
+      if (mx.length) identities.push({ source: `MX ${domain}`, detail: `mail handled by ${mx.map((m) => m.exchange).join(', ')}` });
+      return { found: mx.length };
+    }));
+    jobs.push(runModule('BREACH CATALOG', true, '', async () => {
+      const c = await hibpBreachCatalog(domain);
+      if (c.total > 0) identities.push({ source: 'HIBP breach catalogue', detail: `${c.total} breach(es) touching ${domain}: ${c.entries.slice(0, 6).map((e) => e.name).join(', ')}` });
+      return { found: c.total, note: c.note };
+    }));
+    jobs.push(runModule('DARK WEB MONITOR', true, '', async () => {
+      const leak = await ransomwareLeakSearch(domain);
+      dossier.darkWeb = leak;
+      if (leak.victims?.length) identities.push({ source: 'dark web leak sites', detail: `${leak.victims.length} ransomware victim post(s) for ${domain}` });
+      return { found: leak.victims?.length || 0 };
+    }));
+  } else {
+    jobs.push(runModule('DOMAIN / MX', false, 'no domain parsed', async () => undefined));
+    jobs.push(runModule('BREACH CATALOG', false, 'no domain parsed', async () => undefined));
+    jobs.push(runModule('DARK WEB MONITOR', false, 'no domain parsed', async () => undefined));
   }
   if (parsedInput.name && parsedInput.name.includes(' ')) {
-    jobs.push(
-      screenSubject(parsedInput.name).then((screening) => {
-        dossier.screening = screening;
-      }).catch(() => undefined)
-    );
-  }
-  if (parsedInput.name && parsedInput.name.includes(' ')) {
-    jobs.push(
-      peopleRecordSearch(parsedInput.name).then((result) => {
-        dossier.peopleRecords = result.records;
-        for (const rec of result.records) {
-          if (rec.age && !ages.includes(rec.age)) ages.push(rec.age);
-          if (rec.city && !locations.some((l) => l.includes(rec.city!))) locations.push(rec.city + ' (public records)');
-          for (const a of rec.pastAddresses.slice(0, 4)) {
-            const key = a.toLowerCase();
-            if (!addresses.some((x) => x.toLowerCase().includes(key))) addresses.push(a + ' (public records)');
-          }
-          for (const aka of rec.akas.slice(0, 4)) {
-            identities.push({ source: 'public records AKA', detail: aka });
-          }
+    jobs.push(runModule('SCREENING', true, '', async () => {
+      dossier.screening = await screenSubject(parsedInput.name!);
+      const hits = dossier.screening.sources.filter((s) => /hit|listed|found|match/i.test(s.status)).length;
+      return { found: hits, note: `${dossier.screening.sources.length} source(s) screened` };
+    }));
+    jobs.push(runModule('PUBLIC RECORDS', true, '', async () => {
+      const result = await peopleRecordSearch(parsedInput.name!);
+      dossier.peopleRecords = result.records;
+      for (const rec of result.records) {
+        if (rec.age && !ages.includes(rec.age)) ages.push(rec.age);
+        if (rec.city && !locations.some((l) => l.includes(rec.city!))) locations.push(rec.city + ' (public records)');
+        for (const a of rec.pastAddresses.slice(0, 4)) {
+          const key = a.toLowerCase();
+          if (!addresses.some((x) => x.toLowerCase().includes(key))) addresses.push(a + ' (public records)');
         }
-      }).catch((e) => {
-        identities.push({ source: 'public records', detail: 'lookup failed: ' + String(e).slice(0, 120) });
-      })
-    );
+        for (const aka of rec.akas.slice(0, 4)) {
+          identities.push({ source: 'public records AKA', detail: aka });
+        }
+      }
+      return { found: result.records.length };
+    }));
+  } else {
+    jobs.push(runModule('SCREENING', false, 'needs a full name (first + last)', async () => undefined));
+    jobs.push(runModule('PUBLIC RECORDS', false, 'needs a full name (first + last)', async () => undefined));
   }
 
   await Promise.all(jobs);
@@ -2115,53 +2147,59 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
   if (parsedInput.name) searchQueries.push({ q: `"${parsedInput.name}"`, kind: 'name' });
   if (email) searchQueries.push({ q: `"${email}"`, kind: 'email' });
   if (phone) searchQueries.push({ q: `"${phone}"`, kind: 'phone' });
-  for (const { q, kind } of searchQueries.slice(0, 3)) {
-    const extraction = await searchExtract(q).catch(() => null);
-    if (!extraction) continue;
-    dossier.searchExtraction.push({
-      query: q, via: extraction.via, found: extraction.results.length,
-      pagesFetched: extraction.mined.filter((m) => m.fetched).length,
-      emails: extraction.extracted.emails.length,
-      phones: extraction.extracted.phones.length,
-      addresses: extraction.extracted.addresses.length,
-      hits: extraction.mined
-        .filter((m) => m.fetched && (m.emails.length || m.phones.length || m.addresses.length))
-        .slice(0, 6)
-        .map((m) => ({
-          url: m.url, title: m.title.slice(0, 120),
-          emails: m.emails.slice(0, 6), phones: m.phones.slice(0, 4), addresses: m.addresses.slice(0, 4),
-        })),
-    });
-    for (const e of extraction.extracted.emails) {
-      if (!emails.includes(e)) {
-        emails.push(e);
-        identities.push({ source: `search:${kind}`, detail: `email mined from search results: ${e}` });
+  await runModule('SEARCH MINING', searchQueries.length > 0, 'no name/email/phone to search', async () => {
+    let pages = 0;
+    for (const { q, kind } of searchQueries.slice(0, 3)) {
+      const extraction = await searchExtract(q).catch(() => null);
+      if (!extraction) continue;
+      pages += extraction.mined.filter((m) => m.fetched).length;
+      dossier.searchExtraction.push({
+        query: q, via: extraction.via, found: extraction.results.length,
+        pagesFetched: extraction.mined.filter((m) => m.fetched).length,
+        emails: extraction.extracted.emails.length,
+        phones: extraction.extracted.phones.length,
+        addresses: extraction.extracted.addresses.length,
+        hits: extraction.mined
+          .filter((m) => m.fetched && (m.emails.length || m.phones.length || m.addresses.length))
+          .slice(0, 6)
+          .map((m) => ({
+            url: m.url, title: m.title.slice(0, 120),
+            emails: m.emails.slice(0, 6), phones: m.phones.slice(0, 4), addresses: m.addresses.slice(0, 4),
+          })),
+      });
+      for (const e of extraction.extracted.emails) {
+        if (!emails.includes(e)) {
+          emails.push(e);
+          identities.push({ source: `search:${kind}`, detail: `email mined from search results: ${e}` });
+        }
+      }
+      for (const p of extraction.extracted.phones) {
+        if (!phones.includes(p)) {
+          phones.push(p);
+          identities.push({ source: `search:${kind}`, detail: `phone mined from search results: ${p}` });
+        }
+      }
+      for (const a of extraction.extracted.addresses) {
+        if (!addresses.some((x) => x.toLowerCase() === a.toLowerCase())) {
+          addresses.push(a);
+          identities.push({ source: `search:${kind}`, detail: `address mined from search result pages: ${a}` });
+        }
+      }
+      for (const sUrl of extraction.extracted.socialUrls) {
+        const handleMatch = sUrl.match(/(?:github\.com|t\.me)\/([A-Za-z0-9_-]+)/);
+        const u = handleMatch ? validateUsername(handleMatch[1]) : null;
+        if (u && !derivedHandles.some((c) => c.handle === u)) derivedHandles.push({ handle: u, source: `search (${kind})` });
       }
     }
-    for (const p of extraction.extracted.phones) {
-      if (!phones.includes(p)) {
-        phones.push(p);
-        identities.push({ source: `search:${kind}`, detail: `phone mined from search results: ${p}` });
-      }
-    }
-    for (const a of extraction.extracted.addresses) {
-      if (!addresses.some((x) => x.toLowerCase() === a.toLowerCase())) {
-        addresses.push(a);
-        identities.push({ source: `search:${kind}`, detail: `address mined from search result pages: ${a}` });
-      }
-    }
-    for (const sUrl of extraction.extracted.socialUrls) {
-      const handleMatch = sUrl.match(/(?:github\.com|t\.me)\/([A-Za-z0-9_-]+)/);
-      const u = handleMatch ? validateUsername(handleMatch[1]) : null;
-      if (u && !derivedHandles.some((c) => c.handle === u)) derivedHandles.push({ handle: u, source: `search (${kind})` });
-    }
-  }
+    return { found: pages, note: `${searchQueries.slice(0, 3).length} query(ies), ${pages} page(s) fetched+parsed` };
+  });
 
   // ─────────────────────────────────────────────────────────────────
   // WAVE 2 — SOCIAL FOOTPRINT, derived from the identity core. Handle
   // priority: explicit subject handle → email local-part → dump-record
   // usernames → Gravatar linked usernames → name permutations (last).
   // ─────────────────────────────────────────────────────────────────
+  const sweepT0 = Date.now();
   const candidates: { handle: string; source: string; primary: boolean }[] = [];
   if (username) candidates.push({ handle: username, source: 'subject handle', primary: true });
   if (email && email.split('@')[0] !== username) {
@@ -2273,12 +2311,20 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
   }
 
   dossier.socialAccounts = kept.sort((a, b) => weight(b) - weight(a));
+  moduleLog.push({
+    name: 'SOCIAL SWEEP', status: 'ok',
+    ms: Date.now() - (sweepT0 || started),
+    found: dossier.socialAccounts.length,
+    note: dossier.socialAccounts.length
+      ? `${kept.filter((h) => h.identity === 'name-match').length} corroborated · ${kept.filter((h) => h.identity === 'name-mismatch').length} mismatch (excluded)`
+      : 'no accounts found',
+  });
 
   // ── ShadowDragon Step 3 — cross-platform correlation on the FOUND accounts ──
   // Two signals beyond name-match: the same profile image reused across
   // platforms, and shared bio wording (city/employer/school). Fingerprints are
   // computed for a bounded set of accounts that expose a public avatar.
-  if (dossier.socialAccounts.length >= 2) {
+  await runModule('CORRELATION', dossier.socialAccounts.length >= 2, 'needs 2+ found accounts', async () => {
     const withImages = dossier.socialAccounts
       .filter((a) => a.profile?.imageUrl)
       .slice(0, 10);
@@ -2298,38 +2344,68 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
           : `shared bio term "${sig.value}" across ${sig.accounts.map((a) => a.site).join(', ')}`,
       });
     }
-  }
+    return { found: dossier.socialSignals.length };
+  });
 
   // ── ShadowDragon Step 5 — historical recovery on corroborated profiles ──
   // Deleted bios/pages are archived; the Wayback snapshot body is mined for
   // contact data. Bounded to the top corroborated accounts (skip handle-only).
   const recoveryTargets = dossier.socialAccounts.filter((a) => a.identity !== 'handle-only').slice(0, 3);
-  for (const acct of recoveryTargets) {
-    const rec = await historicalProfileRecovery(acct.url).catch(() => null);
-    if (!rec || rec.snapshots.length === 0) continue;
-    dossier.historicalRecovery.push({
-      url: rec.url, snapshotCount: rec.snapshots.length,
-      recoveredAt: rec.recoveredAt, recoveredUrl: rec.recoveredUrl,
-      emails: rec.mined.emails.slice(0, 8), phones: rec.mined.phones.slice(0, 5), addresses: rec.mined.addresses.slice(0, 5),
-    });
-    for (const e of rec.mined.emails) {
-      if (!emails.includes(e)) { emails.push(e); identities.push({ source: `wayback:${acct.site}`, detail: `email in archived snapshot ${rec.recoveredAt}: ${e}` }); }
+  await runModule('HISTORICAL RECOVERY', recoveryTargets.length > 0, 'no corroborated profile to recover', async () => {
+    let snapshots = 0;
+    for (const acct of recoveryTargets) {
+      const rec = await historicalProfileRecovery(acct.url).catch(() => null);
+      if (!rec || rec.snapshots.length === 0) continue;
+      snapshots += rec.snapshots.length;
+      dossier.historicalRecovery.push({
+        url: rec.url, snapshotCount: rec.snapshots.length,
+        recoveredAt: rec.recoveredAt, recoveredUrl: rec.recoveredUrl,
+        emails: rec.mined.emails.slice(0, 8), phones: rec.mined.phones.slice(0, 5), addresses: rec.mined.addresses.slice(0, 5),
+      });
+      for (const e of rec.mined.emails) {
+        if (!emails.includes(e)) { emails.push(e); identities.push({ source: `wayback:${acct.site}`, detail: `email in archived snapshot ${rec.recoveredAt}: ${e}` }); }
+      }
+      for (const p of rec.mined.phones) {
+        if (!phones.includes(p)) { phones.push(p); identities.push({ source: `wayback:${acct.site}`, detail: `phone in archived snapshot ${rec.recoveredAt}: ${p}` }); }
+      }
+      for (const a of rec.mined.addresses) {
+        if (!addresses.some((x) => x.toLowerCase() === a.toLowerCase())) { addresses.push(a); identities.push({ source: `wayback:${acct.site}`, detail: `address in archived snapshot ${rec.recoveredAt}: ${a}` }); }
+      }
     }
-    for (const p of rec.mined.phones) {
-      if (!phones.includes(p)) { phones.push(p); identities.push({ source: `wayback:${acct.site}`, detail: `phone in archived snapshot ${rec.recoveredAt}: ${p}` }); }
-    }
-    for (const a of rec.mined.addresses) {
-      if (!addresses.some((x) => x.toLowerCase() === a.toLowerCase())) { addresses.push(a); identities.push({ source: `wayback:${acct.site}`, detail: `address in archived snapshot ${rec.recoveredAt}: ${a}` }); }
-    }
-  }
-
-  dossier.dorks = personDorks({
-    name: dossier.name,
-    email,
-    username: username || undefined,
-    phone,
-    domain,
+    return { found: dossier.historicalRecovery.length, note: `${snapshots} snapshot(s) across ${dossier.historicalRecovery.length} profile(s)` };
   });
+
+  await runModule('OPERATOR DORKS', true, '', async () => {
+    const base = personDorks({
+      name: dossier.name,
+      email,
+      username: username || undefined,
+      phone,
+      domain,
+    });
+    // Google-Dork technique layer (Recorded Future top-20 operators + GHDB categories).
+    // Every dork is a *search-engine query* the operator fires in THEIR browser —
+    // no automated scraping, no Google bot. The dossier carries the ready-to-click URLs.
+    const gDorks = buildGoogleDorks({
+      name: dossier.name,
+      email: email || undefined,
+      username: username || undefined,
+      phone: phone || undefined,
+      domain: domain || undefined,
+      keyword: dossier.name || domain || username || undefined,
+      limit: 80,
+    }).map((d) => ({
+      label: `DORK [${d.category}] ${d.label} (${d.operators.join(' ')})`,
+      url: d.engines[0]?.url || `https://www.google.com/search?q=${encodeURIComponent(d.query)}`,
+    }));
+    // Deduplicate against the base links, then merge (new operator technique last so
+    // the original deep-links stay first and stable for existing harness asserts).
+    const seen = new Set(base.map((b) => b.url));
+    dossier.dorks = [...base, ...gDorks.filter((d) => !seen.has(d.url))];
+    return { found: dossier.dorks.length };
+  });
+
+  dossier.modules = moduleLog;
   dossier.parsed.url = parsedInput.url;
   dossier.durationMs = Date.now() - started;
   dossier.report = buildDossierReport(dossier);
