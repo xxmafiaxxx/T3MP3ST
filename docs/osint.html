@@ -521,6 +521,7 @@
                     <button class="tool-tab" data-pane="paneEmail" onclick="switchTool('paneEmail')">✉️ EMAIL INTEL</button>
                     <button class="tool-tab" data-pane="panePhone" onclick="switchTool('panePhone')">📞 PHONE LOOKUP</button>
                     <button class="tool-tab" data-pane="paneGeo" onclick="switchTool('paneGeo')">🗺️ GEO INTEL</button>
+                    <button class="tool-tab" data-pane="paneAndroid" onclick="switchTool('paneAndroid')">📱 ANDROID</button>
                     <button class="tool-tab" data-pane="panePerms" onclick="switchTool('panePerms')">🔤 PERMUTATIONS</button>
                     <button class="tool-tab" data-pane="paneSites" onclick="switchTool('paneSites')">🗂️ SITE CATALOG</button>
                 </div>
@@ -701,6 +702,121 @@
                                 <div class="search-box" style="min-width:110px;"><span>YYYY</span><input type="text" id="permYear" placeholder="Birth year (opt)"></div>
                             </div>
                             <div id="permOut" style="margin-top:14px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-pane" id="paneAndroid">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">📱</span> ANDROID FORENSICS — ADB DEVICE TRIAGE</div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <span id="androidStatusChip" class="src-chip">checking adb…</span>
+                                <button class="btn" onclick="refreshAndroidStatus()">↻ REFRESH</button>
+                            </div>
+                        </div>
+                        <div class="panel-body">
+                            <div style="background:rgba(255,177,66,0.08);border:1px solid rgba(255,177,66,0.35);border-radius:6px;padding:10px 14px;margin-bottom:16px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--warning);">
+                                ⚖️ <b>Authorized devices only.</b> All actions target a <b>physically connected</b> Android with USB debugging + host authorization. Requires explicit owner/operator consent. No remote exploitation, no lock-screen bypass. Keep the handset on the authorization prompt until “device” appears.
+                                &nbsp;·&nbsp; <a href="https://github.com/DouglasFreshHabian/AndroidForensics" target="_blank" rel="noopener" style="color:var(--info);">Upstream: DouglasFreshHabian/AndroidForensics (MIT)</a>
+                            </div>
+
+                            <!-- ADB console -->
+                            <div class="dossier-section-title">⌨️ ADB CONSOLE <span class="count">allowlisted shell verbs only</span></div>
+                            <div class="hint-line" style="margin:0 0 8px;">Shell verbs: <code style="color:var(--text-secondary);">getprop · pm · dumpsys · settings · content · svc · logcat · bugreport · uptime · ifconfig · ip · netstat</code> — everything else is rejected server-side (execFile, no shell).</div>
+                            <div class="locator-form">
+                                <div class="search-box" style="min-width:320px;"><span>adb</span><input type="text" id="androidCmd" placeholder='shell getprop ro.product.model  — or "devices" / "shell dumpsys wifi"' onkeydown="if(event.key==='Enter')runAndroidExec()"></div>
+                                <div class="search-box" style="max-width:190px;min-width:150px;"><span>#</span><input type="text" id="androidSerial" placeholder="serial (optional)"></div>
+                                <button class="btn primary" onclick="runAndroidExec()">▶ RUN</button>
+                            </div>
+                            <div class="hint-line">Examples (copy-paste): <code style="color:var(--accent);cursor:pointer;" onclick="fillAndroidCmd('adb devices')">adb devices</code> · <code style="color:var(--accent);cursor:pointer;" onclick="fillAndroidCmd('adb shell getprop')">adb shell getprop</code> · <code style="color:var(--accent);cursor:pointer;" onclick="fillAndroidCmd('adb shell dumpsys battery')">adb shell dumpsys battery</code></div>
+                            <pre class="raw-output" id="androidExecOut" style="display:none;margin-top:10px;"></pre>
+
+                            <!-- Triage grid -->
+                            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-top:18px;">
+
+                                <!-- TRIAGE -->
+                                <div class="panel" style="margin:0;">
+                                    <div class="panel-header"><div class="panel-title"><span class="accent">🔍</span> TRIAGE</div><button class="btn" onclick="runAndroidTriage('info')">▶ DEVICE INFO</button></div>
+                                    <div class="panel-body">
+                                        <div class="hint-line" style="margin:0 0 10px;">From <code>extract.sh</code>: model/manufacturer/Android release/serial + battery &amp; network snapshot.</div>
+                                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                            <button class="btn" onclick="runAndroidTriage('info')">📱 Device</button>
+                                            <button class="btn" onclick="runAndroidTriage('packages')">📦 Packages</button>
+                                            <button class="btn" onclick="runAndroidTriage('packages3')">📦 3rd-party</button>
+                                            <button class="btn" onclick="runAndroidTriage('contacts')">👥 Contacts</button>
+                                            <button class="btn" onclick="runAndroidTriage('calls')">📞 Call log</button>
+                                            <button class="btn" onclick="runAndroidTriage('sms')">💬 SMS</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- DUMPSYS -->
+                                <div class="panel" style="margin:0;">
+                                    <div class="panel-header"><div class="panel-title"><span class="accent">🧠</span> DUMPSYS</div><button class="btn" onclick="runAndroidDumpsys()">▶ RUN</button></div>
+                                    <div class="panel-body">
+                                        <div class="hint-line" style="margin:0 0 10px;">From <code>dumpsys.sh</code> — 22 services. Pick one and dump.</div>
+                                        <div class="locator-form">
+                                            <div class="search-box"><span>svc</span>
+                                                <select id="androidDumpsysSel" style="color:var(--text-primary);font-family:'JetBrains Mono',monospace;">
+                                                    <option value="meminfo">meminfo — memory</option>
+                                                    <option value="wifi">wifi — Wi-Fi state</option>
+                                                    <option value="batterystats">batterystats — battery history</option>
+                                                    <option value="location">location — GPS services</option>
+                                                    <option value="power">power — wakelocks</option>
+                                                    <option value="package">package — installed pkgs</option>
+                                                    <option value="account">account — accounts/sync</option>
+                                                    <option value="telecom">telecom — call state</option>
+                                                    <option value="notification">notification — notif history</option>
+                                                    <option value="netstats">netstats — network stats</option>
+                                                    <option value="sensorservice">sensorservice — sensors</option>
+                                                    <option value="dropbox">dropbox — crashes</option>
+                                                    <option value="clipboard">clipboard — clipboard</option>
+                                                    <option value="usb">usb — USB history</option>
+                                                    <option value="window">window — screen state</option>
+                                                    <option value="mount">mount — volumes</option>
+                                                    <option value="adb">adb — ADB subsystem</option>
+                                                    <option value="fingerprint">fingerprint — auth</option>
+                                                    <option value="lock_settings">lock_settings — lock screen</option>
+                                                    <option value="stats">stats — perf metrics</option>
+                                                    <option value="media.audio_flinger">media.audio_flinger — audio</option>
+                                                    <option value="persona">persona — multi-user</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- AIRSCOPE -->
+                                <div class="panel" style="margin:0;">
+                                    <div class="panel-header"><div class="panel-title"><span class="accent">📡</span> AIRSCOPE — WI-FI RADAR</div><button class="btn" onclick="runAndroidWifiScan()">▶ SCAN</button></div>
+                                    <div class="panel-body">
+                                        <div class="hint-line" style="margin:0 0 10px;">From <code>AirScope.sh</code>: parses <code>dumpsys wifi</code> “Networks filtered out due” for nearby BSSIDs (SSID/BSSID/band/RSSI).</div>
+                                        <div id="androidWifiOut"><div class="dossier-empty" style="padding:12px;">No scan yet — press SCAN with a device connected.</div></div>
+                                    </div>
+                                </div>
+
+                                <!-- SECRET CODES -->
+                                <div class="panel" style="margin:0;">
+                                    <div class="panel-header"><div class="panel-title"><span class="accent">🔑</span> SECRET CODES</div><button class="btn" onclick="runAndroidSecretCodes()">▶ ENUMERATE</button></div>
+                                    <div class="panel-body">
+                                        <div class="hint-line" style="margin:0 0 10px;">From <code>secretCodes.sh</code>: scans system packages for <code>android_secret_code</code> dialer entries.</div>
+                                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                                            <div class="search-box" style="max-width:150px;min-width:120px;"><span>limit</span><input type="text" id="androidSecretLimit" value="30" style="max-width:60px;"></div>
+                                            <span class="hint-line" style="margin:0;">packages to scan (5–100)</span>
+                                        </div>
+                                        <div id="androidSecretOut" style="margin-top:10px;"><div class="dossier-empty" style="padding:12px;">No enumeration yet.</div></div>
+                                    </div>
+                                </div>
+
+                            </div>
+
+                            <pre class="raw-output" id="androidTriageOut" style="display:none;margin-top:14px;max-height:520px;"></pre>
+
+                            <!-- Bundled scripts -->
+                            <div class="dossier-section-title" style="margin-top:18px;">📦 BUNDLED SCRIPTS <span class="count">vendored MIT — run on your analyst box</span></div>
+                            <div id="androidScriptsOut"><div class="dossier-empty" style="padding:12px;">Loading script catalog…</div></div>
+                            <div class="hint-line">Scripts live at <code style="color:var(--text-secondary);">tools/android-forensics/</code> in the repo. Run locally: <code style="color:var(--accent);">chmod +x extract.sh dumpsys.sh AirScope.sh secretCodes.sh &amp;&amp; ./extract.sh</code> — or drive them from this panel via the ADB console above.</div>
                         </div>
                     </div>
                 </div>
@@ -1566,6 +1682,218 @@
         }
 
         // ═══════════════════════════════════════════════════════════════
+        // ANDROID FORENSICS — ADB device triage (DouglasFreshHabian/AndroidForensics)
+        // ═══════════════════════════════════════════════════════════════
+        function androidChip(ok, label) {
+            var chip = document.getElementById('androidStatusChip');
+            if (!chip) return;
+            chip.textContent = (ok ? '🟢 ' : '🔴 ') + label;
+            chip.style.color = ok ? 'var(--success)' : 'var(--danger)';
+            chip.style.borderColor = ok ? 'rgba(46,213,115,0.35)' : 'rgba(255,71,87,0.35)';
+        }
+
+        function fillAndroidCmd(cmd) {
+            var el = document.getElementById('androidCmd');
+            if (el) { el.value = cmd; el.focus(); }
+        }
+
+        function androidSerialVal() {
+            var el = document.getElementById('androidSerial');
+            var s = el ? el.value.trim() : '';
+            return s || undefined;
+        }
+
+        function showAndroidExec(res, commandLabel) {
+            var out = document.getElementById('androidExecOut');
+            out.style.display = 'block';
+            var body = res.stdout || '';
+            var err = res.stderr ? '\n--- stderr ---\n' + res.stderr : '';
+            var tr = res.truncated ? '\n…[truncated server-side]' : '';
+            out.textContent = '[' + res.exitCode + '] ' + (commandLabel || res.command) + '  (' + (res.durationMs || 0) + 'ms)\n' + body + err + tr;
+            out.scrollTop = 0;
+        }
+
+        function showAndroidOut(text, title) {
+            var out = document.getElementById('androidTriageOut');
+            out.style.display = 'block';
+            out.textContent = (title ? title + '\n' + '─'.repeat(title.length) + '\n' : '') + text;
+            out.scrollTop = 0;
+        }
+
+        async function refreshAndroidStatus() {
+            var chip = document.getElementById('androidStatusChip');
+            if (chip) { chip.textContent = '… checking adb'; chip.style.color = 'var(--text-muted)'; }
+            try {
+                var d = await api('/api/android/status');
+                var s = d.status;
+                if (!s.installed) { androidChip(false, 'adb not installed — ' + s.hint); }
+                else if (!s.primaryDevice) { androidChip(false, s.devices.length ? 'no authorized device — ' + s.hint : 'no device — ' + s.hint); }
+                else { androidChip(true, 'adb ' + (s.version ? s.version.split(' ')[0] + ' · ' : '') + s.primaryDevice + (s.devices.length > 1 ? ' (+' + (s.devices.length - 1) + ')' : '')); }
+            } catch (e) {
+                androidChip(false, 'status unavailable: ' + e.message);
+            }
+            loadAndroidScripts();
+        }
+
+        async function loadAndroidScripts() {
+            var host = document.getElementById('androidScriptsOut');
+            if (!host) return;
+            try {
+                var d = await api('/api/android/scripts');
+                var html = '<table class="ident-table" style="font-size:11.5px;"><thead><tr><th style="color:var(--accent);text-align:left;padding:6px 10px;">Script</th><th style="color:var(--accent);text-align:left;padding:6px 10px;">Upstream</th><th style="color:var(--accent);text-align:left;padding:6px 10px;">What it does</th></tr></thead><tbody>';
+                d.scripts.forEach(function (s) {
+                    html += '<tr><td style="color:var(--text-primary);white-space:nowrap;"><code>' + escapeHtml(s.file) + '</code></td>' +
+                        '<td><a href="' + escapeHtml(s.upstream) + '" target="_blank" rel="noopener" style="color:var(--info);text-decoration:none;">upstream ↗</a></td>' +
+                        '<td style="color:var(--text-secondary);">' + escapeHtml(s.summary) + '</td></tr>';
+                });
+                html += '</tbody></table>';
+                html += '<div class="hint-line" style="margin-top:8px;">Source: <a href="' + escapeHtml(d.source) + '" target="_blank" rel="noopener" style="color:var(--info);">' + escapeHtml(d.source) + '</a> — ' + escapeHtml(d.version) + ' · vendored at <code>' + escapeHtml('tools/android-forensics/') + '</code></div>';
+                host.innerHTML = html;
+            } catch (e) {
+                host.innerHTML = '<div class="hint-line" style="color:var(--danger);">script catalog unavailable: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function runAndroidExec() {
+            var raw = document.getElementById('androidCmd').value.trim();
+            if (!raw) { toast('Enter an adb command (must start with "adb ")', 'error'); return; }
+            var full = raw.startsWith('adb ') ? raw : 'adb ' + raw;
+            var serial = androidSerialVal();
+            var out = document.getElementById('androidExecOut');
+            out.style.display = 'block';
+            out.textContent = '◈ running: ' + full + (serial ? '  [serial ' + serial + ']' : '') + ' …';
+            try {
+                var d = await api('/api/android/adb', { command: full, serial: serial || undefined });
+                showAndroidExec(d.result, full);
+                toast(d.success ? 'adb finished (exit ' + d.result.exitCode + ')' : 'adb exit ' + d.result.exitCode + ' — see output', d.success ? 'success' : 'error');
+            } catch (e) {
+                out.textContent = '✗ ' + e.message;
+                toast(e.message, 'error');
+            }
+        }
+
+        async function runAndroidTriage(kind) {
+            var serial = androidSerialVal();
+            var map = {
+                info: { cmd: 'adb shell getprop | grep -E \'ro.product.model|ro.product.manufacturer|ro.build.version.release|ro.serialno\'', title: 'DEVICE INFO (getprop)', endpoint: '/api/android/device-info' },
+                packages: { cmd: 'adb shell pm list packages', title: 'PACKAGES (all)', endpoint: '/api/android/packages', body: { thirdPartyOnly: false } },
+                packages3: { cmd: 'adb shell pm list packages -3', title: 'PACKAGES (third-party)', endpoint: '/api/android/packages', body: { thirdPartyOnly: true } },
+                contacts: { cmd: 'adb shell content query --uri content://contacts/phones/', title: 'CONTACTS' },
+                calls: { cmd: 'adb shell content query --uri content://call_log/calls', title: 'CALL LOG' },
+                sms: { cmd: 'adb shell content query --uri content://sms/', title: 'SMS' }
+            };
+            var spec = map[kind];
+            if (!spec) return;
+            var out = document.getElementById('androidTriageOut');
+            out.style.display = 'block';
+            out.textContent = '◈ ' + spec.title + ' …  ' + spec.cmd + (serial ? '  [serial ' + serial + ']' : '');
+            try {
+                if (spec.endpoint) {
+                    var body = { serial: serial || undefined, ...(spec.body || {}) };
+                    var d = await api(spec.endpoint, body);
+                    var text = '';
+                    if (d.packages) {
+                        text = 'Packages: ' + d.count + '\n' + d.packages.slice(0, 400).join('\n') + (d.count > 400 ? '\n… and ' + (d.count - 400) + ' more' : '');
+                        if (d.result && d.result.stderr) text += '\n--- stderr ---\n' + d.result.stderr.slice(0, 800);
+                    } else if (d.result) {
+                        text = d.result.stdout || '(no output)';
+                        if (d.result.stderr) text += '\n--- stderr ---\n' + d.result.stderr.slice(0, 800);
+                        if (d.result.truncated) text += '\n…[truncated]';
+                    }
+                    out.textContent = spec.title + '  [' + (d.success ? 'exit 0' : 'exit ' + (d.result ? d.result.exitCode : '?')) + ']\n' + '─'.repeat(spec.title.length) + '\n' + text;
+                    toast(d.success ? spec.title + ' — ' + (d.count != null ? d.count + ' items' : 'done') : spec.title + ' — no device?', d.success ? 'success' : 'error');
+                    if (d.result && d.result.command) showAndroidExec(d.result, spec.cmd);
+                } else {
+                    var r = await api('/api/android/adb', { command: spec.cmd, serial: serial || undefined });
+                    showAndroidExec(r.result, spec.cmd);
+                    out.textContent = spec.title + '  [' + r.result.exitCode + '] ' + spec.cmd + '\n' + '─'.repeat(spec.title.length + 10) + '\n' + (r.result.stdout || '(no output)') + (r.result.stderr ? '\n--- stderr ---\n' + r.result.stderr.slice(0, 800) : '') + (r.result.truncated ? '\n…[truncated]' : '');
+                    toast(r.success ? spec.title + ' — done' : spec.title + ' — check output', r.success ? 'success' : 'error');
+                }
+            } catch (e) {
+                out.textContent = '✗ ' + e.message + '\nHint: connect a device, accept the USB-debugging prompt, and verify with "adb devices".';
+                toast(e.message, 'error');
+            }
+        }
+
+        async function runAndroidDumpsys() {
+            var sel = document.getElementById('androidDumpsysSel');
+            var service = sel ? sel.value : 'meminfo';
+            var serial = androidSerialVal();
+            var out = document.getElementById('androidTriageOut');
+            out.style.display = 'block';
+            out.textContent = '◈ dumpsys ' + service + ' …';
+            try {
+                var d = await api('/api/android/dumpsys', { service: service, serial: serial || undefined });
+                var body = d.result.stdout || '(no output)';
+                if (d.result.truncated) body += '\n…[truncated at 200KB — narrow via the console]';
+                if (d.result.stderr) body += '\n--- stderr ---\n' + d.result.stderr.slice(0, 800);
+                out.textContent = 'dumpsys ' + service + '  [exit ' + d.result.exitCode + ']  (' + d.result.durationMs + 'ms)\n' + '─'.repeat(20 + service.length) + '\n' + body;
+                showAndroidExec(d.result, 'adb shell dumpsys ' + service);
+                toast(d.success ? 'dumpsys ' + service + ' — done' : 'dumpsys ' + service + ' — exit ' + d.result.exitCode, d.success ? 'success' : 'error');
+            } catch (e) {
+                out.textContent = '✗ ' + e.message;
+                toast(e.message, 'error');
+            }
+        }
+
+        async function runAndroidWifiScan() {
+            var serial = androidSerialVal();
+            var host = document.getElementById('androidWifiOut');
+            host.innerHTML = '<div class="dossier-empty" style="padding:12px;">◈ Scanning — reading dumpsys wifi…</div>';
+            try {
+                var d = await api('/api/android/wifi-scan', { serial: serial || undefined });
+                if (!d.success) {
+                    host.innerHTML = '<div class="dossier-empty" style="color:var(--danger);padding:12px;">✗ ' + escapeHtml(d.error || 'scan failed') + '</div>';
+                    return;
+                }
+                if (!d.networks || !d.networks.length) {
+                    host.innerHTML = '<div class="dossier-empty" style="padding:12px;">No BSSID entries in dumpsys wifi — device may not have recent scan results. Try cycling Wi-Fi:<br><code>adb shell svc wifi disable</code> → wait 2s → <code>adb shell svc wifi enable</code> → wait 5s → SCAN again.</div>';
+                    return;
+                }
+                var html = '<table class="found-table"><thead><tr><th>SSID</th><th>BSSID</th><th>BAND</th><th>RSSI</th></tr></thead><tbody>';
+                d.networks.forEach(function (n) {
+                    var color = n.rssi >= -70 ? 'var(--success)' : n.rssi >= -85 ? 'var(--warning)' : 'var(--danger)';
+                    html += '<tr><td><b>' + escapeHtml(n.ssid || '(hidden)') + '</b></td><td style="font-family:monospace;">' + escapeHtml(n.bssid) + '</td><td>' + escapeHtml(n.band) + '</td><td style="color:' + color + ';font-weight:700;">' + n.rssi + ' dBm</td></tr>';
+                });
+                html += '</tbody></table><div class="hint-line">' + d.count + ' network(s), strongest first. Parsed from “Networks filtered out due” in dumpsys wifi (AirScope.sh logic).</div>';
+                host.innerHTML = html;
+                toast('Wi-Fi scan: ' + d.count + ' network(s)', 'success');
+            } catch (e) {
+                host.innerHTML = '<div class="dossier-empty" style="color:var(--danger);padding:12px;">✗ ' + escapeHtml(e.message) + '</div>';
+                toast(e.message, 'error');
+            }
+        }
+
+        async function runAndroidSecretCodes() {
+            var serial = androidSerialVal();
+            var limEl = document.getElementById('androidSecretLimit');
+            var limit = parseInt((limEl ? limEl.value : '30'), 10);
+            if (!Number.isFinite(limit)) limit = 30;
+            limit = Math.max(5, Math.min(100, limit));
+            var host = document.getElementById('androidSecretOut');
+            host.innerHTML = '<div class="dossier-empty" style="padding:12px;">◈ Enumerating system packages (up to ' + limit + ')…</div>';
+            try {
+                var d = await api('/api/android/secret-codes', { serial: serial || undefined, limit: limit });
+                if (!d.hits || !d.hits.length) {
+                    host.innerHTML = '<div class="dossier-empty" style="padding:12px;">No android_secret_code entries in the first ' + d.scanned + '/' + d.totalSystemPackages + ' system packages.</div>';
+                    toast('No secret codes found in ' + d.scanned + ' packages', 'success');
+                    return;
+                }
+                var html = '<div class="dossier-section-title">🔑 ' + d.hits.length + ' hit(s) in ' + d.scanned + '/' + d.totalSystemPackages + ' packages' + (d.truncated ? ' <span class="count">truncated at ' + limit + '</span>' : '') + '</div>';
+                html += '<table class="found-table"><thead><tr><th>Package</th><th>Code</th></tr></thead><tbody>';
+                d.hits.forEach(function (h) {
+                    html += '<tr><td style="color:var(--text-primary);font-family:monospace;white-space:nowrap;">' + escapeHtml(h.pkg) + '</td><td style="font-family:monospace;color:var(--warning);">' + escapeHtml(h.line) + '</td></tr>';
+                });
+                html += '</tbody></table>';
+                host.innerHTML = html;
+                toast(d.hits.length + ' secret code(s) found', 'success');
+            } catch (e) {
+                host.innerHTML = '<div class="dossier-empty" style="color:var(--danger);padding:12px;">✗ ' + escapeHtml(e.message) + '</div>';
+                toast(e.message, 'error');
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
         // BOOT
         // ═══════════════════════════════════════════════════════════════
         document.addEventListener('DOMContentLoaded', function () {
@@ -1576,6 +1904,7 @@
             loadSites();
             loadDumpStatus();
             loadTorStatus();
+            refreshAndroidStatus();
         });
     </script>
     <script src="embed.js"></script>

@@ -67,6 +67,22 @@ import {
   type GeoPoint,
 } from './tools/osint.js';
 import {
+  ANDROID_SCRIPTS,
+  ANDROID_FORENSICS_SOURCE,
+  ANDROID_FORENSICS_VENDOR_DIR,
+  ANDROID_FORENSICS_VERSION,
+  DUMPSYS_SERVICES,
+  getAdbStatus,
+  execAdbCommand,
+  getDeviceInfo,
+  getPackages,
+  parsePackageList,
+  parseWifiScan,
+  parseSecretCodes,
+  dumpsysService,
+  wifiScan,
+} from './tools/android-forensics.js';
+import {
   buildBbox,
   bboxOverlaps,
   fetchAircraft,
@@ -8181,6 +8197,125 @@ app.post('/api/osint/onion/fetch', async (req: Request, res: Response): Promise<
     console.log(`[T3MP3ST][OSINT] onion fetch: ${url.slice(0, 60)}`);
     const page = await onionFetch(url);
     res.json({ success: true, page: { ...page, body: page.body.slice(0, 20_000) } });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// =============================================================================
+// ANDROID FORENSICS — ADB workflows vendored from DouglasFreshHabian/AndroidForensics
+// Physical device + USB debugging + owner/operator authorization only. All
+// adb shell calls are allowlisted (getprop/pm/dumpsys/settings/content/svc/
+// logcat/bugreport/uptime/ifconfig/ip/netstat) and executed via execFile —
+// no shell injection surface. Every result is audit-logged.
+// =============================================================================
+
+app.get('/api/android/status', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const status = await getAdbStatus();
+    res.json({ success: true, status, source: ANDROID_FORENSICS_SOURCE, version: ANDROID_FORENSICS_VERSION });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.get('/api/android/scripts', (_req: Request, res: Response): void => {
+  res.json({
+    success: true,
+    source: ANDROID_FORENSICS_SOURCE,
+    version: ANDROID_FORENSICS_VERSION,
+    vendorDir: ANDROID_FORENSICS_VENDOR_DIR,
+    scripts: ANDROID_SCRIPTS,
+    dumpsysServices: DUMPSYS_SERVICES,
+  });
+});
+
+app.get('/api/osint/android/status', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const status = await getAdbStatus();
+    res.json({ success: true, status, source: ANDROID_FORENSICS_SOURCE, version: ANDROID_FORENSICS_VERSION });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/android/adb', async (req: Request, res: Response): Promise<void> => {
+  const command = typeof req.body?.command === 'string' ? req.body.command : '';
+  const serial = typeof req.body?.serial === 'string' ? req.body.serial : undefined;
+  const timeoutMs = Number.isFinite(req.body?.timeoutMs) ? Math.max(2000, Math.min(120_000, Number(req.body.timeoutMs))) : undefined;
+  if (!command) { res.status(400).json({ error: 'command required (must start with "adb ")', example: 'adb devices' }); return; }
+  try {
+    console.log(`[T3MP3ST][ANDROID] adb exec: ${command.slice(0, 120)}`);
+    const result = await execAdbCommand(command, { serial, timeoutMs });
+    res.json({ success: result.exitCode === 0, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/android/device-info', async (req: Request, res: Response): Promise<void> => {
+  const serial = typeof req.body?.serial === 'string' ? req.body.serial : undefined;
+  try {
+    const result = await getDeviceInfo(serial);
+    res.json({ success: result.exitCode === 0, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/android/packages', async (req: Request, res: Response): Promise<void> => {
+  const serial = typeof req.body?.serial === 'string' ? req.body.serial : undefined;
+  const thirdPartyOnly = req.body?.thirdPartyOnly === true;
+  try {
+    const result = await getPackages(serial, thirdPartyOnly);
+    const packages = parsePackageList(result.stdout);
+    res.json({ success: result.exitCode === 0, result, packages, count: packages.length });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/android/dumpsys', async (req: Request, res: Response): Promise<void> => {
+  const service = typeof req.body?.service === 'string' ? req.body.service : '';
+  const serial = typeof req.body?.serial === 'string' ? req.body.serial : undefined;
+  if (!service) { res.status(400).json({ error: 'service required', available: DUMPSYS_SERVICES.map((s) => s.service) }); return; }
+  try {
+    const result = await dumpsysService(service, serial);
+    res.json({ success: result.exitCode === 0, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err), available: DUMPSYS_SERVICES.map((s) => s.service) });
+  }
+});
+
+app.post('/api/android/wifi-scan', async (req: Request, res: Response): Promise<void> => {
+  const serial = typeof req.body?.serial === 'string' ? req.body.serial : undefined;
+  try {
+    const result = await wifiScan(serial);
+    if (result.exitCode !== 0) { res.json({ success: false, result, error: result.stderr.slice(0, 800) }); return; }
+    const networks = parseWifiScan(result.stdout);
+    res.json({ success: true, result, networks, count: networks.length });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/android/secret-codes', async (req: Request, res: Response): Promise<void> => {
+  const serial = typeof req.body?.serial === 'string' ? req.body.serial : undefined;
+  const limit = Number.isFinite(req.body?.limit) ? Math.max(5, Math.min(100, Number(req.body.limit))) : 30;
+  try {
+    const list = await execAdbCommand('adb shell pm list packages -s -f', { serial });
+    if (list.exitCode !== 0) { res.json({ success: false, error: list.stderr.slice(0, 800), result: list }); return; }
+    const pkgs = list.stdout.split('\n').map((l) => l.trim()).filter((l) => l.includes('package:'))
+      .map((l) => l.split('package:')[1]?.split('=')[1]?.trim()).filter(Boolean) as string[];
+    const batch = pkgs.slice(0, limit);
+    const hits: Array<{ pkg: string; line: string }> = [];
+    for (const pkg of batch) {
+      try {
+        const dump = await execAdbCommand(`adb shell pm dump ${pkg}`, { serial });
+        for (const line of parseSecretCodes(dump.stdout)) hits.push({ pkg, line });
+      } catch { /* per-package best-effort */ }
+    }
+    res.json({ success: true, scanned: batch.length, totalSystemPackages: pkgs.length, hits, truncated: pkgs.length > limit });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || String(err) });
   }
