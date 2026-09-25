@@ -1,5 +1,17 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — LLM SEARCH DIRECTOR: the model plans, directs and ranks the searches
+
+**Request:** "evereythng you ficking said i want the fucking llm to do. fucking do it!!" (after "so now the llm should be directing and sorting the searches correct?")
+
+### What changed
+- `llmDirectSearch()` (osint.ts): after the deterministic passes, the LLM receives the subject facts + everything already found and returns a bounded PLAN — up to 6 prioritized queries with intents (site:/quotes/operators fine) + up to 6 public page URLs. The platform executes them in priority order, re-validates every contact through the same format extractors, merges the finds, then the model RANKs the pages actually fetched (verdicts may only cite real fetched URLs — no hallucinated ranking targets).
+- **Guards**: `isPublicSearchUrl()` drops loopback/private/metadata/non-http URLs from any LLM-proposed fetch (SSRF); plan+verdict parsing tolerant (fences/prose), capped, priority-sorted. Phone filter hardened against version strings ("377.728.2818") — caught live in the first run.
+- Dossier gains `searchPlan` → new **SEARCH DIRECTOR** panel (plan steps + intents, LLM page ranking with reasons, contacts found by directed searches) and a **SEARCH DIRECTOR** module in the glowing rail. Everything the model decided is auditable.
+
+### Live proof (local gemma4 @ 192.168.1.162, useLocal)
+- Subject "Katherine May Cloudflare": 6 planned queries (`site:cloudflare.com "Katherine May"` @ #92, `"@cloudflare.com"` @ #90, LinkedIn/press cross-refs), **23 pages fetched** under the plan, **14 ranked**, directed searches surfaced addresses + phone `845 345 3300` (junk-number pass clean). Module: ok, 62s.
+
 ## Session Log — 2026-09-25 (Jarvis) — GPS MAP: local-LLM copilot wired in (grounded analyst + whitelisted map actions)
 
 **Request:** "wire in th local llm into the gps page. how can the llm make this page better?"
