@@ -603,3 +603,26 @@ describe('aggressive director: playbook + fabrication guard', () => {
     expect(directorHandleCandidates('Cher')).toEqual([]);
   });
 });
+describe('social-engineering pretext lab', () => {
+  it('buildPretextSystemPrompt binds channel/objective and forbids payloads', async () => {
+    const { buildPretextSystemPrompt } = await import('../tools/osint-aggressive.js');
+    const p = buildPretextSystemPrompt({ channel: 'phone', objective: 'compliance_test', scope: 'ENG-1', scenario: 'x' });
+    expect(p).toContain('Channel: phone');
+    expect(p).toContain('AUTHORIZED');
+    expect(p).toMatch(/compliance|policy/i);
+    expect(p).toMatch(/malware|payload/i);
+  });
+
+  it('parsePretextResponse maps scripts, tolerates fences and caps at 3', async () => {
+    const { parsePretextResponse } = await import('../tools/osint-aggressive.js');
+    const fence = String.fromCharCode(96).repeat(3);
+    const mk = (i: number) => ({ title: 'S' + i, rationale: 'r' + i, opening: 'opening ' + i, keyQuestions: ['q1 ' + i, ''], valueExchange: 'v' + i, objectionHandling: ['o1'], callToAction: 'c' + i });
+    const raw = 'Here you go: ' + fence + 'json' + JSON.stringify({ scripts: [mk(1), mk(2), mk(3), mk(4)] }) + fence;
+    const out = parsePretextResponse(raw, { channel: 'email', objective: 'credential_test' });
+    expect(out).toHaveLength(3);
+    expect(out[0].title).toBe('S1');
+    expect(out[0].keyQuestions).toEqual(['q1 1']); // empty entries dropped
+    expect(out[0].channel).toBe('email');
+    expect(parsePretextResponse('garbage', { channel: 'phone', objective: 'credential_test' }).length).toBe(0);
+  });
+});

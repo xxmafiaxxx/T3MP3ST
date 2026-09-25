@@ -118,7 +118,20 @@ import {
   POI_KINDS,
   isPoiKind,
 } from './tools/public-gps.js';
+import {
+  COPILOT_ACTIONS,
+  buildCopilotContext,
+  buildCopilotSystemPrompt,
+  buildCopilotUserPrompt,
+  parseCopilotReply,
+  resolveCopilotPlan,
+  type CopilotMode,
+} from './tools/gps-copilot.js';
+import { haversineKm } from './tools/gps-copilot.js';
+import { fetchAreaNews, newsFactLines } from './tools/gps-area-news.js';
 import { CveCorrelator } from './recon/cve-correlator.js';
+import { SE_CHANNELS, SE_OBJECTIVES, buildPretextSystemPrompt, buildPretextUserPrompt, parsePretextResponse } from './tools/osint-aggressive.js';
+import type { SeScenario, SeChannel, SeObjective } from './tools/osint-aggressive.js';
 import { DFIRManager, type PlaybookType, type IOCType } from './tools/dfir.js';
 import { burpManager } from './tools/burp.js';
 
@@ -7881,6 +7894,32 @@ app.post('/api/osint/infostealer', async (req: Request, res: Response): Promise<
     res.json({ success: true, infostealer: r });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// ── Social-engineering pretext lab ──
+// Scripted conversation material for AUTHORIZED engagements (phishing simulation,
+// awareness training, red-team playbooks). Every request carries an explicit
+// authorization reference — same scope discipline as the rest of the arsenal —
+// and the scenario is the researcher's own words; no dossier data is injected.
+app.post('/api/osint/pretext', async (req: Request, res: Response): Promise<void> => {
+  const scope = typeof req.body?.scope === 'string' ? req.body.scope.trim() : '';
+  const scenario = typeof req.body?.scenario === 'string' ? req.body.scenario.trim() : '';
+  const context = typeof req.body?.context === 'string' ? req.body.context.trim().slice(0, 400) : undefined;
+  const channel = (SE_CHANNELS as readonly string[]).includes(String(req.body?.channel)) ? req.body.channel as SeChannel : 'email';
+  const objective = (SE_OBJECTIVES as readonly string[]).includes(String(req.body?.objective)) ? req.body.objective as SeObjective : 'credential_test';
+  if (!scope || scope.length < 8) { res.status(400).json({ error: 'authorization reference required (engagement/ticket id + who authorized it) — this lab is for authorized engagements only' }); return; }
+  if (!scenario || scenario.length < 10) { res.status(400).json({ error: 'scenario required (describe the situation in your own words)' }); return; }
+  if (!llm) { res.status(503).json({ error: 'LLM not configured' }); return; }
+  const s: SeScenario = { channel, objective, scope, scenario, context };
+  try {
+    console.log(`[T3MP3ST][OSINT] pretext lab: ${channel}/${objective} (scope: ${scope.slice(0, 40)})`);
+    const raw = await llm.prompt(buildPretextUserPrompt(s), buildPretextSystemPrompt(s));
+    const scripts = parsePretextResponse(raw || '', s);
+    if (scripts.length === 0) { res.status(502).json({ error: 'model returned no usable scripts — try rephrasing the scenario' }); return; }
+    res.json({ success: true, channel, objective, scope, scripts, model: 'configured backbone' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'pretext generation failed: ' + (err?.message || String(err)) });
   }
 });
 

@@ -108,6 +108,113 @@ export const DIRECTOR_SYSTEM = [
   'Rules: method MUST be a playbook id. Never re-pick a method that already ran clean with no leads unless you have a new parameter (new query/url/handle). URLs must be public https. Prioritise breadth first, then verification of the strongest leads. No prose.',
 ].join(' ');
 
+// =============================================================================
+// SOCIAL ENGINEERING PRETEXT LAB — scripted pretext/conversation material for
+// AUTHORIZED engagements: phishing-simulation campaigns, awareness training, and
+// red-team conversation playbooks. The method (cover story → rapport → discovery
+// → objection handling → exit) is standard security-industry practice.
+//
+// Scope discipline, matching the rest of this platform: every request carries an
+// explicit authorization reference, the scenario is the RESEARCHER's own words
+// (never auto-populated from a located person's dossier), and the output is
+// conversation material — no credential-harvesting pages, malware, or payloads.
+// =============================================================================
+
+export const SE_CHANNELS = ['email', 'phone', 'sms', 'in_person', 'chat'] as const;
+export const SE_OBJECTIVES = ['credential_test', 'data_collection', 'access_badge', 'compliance_test', 'rapport_recon'] as const;
+export type SeChannel = (typeof SE_CHANNELS)[number];
+export type SeObjective = (typeof SE_OBJECTIVES)[number];
+
+export interface SeScenario {
+  channel: SeChannel;
+  objective: SeObjective;
+  /** Authorization reference (engagement/ticket/approval id + who authorized it). */
+  scope: string;
+  /** Researcher's own scenario description — free text. */
+  scenario: string;
+  /** Optional non-identifying context (org type, role archetype, industry). */
+  context?: string;
+}
+
+export interface PretextScript {
+  title: string;
+  rationale: string;
+  opening: string;
+  keyQuestions: string[];
+  valueExchange: string;
+  objectionHandling: string[];
+  callToAction: string;
+  channel: SeChannel;
+  objective: SeObjective;
+}
+
+const OBJECTIVE_BRIEF: Record<SeObjective, string> = {
+  credential_test: 'a credential-awareness simulation (test whether the target reports it / hands over a test credential)',
+  data_collection: 'collecting non-sensitive business information (org structure, process, tooling) to map the attack surface',
+  access_badge: 'a physical-access / tailgating or badge-handling awareness exercise',
+  compliance_test: 'a policy-compliance test (e.g. verifying someone honors a stated verification policy)',
+  rapport_recon: 'pure rapport-building and open-ended reconnaissance with no ask',
+};
+
+export function buildPretextSystemPrompt(s: SeScenario): string {
+  return [
+    'You are a senior social-engineering specialist who designs AUTHORIZED engagement material for red-team engagements and security-awareness training.',
+    `Channel: ${s.channel}. Objective: ${s.objective} — ${OBJECTIVE_BRIEF[s.objective] || s.objective}.`,
+    'Produce THREE distinct pretext scripts. Each must follow professional pretext structure: a believable cover story, a natural opening, 2-3 discovery questions that feel like conversation (not interrogation), a value exchange (what the "attacker" offers), handling of 2 likely objections, and a low-pressure call to action or graceful exit.',
+    'Rules: write naturally and concisely — a real operator could deliver these verbatim. Keep every claim generic enough to be testable but never target a specific real private individual (this is authorized-simulation material, not a targeting dossier). Do NOT produce credential-harvesting page content, malware, or any technical payload — conversation and messaging only.',
+    'Return ONLY JSON: {"scripts":[{"title":"","rationale":"","opening":"","keyQuestions":["",""],"valueExchange":"","objectionHandling":["",""],"callToAction":""}]}',
+    'No prose outside the JSON object.',
+  ].join(' ');
+}
+
+export function buildPretextUserPrompt(s: SeScenario): string {
+  return [
+    `AUTHORIZATION: ${s.scope}`,
+    `CHANNEL: ${s.channel}`,
+    `OBJECTIVE: ${s.objective} (${OBJECTIVE_BRIEF[s.objective] || s.objective})`,
+    s.context ? `CONTEXT: ${s.context}` : '',
+    '',
+    'SCENARIO (researcher-supplied):',
+    s.scenario,
+    '',
+    'Produce the three scripts as specified.',
+  ].filter(Boolean).join('\n');
+}
+
+/** Tolerant parse of the model reply (fenced JSON, leading prose, single object). */
+export function parsePretextResponse(raw: string, s: Pick<SeScenario, 'channel' | 'objective'>): PretextScript[] {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : raw;
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  if (start === -1 || end <= start) return [];
+  let j: Record<string, unknown>;
+  try { j = JSON.parse(body.slice(start, end + 1)) as Record<string, unknown>; } catch { return []; }
+  const arr = Array.isArray(j.scripts) ? j.scripts : [];
+  const out: PretextScript[] = [];
+  for (const item of arr.slice(0, 3)) {
+    const o = item as Record<string, unknown>;
+    const str = (v: unknown, n = 400) => String(v || '').trim().slice(0, n);
+    const list = (v: unknown) => (Array.isArray(v) ? v.map((x) => str(x, 160)).filter(Boolean).slice(0, 4) : []);
+    const title = str(o.title, 80);
+    const opening = str(o.opening);
+    if (!title && !opening) continue;
+    out.push({
+      title: title || 'Variant ' + (out.length + 1),
+      rationale: str(o.rationale, 240),
+      opening,
+      keyQuestions: list(o.keyQuestions),
+      valueExchange: str(o.valueExchange, 300),
+      objectionHandling: list(o.objectionHandling),
+      callToAction: str(o.callToAction, 240),
+      channel: s.channel,
+      objective: s.objective,
+    });
+  }
+  return out;
+}
+
+
 export function buildDirectorBrief(input: {
   subject: string; name?: string; email?: string; username?: string; phone?: string; domain?: string;
   known: { emails: string[]; phones: string[]; addresses: string[]; handles: string[]; urls: string[]; accounts: string };

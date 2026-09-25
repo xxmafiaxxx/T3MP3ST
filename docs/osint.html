@@ -561,6 +561,52 @@
                     </div>
                 </div>
 
+                <!-- ══════════════════ SOCIAL ENGINEERING PRETEXT LAB ══════════════════ -->
+                <div class="panel" id="pretextPanel">
+                    <div class="panel-header">
+                        <div class="panel-title"><span class="accent">🎭</span> SOCIAL ENGINEERING — PRETEXT LAB</div>
+                        <button class="btn primary" id="pretextBtn" onclick="runPretext()">✦ GENERATE SCRIPTS</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="hint-line" style="margin:0 0 12px;">Describe the situation; the agent drafts three pretext scripts (cover story → opening → discovery questions → value exchange → objection handling → call to action) for <b>authorized</b> engagements — phishing simulation, awareness training, red-team playbooks. Conversation material only: no payloads, and no targeting of a specific private individual. An authorization reference is required.</div>
+                        <div class="locator-form" style="margin-bottom:10px;">
+                            <div class="search-box" style="flex:2;min-width:260px;">
+                                <span>📋</span>
+                                <input type="text" id="pretextScope" placeholder="Authorization ref — e.g. ENG-2026-014, client red-team, approved by CISO…">
+                            </div>
+                            <div class="search-box" style="max-width:150px;min-width:130px;">
+                                <span>📞</span>
+                                <select id="pretextChannel" style="background:transparent;border:none;color:inherit;font-size:12px;padding:4px;">
+                                    <option value="email">Email</option>
+                                    <option value="phone">Phone / vishing</option>
+                                    <option value="sms">SMS / smishing</option>
+                                    <option value="in_person">In-person</option>
+                                    <option value="chat">Chat / social</option>
+                                </select>
+                            </div>
+                            <div class="search-box" style="max-width:210px;min-width:190px;">
+                                <span>🎯</span>
+                                <select id="pretextObjective" style="background:transparent;border:none;color:inherit;font-size:12px;padding:4px;">
+                                    <option value="credential_test">Credential-awareness test</option>
+                                    <option value="data_collection">Data collection / surface mapping</option>
+                                    <option value="access_badge">Physical access / badge</option>
+                                    <option value="compliance_test">Policy-compliance test</option>
+                                    <option value="rapport_recon">Rapport &amp; open recon</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:8px;">
+                            <label style="font-size:12px;color:var(--text-muted);">Scenario — your words</label>
+                            <textarea id="pretextScenario" rows="4" placeholder="e.g. Simulated vendor invoice callback to a finance analyst at a mid-size manufacturer, testing whether the new 'verify via known number' policy holds. The target has been trained to report suspicious calls." style="width:100%;padding:10px 12px;font-size:12.5px;background:rgba(0,0,0,0.35);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);font-family:'JetBrains Mono',monospace;resize:vertical;"></textarea>
+                        </div>
+                        <div class="form-group" style="margin-bottom:4px;">
+                            <label style="font-size:12px;color:var(--text-muted);">Context <span style="color:var(--text-muted);">(optional — org type, role archetype, industry; keep it non-identifying)</span></label>
+                            <input type="text" id="pretextContext" class="form-input" placeholder="e.g. B2B logistics firm, office admin, uses a VoIP desk">
+                        </div>
+                        <div id="pretextOut" style="margin-top:12px;"><div class="dossier-empty">No scripts yet — set the authorization ref, describe the scenario, and GENERATE SCRIPTS.</div></div>
+                    </div>
+                </div>
+
                 <!-- ══════════════════ TOOL PANELS ══════════════════ -->
                 <div class="tool-tabs">
                     <button class="tool-tab active" data-pane="paneSweep" onclick="switchTool('paneSweep')">📡 USERNAME SWEEP</button>
@@ -2097,6 +2143,70 @@
         }
 
         // ── NEW keyless lanes: Hudson Rock infostealer check + HIBP breach catalogue ──
+        // ── Social-engineering pretext lab (authorized engagements) ──
+        var PRETEXT_PANES = ['paneBreach', 'paneDarkweb', 'paneEmail', 'panePhone', 'paneDorks', 'panePerms', 'paneSites', 'paneAndroid'];
+        function pretextScriptText(s) {
+            return [
+                'TITLE: ' + s.title,
+                s.rationale ? 'RATIONALE: ' + s.rationale : '',
+                '',
+                'OPENING:',
+                s.opening,
+                '',
+                s.keyQuestions && s.keyQuestions.length ? 'DISCOVERY QUESTIONS:' : '',
+                (s.keyQuestions || []).map(function (q) { return '  - ' + q; }).join('\n'),
+                '',
+                s.valueExchange ? 'VALUE EXCHANGE:' : '',
+                s.valueExchange ? '  ' + s.valueExchange : '',
+                '',
+                s.objectionHandling && s.objectionHandling.length ? 'OBJECTION HANDLING:' : '',
+                (s.objectionHandling || []).map(function (o) { return '  - ' + o; }).join('\n'),
+                '',
+                s.callToAction ? 'CALL TO ACTION / EXIT: ' + s.callToAction : '',
+            ].filter(function (x) { return x !== ''; }).join('\n');
+        }
+        async function runPretext() {
+            var scope = document.getElementById('pretextScope').value.trim();
+            var scenario = document.getElementById('pretextScenario').value.trim();
+            var context = document.getElementById('pretextContext').value.trim();
+            var channel = document.getElementById('pretextChannel').value;
+            var objective = document.getElementById('pretextObjective').value;
+            var out = document.getElementById('pretextOut');
+            var btn = document.getElementById('pretextBtn');
+            if (!scope || scope.length < 8) { toast('Authorization reference required (engagement/ticket id + who authorized it)', 'error'); document.getElementById('pretextScope').focus(); return; }
+            if (!scenario || scenario.length < 10) { toast('Describe the scenario in your own words', 'error'); document.getElementById('pretextScenario').focus(); return; }
+            // Panel glows while the model composes (same busy treatment as the tool modules).
+            document.getElementById('pretextPanel').classList.add('panel-running');
+            if (btn) { btn.disabled = true; btn.textContent = '◉ COMPOSING…'; }
+            out.innerHTML = '<div class="dossier-empty">◈ ' + escapeHtml(channel) + ' · ' + escapeHtml(objective) + ' — drafting three scripts…</div>';
+            try {
+                var d = await api('/api/osint/pretext', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scope: scope, scenario: scenario, context: context || undefined, channel: channel, objective: objective }) });
+                var html = '<div class="dossier-section-title">🎭 ' + d.scripts.length + ' script(s) · ' + escapeHtml(d.channel) + ' · ' + escapeHtml(d.objective) + ' <span class="count">scope: ' + escapeHtml(d.scope) + '</span></div>';
+                d.scripts.forEach(function (s, i) {
+                    var txt = pretextScriptText(s);
+                    html += '<div class="panel-card" style="margin-bottom:10px;"><div class="panel-card-title">#' + (i + 1) + ' ' + escapeHtml(s.title) + '</div>';
+                    if (s.rationale) html += '<div class="hint-line" style="margin:0 0 8px;">' + escapeHtml(s.rationale) + '</div>';
+                    html += '<div class="dork-item" style="margin-bottom:6px;"><span class="label">' + (s.objectionHandling.length ? '🗣 ' + s.objectionHandling.length + ' objection(s) · ❓ ' + s.keyQuestions.length + ' question(s)' : '') + '</span>';
+                    html += '<button class="btn ghost btn-sm" onclick="copyPretext(' + i + ')">📋 COPY</button></div>';
+                    html += '<pre id="pretextScript' + i + '" style="white-space:pre-wrap;font-size:12px;color:var(--text-primary);background:rgba(0,0,0,0.3);border:1px solid var(--border-color);border-radius:6px;padding:10px;margin:0;">' + escapeHtml(txt) + '</pre></div>';
+                });
+                out.innerHTML = html;
+                window.__pretextTexts = d.scripts.map(pretextScriptText);
+                toast(d.scripts.length + ' pretext scripts drafted (' + d.channel + ')', 'success');
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+                toast(e.message, 'error');
+            } finally {
+                document.getElementById('pretextPanel').classList.remove('panel-running');
+                if (btn) { btn.disabled = false; btn.textContent = '✦ GENERATE SCRIPTS'; }
+            }
+        }
+        function copyPretext(i) {
+            var t = (window.__pretextTexts || [])[i];
+            if (!t) return;
+            navigator.clipboard.writeText(t).then(function () { toast('Script ' + (i + 1) + ' copied', 'success'); }, function () { toast('Clipboard blocked — select the text manually', 'error'); });
+        }
+
         async function runInfostealerCheck() {
             const email = document.getElementById('stealerEmail').value.trim();
             const out = document.getElementById('stealerOut');
