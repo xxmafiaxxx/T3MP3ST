@@ -3644,7 +3644,6 @@
                 <a class="nav-item" href="evidence.html" style="text-decoration:none;">
                     <span class="icon">🔐</span> Evidence Vault <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
-                </div>
                 <div class="nav-item" data-page="cve-vault" data-shell-module="true">
                     <span class="icon">🛡️</span> CVE Vault
                 </div>
@@ -3674,7 +3673,10 @@
                 <a class="nav-item" href="dfir.html" data-href="dfir.html" style="text-decoration:none;">
                     <span class="icon">🛡️</span> DFIR Response <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
-                <a class="nav-item" href="terminal.html" style="text-decoration:none;">
+                                <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
+                    <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
+                </a>
+<a class="nav-item" href="terminal.html" style="text-decoration:none;">
                     <span class="icon">💻</span> Terminal <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
                 <a class="nav-item" href="configs.html" style="text-decoration:none;">
@@ -6224,7 +6226,7 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
 
                 try {
                     const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 5000);
+                    const timeout = setTimeout(() => controller.abort(), 10000);
                     const res = await fetch(`${this.baseUrl}/api/health`, { signal: controller.signal });
                     clearTimeout(timeout);
                     const data = await res.json();
@@ -6233,6 +6235,7 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                     // /api/health returns llm as an object ({connected:true,...}); accept that or the legacy string
                     this.llmAvailable = data.llm === 'connected' || !!(data.llm && data.llm.connected);
                     this.serverLLM = data.llm && typeof data.llm === 'object' ? data.llm : null;
+                    this._failStreak = 0; this._everReady = true;
                     // Keep the dispatch latch honest: BackendDispatch.available is otherwise write-only-true.
                     // A server that's down / lost mission support must clear it; a healthy one re-arms it.
                     if (typeof BackendDispatch !== 'undefined') {
@@ -6260,6 +6263,14 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                     window.T3MP3STShell?.updateReadiness(data);
                     return data;
                 } catch (e) {
+                    // One slow probe must not blink OFFLINE while the server is busy —
+                    // mid-scan LLM streaming can push /api/health past the abort budget.
+                    // Flip only after 3 consecutive failed probes (previously: instantly,
+                    // and the label then stuck for up to a full 30s poll cycle).
+                    this._failStreak = (this._failStreak || 0) + 1;
+                    if (this._failStreak < 3 && (this.connected || this.llmAvailable || this._everReady)) {
+                        return { status: this.connected ? "degraded" : "offline", error: (e && e.message) || "health probe failed", failStreak: this._failStreak };
+                    }
                     this.connected = false;
                     this.llmAvailable = false;
 
@@ -6761,39 +6772,84 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                 }
             },
 
-            async getStatus(missionId) {
-                const query = missionId ? `?missionId=${encodeURIComponent(missionId)}` : '';
-                const status = await this.missionRequest(`/api/mission/status${query}`);
-                if (typeof status.active !== 'boolean') throw new Error('Invalid mission status');
-                return status;
+            /**
+             * Get mission status from backend.
+             * Returns null on transport failure so pollUntilComplete can distinguish
+             * "mission stopped" from "could not ask" — a swallowed error here used to
+             * read as an instant, false "mission complete".
+             */
+            /**
+             * Get mission status from backend. THROWS on transport/HTTP/malformed
+             * responses so callers can distinguish "server said stopped" from
+             * "could not ask" — a swallowed error here used to read as an instant,
+             * false "mission complete".
+             */
+            async getStatus() {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 15000);
+                try {
+                    const res = await fetch(`${T3MP3ST_API.baseUrl}/api/mission/status`, { signal: controller.signal });
+                    if (!res.ok) throw new Error(`Mission status HTTP ${res.status}`);
+                    const status = await res.json();
+                    if (!status || typeof status.active !== "boolean") throw new Error("Invalid mission status");
+                    return status;
+                } finally {
+                    clearTimeout(timer);
+                }
             },
 
-            // Stalls remain live and resumable. A failed status request is unknown, never completion.
+            /** Transport-safe read: null instead of a throw when the server cannot be asked. */
+            async getStatusSafe() {
+                try {
+                    return await this.getStatus();
+                } catch {
+                    return null;
+                }
+            },
+
+            /**
+             * Poll for mission status until complete. A transient network hiccup must
+             * NOT read as "mission complete": transport failures surface as
+             * { statusError } updates and only a bounded streak of consecutive
+             * failures ends the poll. Stalls stay live and resumable.
+             */
             async pollUntilComplete(onUpdate, intervalMs = 3000, run = missionLifecycle) {
+                const MAX_CONSECUTIVE_FAILURES = 3;
+                let consecutiveFailures = 0;
                 while (missionRunning && missionLifecycle === run) {
                     try {
-                        const status = await this.getStatus(run.missionId);
-                        if (!missionRunning || missionLifecycle !== run) return null;
+                        const status = await this.getStatus();
+                        consecutiveFailures = 0;
                         // A stop response and a status response can arrive in either order.
+                        if (!missionRunning || missionLifecycle !== run) return null;
                         if (!run.pending) {
                             if (onUpdate) onUpdate(status);
                             if (!status.active) return status;
+                            // Update kill chain from mission phase
                             if (status.mission?.currentPhase) {
                                 const phaseMap = {
-                                    reconnaissance: 'recon', weaponization: 'scanning',
-                                    delivery: 'exploitation', exploitation: 'exploitation',
-                                    installation: 'post_exploitation', command_and_control: 'post_exploitation',
-                                    actions_on_objectives: 'exfiltration'
+                                    reconnaissance: "recon", weaponization: "scanning",
+                                    delivery: "exploitation", exploitation: "exploitation",
+                                    installation: "post_exploitation", command_and_control: "post_exploitation",
+                                    actions_on_objectives: "exfiltration"
                                 };
                                 updateKillChain?.(phaseMap[status.mission.currentPhase] || status.mission.currentPhase, status.mission.progress || 50);
                             }
                         }
                     } catch (err) {
-                        if (missionRunning && missionLifecycle === run && !run.pending && onUpdate) {
-                            onUpdate({ statusError: err.message || 'Status unavailable' });
+                        // hidden tabs freeze fetches — never count toward the cutoff
+                        const hidden = typeof document !== "undefined" && document.hidden;
+                        if (!hidden) {
+                            consecutiveFailures++;
+                            if (missionRunning && missionLifecycle === run && !run.pending && onUpdate) {
+                                onUpdate({ statusError: err.message || "Status unavailable" });
+                            }
+                            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                                throw new Error("status poll failed " + MAX_CONSECUTIVE_FAILURES + "x in a row — last error: " + (err.message || "unknown"));
+                            }
                         }
                     }
-                    await new Promise(resolve => setTimeout(resolve, intervalMs));
+                    await new Promise((resolve) => setTimeout(resolve, intervalMs));
                 }
                 return null;
             }
@@ -20184,11 +20240,24 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                 : '<span style="color:#ff6b6b">● OFFLINE</span> <span style="color:#888;font-weight:normal;font-size:10px">client-side / sim</span>';
             // ── Local agents: fetch ONCE before the backbone label so both reflect the server's
             // actual agent state from the first poll (and t3mpPreferredAgent can route to a live one) ──
-            let __agents = [];
-            try { const s = await (await fetch(base + '/api/agents/local/status?check=1')).json(); __agents = s.connected || []; } catch (_) {}
-            window.__t3mpServerAgents = __agents;
-            window.__t3mpConnectedAgents = __agents.length;
-            window.__t3mpLiveAgents = __agents.filter(a => a.lastPing && a.lastPing.ok).length;
+            // Cached agent status (NO ?check=1): a forced live re-detect takes 30s+ on
+            // CLI-heavy boxes and, awaited in this poller, starved the browser's
+            // 6-connection pool until every fetch — incl. /api/health — queued and the
+            // header flipped OFFLINE. Bounded + single-flight; explicit Settings ➕/↻
+            // actions still run the deep check via /api/agents/local/detect.
+            if (!window.__agentStatusInFlight) {
+                window.__agentStatusInFlight = (async () => {
+                    try {
+                        const s = await (await fetch(base + '/api/agents/local/status', { signal: AbortSignal.timeout(5000) })).json();
+                        window.__t3mpServerAgents = s.connected || [];
+                        window.__t3mpConnectedAgents = (s.connected || []).length;
+                        window.__t3mpLiveAgents = (s.connected || []).filter(a => a.lastPing && a.lastPing.ok).length;
+                        try { if (typeof window.syncBackendNudge === 'function') window.syncBackendNudge(); } catch (_) {}
+                    } catch (_) {}
+                    finally { window.__agentStatusInFlight = false; }
+                })();
+            }
+            const __agents = window.__t3mpServerAgents || [];
             // Sync the War Room nag to the same truth every poll so the header badge and the banner never diverge.
             try { if (typeof window.syncBackendNudge === 'function') window.syncBackendNudge(); } catch (_) {}
             // AI backbone: what will actually drive a mission right now.
@@ -21032,6 +21101,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
             }
         }
 
+        // Pause mission
         async function pauseMission() { return controlMission('pause'); }
         async function resumeMission() { return controlMission('resume'); }
 

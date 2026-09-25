@@ -3573,7 +3573,10 @@
                 <a class="nav-item" href="dfir.html" data-href="dfir.html" style="text-decoration:none;">
                     <span class="icon">🛡️</span> DFIR Response <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
-                <a class="nav-item" href="terminal.html" style="text-decoration:none;">
+                                <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
+                    <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
+                </a>
+<a class="nav-item" href="terminal.html" style="text-decoration:none;">
                     <span class="icon">💻</span> Terminal <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
                 <a class="nav-item" href="configs.html" style="text-decoration:none;">
@@ -17183,11 +17186,24 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                 : '<span style="color:#ff6b6b">● OFFLINE</span> <span style="color:#888;font-weight:normal;font-size:10px">client-side / sim</span>';
             // ── Local agents: fetch ONCE before the backbone label so both reflect the server's
             // actual agent state from the first poll (and t3mpPreferredAgent can route to a live one) ──
-            let __agents = [];
-            try { const s = await (await fetch(base + '/api/agents/local/status?check=1')).json(); __agents = s.connected || []; } catch (_) {}
-            window.__t3mpServerAgents = __agents;
-            window.__t3mpConnectedAgents = __agents.length;
-            window.__t3mpLiveAgents = __agents.filter(a => a.lastPing && a.lastPing.ok).length;
+            // Cached agent status (NO ?check=1): a forced live re-detect takes 30s+ on
+            // CLI-heavy boxes and, awaited in this poller, starved the browser's
+            // 6-connection pool until every fetch — incl. /api/health — queued and the
+            // header flipped OFFLINE. Bounded + single-flight; explicit Settings ➕/↻
+            // actions still run the deep check via /api/agents/local/detect.
+            if (!window.__agentStatusInFlight) {
+                window.__agentStatusInFlight = (async () => {
+                    try {
+                        const s = await (await fetch(base + '/api/agents/local/status', { signal: AbortSignal.timeout(5000) })).json();
+                        window.__t3mpServerAgents = s.connected || [];
+                        window.__t3mpConnectedAgents = (s.connected || []).length;
+                        window.__t3mpLiveAgents = (s.connected || []).filter(a => a.lastPing && a.lastPing.ok).length;
+                        try { if (typeof window.syncBackendNudge === 'function') window.syncBackendNudge(); } catch (_) {}
+                    } catch (_) {}
+                    finally { window.__agentStatusInFlight = false; }
+                })();
+            }
+            const __agents = window.__t3mpServerAgents || [];
             // Sync the War Room nag to the same truth every poll so the header badge and the banner never diverge.
             try { if (typeof window.syncBackendNudge === 'function') window.syncBackendNudge(); } catch (_) {}
             // AI backbone: what will actually drive a mission right now.
