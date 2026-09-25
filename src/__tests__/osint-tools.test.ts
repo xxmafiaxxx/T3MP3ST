@@ -296,6 +296,43 @@ describe('search extraction', () => {
     expect(r.socialUrls.some((u) => u.includes('t.me/jsmith83'))).toBe(true);
   });
 
+
+  it('extracts street addresses with city/state/zip and filters junk', async () => {
+    const { extractContacts } = await import('../tools/osint.js');
+    const r = extractContacts(
+      'Office: 742 Evergreen Terrace, Springfield, IL 62704 · PO Box 1234, Austin, TX 78701 · ' +
+      'version 1.2.3.4 · lorem ipsum street example · 1600 Pennsylvania Ave NW, Washington, DC 20500'
+    );
+    expect(r.addresses.some((a) => a.includes('742 Evergreen Terrace') && a.includes('Springfield, IL 62704'))).toBe(true);
+    expect(r.addresses.some((a) => /PO Box 1234/.test(a))).toBe(true);
+    expect(r.addresses.some((a) => a.includes('1600 Pennsylvania Ave NW'))).toBe(true);
+    expect(r.addresses.some((a) => a.includes('1.2.3.4') || a.includes('lorem'))).toBe(false);
+  });
+
+  it('htmlToText strips script/style/noise and keeps the visible text', async () => {
+    const { htmlToText } = await import('../tools/osint.js');
+    const txt = htmlToText('<html><script>var a=1;</script><style>.x{}</style><p>Call (212) 555-1234</p><div>123 Main St, Austin, TX 78701</div></html>');
+    expect(txt).toContain('(212) 555-1234');
+    expect(txt).toContain('123 Main St, Austin, TX 78701');
+    expect(txt).not.toContain('var a=1');
+    expect(txt).not.toContain('.x{}');
+  });
+
+  it('mineResultPage parses the FETCHED page (not the snippet) for contacts', async () => {
+    const { mineResultPage } = await import('../tools/osint.js');
+    const fakeFetchers = [
+      async () => '<html><body><p>Reach the office at 350 Fifth Ave, New York, NY 10118 or billing@corp.example-site.test</p><p>Desk: (646) 555-7788</p></body></html>',
+    ];
+    const m = await mineResultPage('https://contactpage.test/about', 'About us', fakeFetchers);
+    expect(m.fetched).toBe(true);
+    expect(m.emails).toContain('billing@corp.example-site.test');
+    expect(m.phones).toContain('(646) 555-7788');
+    expect(m.addresses.some((a) => a.includes('350 Fifth Ave'))).toBe(true);
+    const dead = await mineResultPage('https://x.test', 'x', [async () => null, async () => { throw new Error('down'); }]);
+    expect(dead.fetched).toBe(false);
+    expect(dead.emails).toHaveLength(0);
+  });
+
   it('parses Bing SERP blocks into results (fixture)', async () => {
     const { parseBingResults } = await import('../tools/osint.js');
     const fixture = '<li class="b_algo"><h2><a href="https://example.org/profile">Profile Page</a></h2>' +

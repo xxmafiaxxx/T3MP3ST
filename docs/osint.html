@@ -1198,18 +1198,18 @@
             // ── CONTACT INFORMATION card ──
             html += '<div class="panel-card"><div class="panel-card-title">📞 CONTACT INFORMATION</div>';
             const contactRows = [];
-            (d.phones || []).forEach(function (p) { contactRows.push(['☎', p, p === (d.parsed && d.parsed.phone) ? 'subject input' : 'records/extraction']); });
-            (d.emails || []).forEach(function (e) { contactRows.push(['✉', e, e === (d.parsed && d.parsed.email) ? 'subject input' : 'records/extraction']); });
+            (d.phones || []).forEach(function (p) { contactRows.push(['☎', p, p === (d.parsed && d.parsed.phone) ? 'subject input' : 'records/search']); });
+            (d.emails || []).forEach(function (e) { contactRows.push(['✉', e, e === (d.parsed && d.parsed.email) ? 'subject input' : 'records/search']); });
             html += contactRows.length
                 ? contactRows.map(function (r) { return '<div class="cred-row"><span style="color:var(--accent)">' + r[0] + '</span><span style="color:var(--text-primary)">' + escapeHtml(r[1]) + '</span><span class="meta">' + escapeHtml(r[2]) + '</span></div>'; }).join('')
-                : '<div class="dossier-empty">No contact data recovered yet. <b>Arm a dump key below (DeHashed = addresses/phones/DOB)</b> or open the public-records links.</div>';
+                : '<div class="dossier-empty">No contact data recovered yet. The search lane parses result PAGES for emails/phones/addresses — if the subject is a private person, little is published publicly; arm a dump key below (DeHashed = addresses/phones/DOB) for record-level detail.</div>';
             html += '</div>';
 
             // ── ADDRESSES card ──
             html += '<div class="panel-card"><div class="panel-card-title">🏠 ADDRESSES</div>';
             html += (d.addresses || []).length
-                ? d.addresses.map(function (a) { return '<div class="cred-row"><span style="color:var(--accent)">📍</span><span style="color:var(--text-primary)">' + escapeHtml(a) + '</span><span class="meta">dump records</span></div>'; }).join('')
-                : '<div class="dossier-empty">No addresses in dump records. Address history: public-records workbench (browser) or keyed dump records.</div>';
+                ? d.addresses.map(function (a) { return '<div class="cred-row"><span style="color:var(--accent)">📍</span><span style="color:var(--text-primary)">' + escapeHtml(a) + '</span><span class="meta">records/search</span></div>'; }).join('')
+                : '<div class="dossier-empty">No addresses found. Address history: search-lane page parsing, the public-records workbench (browser), or keyed dump records.</div>';
             html += '</div>';
 
             // ── ONLINE PROFILES card ──
@@ -1293,9 +1293,27 @@
             html += '</div></details>';
 
             if (d.searchExtraction && d.searchExtraction.length) {
-                html += '<div class="dossier-section-title" style="margin-top:18px;">🔎 SEARCH EXTRACTION <span class="count">' + d.searchExtraction.length + ' query(ies)</span></div>';
+                var seEmails = 0, sePhones = 0, seAddrs = 0, sePages = 0;
+                d.searchExtraction.forEach(function (s) { seEmails += (s.emails || 0); sePhones += (s.phones || 0); seAddrs += (s.addresses || 0); sePages += (s.pagesFetched || 0); });
+                html += '<div class="dossier-section-title" style="margin-top:18px;">🔎 SEARCH EXTRACTION <span class="count">' + d.searchExtraction.length + ' query(ies) · ' + sePages + ' page(s) parsed</span></div>';
+                html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px;">' +
+                    '<span class="conf-badge conf-high">✉ ' + seEmails + ' emails</span>' +
+                    '<span class="conf-badge conf-high">☎ ' + sePhones + ' phones</span>' +
+                    '<span class="conf-badge conf-high">📍 ' + seAddrs + ' addresses</span></div>';
                 html += d.searchExtraction.map(function (s) {
-                    return '<div class="dork-item" style="margin-bottom:4px;"><span class="label">' + escapeHtml(s.query) + '</span><span style="color:var(--text-muted)">' + s.found + ' results · via ' + escapeHtml(s.via) + '</span></div>';
+                    var q = '<div class="dork-item" style="margin-bottom:6px;"><span class="label">' + escapeHtml(s.query) + '</span>' +
+                        '<span style="color:var(--text-muted)">' + s.found + ' results · ' + (s.pagesFetched || 0) + ' page(s) fetched+parsed · via ' + escapeHtml(s.via) +
+                        ' — ' + (s.emails || 0) + ' email(s), ' + (s.phones || 0) + ' phone(s), ' + (s.addresses || 0) + ' address(es)</span></div>';
+                    if (s.hits && s.hits.length) {
+                        q += '<div style="margin:0 0 10px 14px;display:grid;gap:4px;">' + s.hits.map(function (h) {
+                            var rows = [];
+                            (h.emails || []).forEach(function (x) { rows.push('<span class="cred-row"><span>✉</span><span style="color:var(--text-primary)">' + escapeHtml(x) + '</span><span class="meta">mined</span></div>'); });
+                            (h.phones || []).forEach(function (x) { rows.push('<span class="cred-row"><span>☎</span><span style="color:var(--text-primary)">' + escapeHtml(x) + '</span><span class="meta">mined</span></div>'); });
+                            (h.addresses || []).forEach(function (x) { rows.push('<span class="cred-row"><span>📍</span><span style="color:var(--text-primary)">' + escapeHtml(x) + '</span><span class="meta">mined</span></div>'); });
+                            return '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">from <a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener" style="color:var(--info);">' + escapeHtml((h.title || h.url).slice(0, 90)) + ' ↗</a></div>' + rows.join('');
+                        }).join('') + '</div>';
+                    }
+                    return q;
                 }).join('');
             }
 

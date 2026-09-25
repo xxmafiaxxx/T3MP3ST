@@ -49,10 +49,14 @@ async function fetchJson<T = unknown>(url: string, init: RequestInit = {}): Prom
 //                        (handles soft-404 pages like t.me's "no such user")
 //   json_array_nonempty→ 2xx AND JSON array with length > 0 = FOUND; [] = absent
 //   json_field         → 2xx AND object field (probeValue, dotted path) truthy = FOUND
+// Sherlock-derived entries add three more signals (see src/tools/sherlock-sites.ts):
+//   absentMarkers       → 2xx AND body contains ANY marker = absent (soft-404 pages)
+//   absentRedirectPrefix→ 2xx but the final URL lands on the error page = absent
+//   usernameRegex       → non-matching username is SKIPPED, never probed
 // reliability: how much a FOUND can be trusted (login walls / soft-200s downgrade it)
 
 export type OsintSiteCategory =
-  | 'social' | 'dev' | 'gaming' | 'music' | 'art' | 'forum' | 'blog' | 'money' | 'video' | 'messaging';
+  | 'social' | 'dev' | 'gaming' | 'music' | 'art' | 'forum' | 'blog' | 'money' | 'video' | 'messaging' | 'adult';
 
 export interface OsintSite {
   name: string;
@@ -69,6 +73,17 @@ export interface OsintSite {
   fallbackProbeUrlTemplate?: string;
   fallbackProbeType?: OsintSite['probeType'];
   fallbackProbeValue?: string;
+  /** Any-of markers that mean ABSENT on a 2xx (Sherlock `errorType: message` carries a list). */
+  absentMarkers?: string[];
+  /** Final redirect target that means ABSENT (Sherlock `errorType: response_url`). */
+  absentRedirectPrefix?: string;
+  /** Username shape this platform accepts — a non-match is skipped, never probed
+   *  (Sherlock `regexCheck`; probing an impossible username manufactures a false ABSENT). */
+  usernameRegex?: string;
+  /** Where this entry came from — hand-probed curated catalog vs the vendored Sherlock database. */
+  source?: 'curated' | 'sherlock';
+  /** Adult platform — catalogued but excluded from default sweeps. */
+  adult?: boolean;
 }
 
 export const OSINT_SITES: OsintSite[] = [
@@ -326,23 +341,35 @@ export function scoreIdentityMatch(hints: { name?: string }, profile?: ProfileHi
   return dn ? 'name-mismatch' : 'handle-only';
 }
 
-interface ProbeOutcome { status: number; body?: string; via: 'egress' | 'tor'; url: string; note?: string }
+interface ProbeOutcome { status: number; body?: string; via: 'egress' | 'tor'; url: string; finalUrl?: string; note?: string }
 
 function classifyOutcome(site: ResolvedSite, outcome: ProbeOutcome): Pick<UsernameHit, 'status' | 'probeStatus' | 'note'> {
   const ok = outcome.status >= 200 && outcome.status < 300;
   let status: UsernameHit['status'] = 'unknown';
-  if (site.effectiveProbeType === 'status') {
+  if (site.effectiveProbeType === 'status' && !site.absentMarkers && !site.absentRedirectPrefix) {
     if (ok) status = 'found';
     else if (outcome.status === 404 || outcome.status === 410) status = 'absent';
   } else if (ok) {
     const body = outcome.body ?? '';
-    const has = site.probeValue ? body.includes(site.probeValue) : false;
-    if (site.effectiveProbeType === 'body_contains') status = has ? 'found' : 'absent';
-    else if (site.effectiveProbeType === 'body_missing') status = has ? 'absent' : 'found';
-    else if (site.effectiveProbeType === 'json_array_nonempty') {
-      try { status = Array.isArray(JSON.parse(body || '[]')) && JSON.parse(body).length > 0 ? 'found' : 'absent'; } catch { status = 'unknown'; }
-    } else if (site.effectiveProbeType === 'json_field') {
-      try { status = dig(JSON.parse(body || '{}'), site.probeValue || '') ? 'found' : 'absent'; } catch { status = 'unknown'; }
+    // Sherlock `errorType: message` — a 2xx whose body carries ANY known error
+    // marker means the profile does not exist (soft-404). Checked before the
+    // generic marker probes so a curated body_contains site still behaves.
+    if (site.absentMarkers?.length) {
+      status = site.absentMarkers.some((m) => body.includes(m)) ? 'absent' : 'found';
+    } else if (site.absentRedirectPrefix) {
+      // Sherlock `errorType: response_url` — the site redirects a missing profile
+      // to a known error page, so the FINAL url is the signal, not the status.
+      const finalUrl = outcome.finalUrl || outcome.url;
+      status = finalUrl.startsWith(site.absentRedirectPrefix) ? 'absent' : 'found';
+    } else {
+      const has = site.probeValue ? body.includes(site.probeValue) : false;
+      if (site.effectiveProbeType === 'body_contains') status = has ? 'found' : 'absent';
+      else if (site.effectiveProbeType === 'body_missing') status = has ? 'absent' : 'found';
+      else if (site.effectiveProbeType === 'json_array_nonempty') {
+        try { status = Array.isArray(JSON.parse(body || '[]')) && JSON.parse(body).length > 0 ? 'found' : 'absent'; } catch { status = 'unknown'; }
+      } else if (site.effectiveProbeType === 'json_field') {
+        try { status = dig(JSON.parse(body || '{}'), site.probeValue || '') ? 'found' : 'absent'; } catch { status = 'unknown'; }
+      }
     }
   } else if (outcome.status === 404 || outcome.status === 410) {
     status = 'absent';
@@ -354,7 +381,7 @@ function classifyOutcome(site: ResolvedSite, outcome: ProbeOutcome): Pick<Userna
 async function probeEgress(url: string, readBody: boolean): Promise<ProbeOutcome> {
   const res = await osintFetch(url);
   const body = readBody ? (await res.text().catch(() => '')).slice(0, 300_000) : undefined;
-  return { status: res.status, body, url, via: 'egress' };
+  return { status: res.status, body, url, finalUrl: res.url || url, via: 'egress' };
 }
 
 async function probeViaTor(url: string): Promise<ProbeOutcome | null> {
@@ -362,7 +389,7 @@ async function probeViaTor(url: string): Promise<ProbeOutcome | null> {
   if (!tor.available) return null;
   try {
     const page = await torFetchAny(url);
-    return { status: page.status, body: page.body.slice(0, 300_000), url, via: 'tor' };
+    return { status: page.status, body: page.body.slice(0, 300_000), url, finalUrl: page.finalUrl || url, via: 'tor' };
   } catch {
     return null;
   }
@@ -383,7 +410,7 @@ async function probeDirect(url: string, readBody: boolean): Promise<ProbeOutcome
       redirect: 'follow',
     } as never);
     const body = readBody ? (await res.text().catch(() => '')).slice(0, 300_000) : undefined;
-    return { status: res.status, body, url, via: 'egress', note: '⚠ direct connection (real IP seen by platform) — set T3MP3ST_OSINT_ALLOW_DIRECT=0 to disable' };
+    return { status: res.status, body, url, finalUrl: res.url || url, via: 'egress', note: '⚠ direct connection (real IP seen by platform) — set T3MP3ST_OSINT_ALLOW_DIRECT=0 to disable' };
   } catch {
     return null;
   }
@@ -408,11 +435,27 @@ async function probeSite(site: ResolvedSite, username: string, hints?: { name?: 
     confidence: site.reliability,
   };
 
+  // Sherlock `regexCheck` — a username this platform can never accept would
+  // answer with a guaranteed-miss page. Probing it manufactures a false ABSENT,
+  // so the site is left UNPROBED and reported as unknown with the reason.
+  if (site.usernameRegex) {
+    let shapeOk = true;
+    try { shapeOk = new RegExp(site.usernameRegex).test(username); } catch { shapeOk = true; }
+    if (!shapeOk) {
+      base.note = `not probed — "${username}" cannot exist on this platform (username shape)`;
+      return base;
+    }
+  }
+
+  // A body is needed whenever the classifier reads it — including the Sherlock
+  // soft-404 marker list, which rides on a 2xx response.
+  const needsBody = (t: OsintSite['probeType']) =>
+    t !== 'status' || Boolean(site.absentMarkers?.length) || Boolean(site.absentRedirectPrefix);
+
   // — Pass 1: primary probe over normal egress —
   let outcome: ProbeOutcome | null = null;
   try {
-    const needsBody = site.effectiveProbeType !== 'status';
-    const first = await probeEgress(url, needsBody);
+    const first = await probeEgress(url, needsBody(site.effectiveProbeType));
     if (first.status === 403 || first.status === 429 || first.status >= 500) outcome = null; // unclear — escalate
     else outcome = first;
   } catch {
@@ -428,7 +471,7 @@ async function probeSite(site: ResolvedSite, username: string, hints?: { name?: 
       if (res.status === 200 || res.status === 404 || res.status === 410) {
         const text = res.status === 200 ? (await res.text().catch(() => '')).slice(0, 300_000) : '';
         usedFallback = true;
-        outcome = { status: res.status, body: text, url: fbUrl, via: 'egress', note: 'API rate-limited — classified via HTML page' };
+        outcome = { status: res.status, body: text, url: fbUrl, finalUrl: res.url || fbUrl, via: 'egress', note: 'API rate-limited — classified via HTML page' };
       }
     } catch { /* fallback failed — escalate to Tor */ }
   }
@@ -443,9 +486,9 @@ async function probeSite(site: ResolvedSite, username: string, hints?: { name?: 
   //   rate-limit/block the shared proxy and Tor exits. Marked on the hit. —
   if (!outcome && directAllowed()) {
     try {
-      const needsBody = (usedFallback ? (site.fallbackProbeType || site.effectiveProbeType) : site.effectiveProbeType) !== 'status';
       const probeUrl = (usedFallback ? site.fallbackProbeUrlTemplate : site.probeUrlTemplate)?.replaceAll('{u}', enc) || url;
-      outcome = await probeDirect(probeUrl, needsBody);
+      const bodyNeeded = needsBody((usedFallback ? site.fallbackProbeType : site.effectiveProbeType) || 'status');
+      outcome = await probeDirect(probeUrl, bodyNeeded);
     } catch { /* direct failed too */ }
   }
 
@@ -486,14 +529,28 @@ export interface SweepResult {
   /** Per-site probe results (found/absent/unknown) — the sources-consulted audit trail. */
   details: UsernameHit[];
   durationMs: number;
+  /** Sites left unprobed because the username cannot exist there (Sherlock regexCheck). */
+  skippedByShape: string[];
 }
 
 /** Concurrent username sweep across the public-profile catalog (Sherlock-style, keyless).
  *  `customSites` (test/harness hook) probes caller-supplied site specs instead of the
- *  catalog — used by the unit tests to exercise the classifier against a local stub. */
+ *  catalog — used by the unit tests to exercise the classifier against a local stub.
+ *
+ *  `catalog` selects the breadth: 'curated' (hand-probed, fastest, cleanest signals),
+ *  'sherlock' (the vendored Sherlock database only), or 'full' (curated + Sherlock).
+ *  Adult platforms are catalogued but excluded unless 'adult' is asked for explicitly. */
 export async function runUsernameSweep(
   usernameRaw: string,
-  opts: { sites?: string[]; categories?: OsintSiteCategory[]; limit?: number; customSites?: OsintSite[]; hints?: { name?: string } } = {}
+  opts: {
+    sites?: string[];
+    categories?: OsintSiteCategory[];
+    limit?: number;
+    customSites?: OsintSite[];
+    hints?: { name?: string };
+    catalog?: 'curated' | 'sherlock' | 'full';
+    includeAdult?: boolean;
+  } = {}
 ): Promise<SweepResult> {
   const started = Date.now();
   const username = validateUsername(usernameRaw);
@@ -503,7 +560,17 @@ export async function runUsernameSweep(
   if (opts.customSites?.length) {
     sites = opts.customSites.map(resolveSite);
   } else {
-    sites = OSINT_SITES.map(resolveSite);
+    const mode = opts.catalog || 'full';
+    if (mode === 'curated') {
+      sites = OSINT_SITES.map(resolveSite);
+    } else {
+      const merged = getMergedSiteCatalog();
+      const pool = mode === 'sherlock' ? merged.catalog.filter((s) => s.source === 'sherlock') : merged.catalog;
+      sites = pool.map(resolveSite);
+    }
+    if (!opts.includeAdult && !opts.categories?.includes('adult')) {
+      sites = sites.filter((s) => !s.adult && s.category !== 'adult');
+    }
     if (opts.sites?.length) {
       const wanted = new Set(opts.sites.map((s) => s.toLowerCase()));
       sites = sites.filter((s) => wanted.has(s.name.toLowerCase()));
@@ -532,6 +599,9 @@ export async function runUsernameSweep(
     checked: results.length,
     details: results,
     durationMs: Date.now() - started,
+    skippedByShape: results
+      .filter((r) => r.status === 'unknown' && r.note?.includes('cannot exist on this platform'))
+      .map((r) => r.site),
   };
 }
 
@@ -1286,8 +1356,14 @@ export interface OsintDossier {
   sourcesChecked: { name: string; status: 'found' | 'absent' | 'unknown'; confidence: string; url?: string }[];
   /** Sanctions / watchlist / wanted-notice screening (name subjects). */
   screening?: ScreeningResult;
-  /** Search-result mining runs (per query). */
-  searchExtraction: { query: string; via: string; found: number }[];
+  /** Search-result mining runs (per query) — the RESULT PAGES are fetched and parsed,
+   *  so mined counts reflect real page text (emails/phones/addresses), not SERP links.
+   *  `hits` keeps per-page provenance (page + what was mined from it). */
+  searchExtraction: {
+    query: string; via: string; found: number; pagesFetched: number;
+    emails: number; phones: number; addresses: number;
+    hits: { url: string; title: string; emails: string[]; phones: string[]; addresses: string[] }[];
+  }[];
   /** Public-records person records (browser-rendered page mining). */
   peopleRecords: PersonRecord[];
   /** Operator-ready markdown report (the DETAILED REPORT section). */
@@ -2022,7 +2098,20 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
   for (const { q, kind } of searchQueries.slice(0, 3)) {
     const extraction = await searchExtract(q).catch(() => null);
     if (!extraction) continue;
-    dossier.searchExtraction.push({ query: q, via: extraction.via, found: extraction.results.length });
+    dossier.searchExtraction.push({
+      query: q, via: extraction.via, found: extraction.results.length,
+      pagesFetched: extraction.mined.filter((m) => m.fetched).length,
+      emails: extraction.extracted.emails.length,
+      phones: extraction.extracted.phones.length,
+      addresses: extraction.extracted.addresses.length,
+      hits: extraction.mined
+        .filter((m) => m.fetched && (m.emails.length || m.phones.length || m.addresses.length))
+        .slice(0, 6)
+        .map((m) => ({
+          url: m.url, title: m.title.slice(0, 120),
+          emails: m.emails.slice(0, 6), phones: m.phones.slice(0, 4), addresses: m.addresses.slice(0, 4),
+        })),
+    });
     for (const e of extraction.extracted.emails) {
       if (!emails.includes(e)) {
         emails.push(e);
@@ -2033,6 +2122,12 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
       if (!phones.includes(p)) {
         phones.push(p);
         identities.push({ source: `search:${kind}`, detail: `phone mined from search results: ${p}` });
+      }
+    }
+    for (const a of extraction.extracted.addresses) {
+      if (!addresses.some((x) => x.toLowerCase() === a.toLowerCase())) {
+        addresses.push(a);
+        identities.push({ source: `search:${kind}`, detail: `address mined from search result pages: ${a}` });
       }
     }
     for (const sUrl of extraction.extracted.socialUrls) {
@@ -2173,7 +2268,7 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
 
 /** Fetch any URL through the local Tor circuit (clearnet or .onion) — used by the
  *  screening lane as the second path when a source WAF-blocks our primary egress. */
-export async function torFetchAny(urlRaw: string, maxBytes = 400_000): Promise<{ url: string; status: number; body: string }> {
+export async function torFetchAny(urlRaw: string, maxBytes = 400_000): Promise<{ url: string; finalUrl: string; status: number; body: string }> {
   const url = urlRaw.trim();
   if (!/^https?:\/\//i.test(url)) throw new Error('http(s) URL required');
   const tor = await torStatus();
@@ -2182,7 +2277,7 @@ export async function torFetchAny(urlRaw: string, maxBytes = 400_000): Promise<{
   try {
     const out = await execFileP(
       'curl',
-      ['--socks5-hostname', `127.0.0.1:${tor.port}`, '-sL', '--max-time', '40', '-A', UA, '-H', 'Accept: application/json,text/html;q=0.9,*/*;q=0.8', '-w', '\\n__T3MP3ST_STATUS__%{http_code}', url],
+      ['--socks5-hostname', `127.0.0.1:${tor.port}`, '-sL', '--max-time', '40', '-A', UA, '-H', 'Accept: application/json,text/html;q=0.9,*/*;q=0.8', '-w', '\\n__T3MP3ST_STATUS__%{http_code} %{url_effective}', url],
       { timeout: 45_000, maxBuffer: 32 * 1024 * 1024 }
     );
     stdout = out.stdout;
@@ -2320,14 +2415,33 @@ export async function screenSubject(nameRaw: string): Promise<ScreeningResult> {
 
 export interface SearchResultItem { title: string; url: string; snippet: string }
 
+/** Bing wraps every SERP link in a /ck/a redirect carrying the destination base64url-
+ *  encoded in `u` (optionally prefixed "a1"). Decode to the real URL so the mined
+ *  pages are the actual destinations, not Bing's JS redirect stubs. */
+export function decodeBingRedirect(url: string): string {
+  if (!/bing\.com\/ck\/a/i.test(url)) return url;
+  try {
+    const u = new URL(url).searchParams.get('u');
+    if (!u) return url;
+    let b64 = u.startsWith('a1') ? u.slice(2) : u;
+    b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+    const decoded = Buffer.from(b64 + pad, 'base64').toString('utf8');
+    return /^https?:\/\//i.test(decoded) ? decoded : url;
+  } catch {
+    return url;
+  }
+}
+
 /** Parse Bing SERP HTML into result items (exported for unit tests). */
 export function parseBingResults(html: string, max = 20): SearchResultItem[] {
   const out: SearchResultItem[] = [];
   const blocks = html.split('<li class="b_algo').slice(1);
   for (const block of blocks) {
-    const anchor = block.match(/<h2[^>]*><a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    const anchor = block.match(/<h2[^>]*><a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
     if (!anchor) continue;
-    const url = anchor[1].replace(/&amp;/g, '&');
+    const url = decodeBingRedirect(anchor[1].replace(/&amp;/g, '&'));
+    if (!/^https?:\/\//i.test(url)) continue;
     const title = anchor[2].replace(/<[^>]+>/g, '').trim().slice(0, 200);
     const pMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
     const snippet = pMatch ? pMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 400) : '';
@@ -2340,17 +2454,24 @@ export function parseBingResults(html: string, max = 20): SearchResultItem[] {
 export interface ExtractedContacts {
   emails: string[];
   phones: string[];
+  addresses: string[];
   socialUrls: string[];
 }
 
 const EMAIL_RE_GLOBAL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
 const PHONE_RE_GLOBAL = /(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/g;
 const SOCIAL_URL_RE = /https?:\/\/(?:www\.)?(github\.com|t\.me|twitter\.com|x\.com|instagram\.com|facebook\.com|linkedin\.com|tiktok\.com|youtube\.com|reddit\.com|soundcloud\.com|keybase\.io)\/[A-Za-z0-9_.\-/@]+/g;
+// US-style street addresses, optionally with city/state/ZIP tail on the same line.
+const ADDRESS_RE_GLOBAL = /\b(?:P\.?\s?O\.?\s?Box\s+\d+|\d{1,6}\s+(?:[A-Z0-9][A-Za-z0-9'.\-]*\s+){0,6}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|Lane|Ln|Court|Ct|Circle|Cir|Way|Place|Pl|Terrace|Ter|Parkway|Pkwy|Highway|Hwy|Square|Sq|Trail|Trl))\b(?:[^<\n]{0,60}?\b[A-Z][A-Za-z.\- ]{1,24},\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\s+\d{5}(?:-\d{4})?)?/g;
 
-/** Extract contact signals from arbitrary text (titles/snippets/URLs). */
+const ADDRESS_JUNK = /(?:v?\d+\.\d+\.\d+|\b(?:lorem|ipsum|example|placeholder|your\s+company|n\/a)\b|copyright|all rights reserved|privacy policy)/i;
+
+/** Extract contact signals from arbitrary text (titles/snippets/URLs/page bodies). */
 export function extractContacts(text: string): ExtractedContacts {
   const emails = new Set<string>();
   const phones = new Set<string>();
+  const addresses = new Set<string>();
+  const phoneKeys = new Set<string>();
   const socials = new Set<string>();
   for (const m of text.match(EMAIL_RE_GLOBAL) || []) {
     const e = m.toLowerCase().replace(/\.$/, '');
@@ -2359,19 +2480,103 @@ export function extractContacts(text: string): ExtractedContacts {
     emails.add(e);
   }
   for (const m of text.match(PHONE_RE_GLOBAL) || []) {
+    // Mixed separators (e.g. "762-139.6503") are version strings, not phone numbers.
+    if (m.includes('-') && m.includes('.')) continue;
     const digits = m.replace(/\D/g, '');
-    if (digits.length === 11 && digits.startsWith('1')) phones.add(m.trim());
-    else if (digits.length === 10 && !/^(19|20)\d{2}/.test(digits)) phones.add(m.trim());
+    if (digits.length === 11 && digits.startsWith('1')) { if (!phoneKeys.has(digits)) { phoneKeys.add(digits); phones.add(m.trim()); } }
+    else if (digits.length === 10 && !/^(19|20)\d{2}/.test(digits)) { if (!phoneKeys.has(digits)) { phoneKeys.add(digits); phones.add(m.trim()); } }
+  }
+  for (const m of text.match(ADDRESS_RE_GLOBAL) || []) {
+    const a = m.replace(/\s+/g, ' ').replace(/[.,;)]+$/, '').trim();
+    if (a.length < 6 || a.length > 120) continue;
+    if (ADDRESS_JUNK.test(a)) continue;
+    // Needs at least one street number and a street suffix — kills CSS/JS/version noise.
+    if (!/^\s*(?:P\.?\s?O\.?\s?Box\s+\d+|\d{1,6}\s)/i.test(a)) continue;
+    addresses.add(a);
   }
   for (const m of text.match(SOCIAL_URL_RE) || []) {
     const clean = m.replace(/[.,)]+$/, '');
     if (clean.split('/').filter(Boolean).length >= 2) socials.add(clean);
   }
-  return { emails: [...emails], phones: [...phones], socialUrls: [...socials] };
+  return { emails: [...emails], phones: [...phones], addresses: [...addresses], socialUrls: [...socials] };
 }
 
-/** Run a Bing search and extract contact signals from the results. */
-export async function searchExtract(queryRaw: string): Promise<{ query: string; via: string; results: SearchResultItem[]; extracted: ExtractedContacts }> {
+/** Strip a fetched HTML page down to visible-ish text for contact mining. */
+export function htmlToText(html: string, maxChars = 200_000): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<\/(?:p|div|li|tr|h[1-6]|br|section|article)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/[ \t]+/g, ' ')
+    .slice(0, maxChars);
+}
+
+export interface MinedPage {
+  url: string;
+  title: string;
+  fetched: boolean;
+  emails: string[];
+  phones: string[];
+  addresses: string[];
+  socialUrls: string[];
+}
+
+const SEARCH_PAGE_FETCHERS: Array<(url: string) => Promise<string | null>> = [
+  async (url) => {
+    const res = await osintFetch(url, { signal: AbortSignal.timeout(8000), headers: { 'accept-language': 'en-US,en' } });
+    return res.status === 200 ? await res.text() : null;
+  },
+  async (url) => {
+    const tor = await torStatus();
+    if (!tor.available) return null;
+    const page = await torFetchAny(url);
+    return page.status === 200 ? page.body : null;
+  },
+  async (url) => {
+    if (!directAllowed()) return null;
+    const res = await directFetch(url, { signal: AbortSignal.timeout(8000) } as never);
+    return res.status === 200 ? await res.text() : null;
+  },
+];
+
+/** Fetch one search-result page through the egress→Tor→direct chain and mine its
+ *  content for emails / phones / addresses / socials. Mines BOTH the cleaned text
+ *  AND the raw HTML — contact data usually lives in mailto:/tel: attributes and
+ *  JSON-LD blocks that text-stripping removes. */
+export async function mineResultPage(url: string, title: string, fetchers = SEARCH_PAGE_FETCHERS): Promise<MinedPage> {
+  const empty: MinedPage = { url, title, fetched: false, emails: [], phones: [], addresses: [], socialUrls: [] };
+  for (const f of fetchers) {
+    const html = await f(url).catch(() => null);
+    if (!html) continue;
+    const exText = extractContacts(htmlToText(html));
+    const exRaw = extractContacts(html);
+    return {
+      url, title, fetched: true,
+      emails: MERGE_UNIQUE(exText.emails, exRaw.emails).slice(0, 12),
+      phones: MERGE_UNIQUE(exText.phones, exRaw.phones).slice(0, 8),
+      addresses: MERGE_UNIQUE(exText.addresses, exRaw.addresses).slice(0, 8),
+      socialUrls: MERGE_UNIQUE(exText.socialUrls, exRaw.socialUrls).slice(0, 10),
+    };
+  }
+  return empty;
+}
+
+const MERGE_UNIQUE = (a: string[], b: string[]): string[] => [...a, ...b.filter((x) => !a.includes(x))];
+
+/** Run a Bing search, then PARSE the linked result pages themselves for contact data —
+ *  addresses, phones and emails mined from full page text, not just SERP snippets. */
+export async function searchExtract(queryRaw: string, opts: { maxPages?: number } = {}): Promise<{
+  query: string;
+  via: string;
+  results: SearchResultItem[];
+  extracted: ExtractedContacts;
+  mined: MinedPage[];
+}> {
   const query = queryRaw.trim().slice(0, 200);
   if (!query) throw new Error('query required');
   const attempts: Array<() => Promise<string | null>> = [
@@ -2394,10 +2599,21 @@ export async function searchExtract(queryRaw: string): Promise<{ query: string; 
     if (!html) continue;
     const results = parseBingResults(html);
     if (results.length === 0) continue;
-    const corpus = results.map((r) => `${r.title} ${r.snippet} ${r.url}`).join('\n');
-    return { query, via: 'bing', results, extracted: extractContacts(corpus) };
+    // Cheap pre-pass: snippets sometimes carry a contact line.
+    const snippetExtract = extractContacts(results.map((r) => `${r.title} ${r.snippet} ${r.url}`).join('\n'));
+    // The real pass: fetch and mine the top result pages' full text (bounded, parallel).
+    const maxPages = Math.max(0, Math.min(opts.maxPages ?? 8, 12));
+    const targets = results.slice(0, maxPages);
+    const mined = await Promise.all(targets.map((r) => mineResultPage(r.url, r.title).catch(() => ({ url: r.url, title: r.title, fetched: false, emails: [], phones: [], addresses: [], socialUrls: [] } as MinedPage))));
+    const extracted: ExtractedContacts = {
+      emails: MERGE_UNIQUE(snippetExtract.emails, mined.flatMap((m) => m.emails)),
+      phones: MERGE_UNIQUE(snippetExtract.phones, mined.flatMap((m) => m.phones)),
+      addresses: MERGE_UNIQUE(snippetExtract.addresses, mined.flatMap((m) => m.addresses)),
+      socialUrls: MERGE_UNIQUE(snippetExtract.socialUrls, mined.flatMap((m) => m.socialUrls)),
+    };
+    return { query, via: 'bing', results, extracted, mined };
   }
-  return { query, via: 'blocked', results: [], extracted: { emails: [], phones: [], socialUrls: [] } };
+  return { query, via: 'blocked', results: [], extracted: { emails: [], phones: [], addresses: [], socialUrls: [] }, mined: [] };
 }
 
 // =============================================================================
