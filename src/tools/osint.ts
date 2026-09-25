@@ -3248,6 +3248,8 @@ export interface MinedPage {
   phones: string[];
   addresses: string[];
   socialUrls: string[];
+  /** Bounded visible-text snippet (first ~2k chars) — feeds the optional LLM assist. */
+  text?: string;
 }
 
 const SEARCH_PAGE_FETCHERS: Array<(url: string) => Promise<string | null>> = [
@@ -3285,6 +3287,7 @@ export async function mineResultPage(url: string, title: string, fetchers = SEAR
       phones: MERGE_UNIQUE(exText.phones, exRaw.phones).slice(0, 8),
       addresses: MERGE_UNIQUE(exText.addresses, exRaw.addresses).slice(0, 8),
       socialUrls: MERGE_UNIQUE(exText.socialUrls, exRaw.socialUrls).slice(0, 10),
+      text: htmlToText(html, 2200),
     };
   }
   return empty;
@@ -3482,14 +3485,14 @@ export async function llmAssistAcross(
   const emails: string[] = []; const phones: string[] = []; const addresses: string[] = [];
   for (const m of pages) {
     // Re-fetch is avoided: the regex lane already validated what the page text
-    // contains; the assist gets a bounded slice of the mined summary + URL to
-    // reason over. (Full-text re-fetch would double the request budget.)
+    // The assist reasons over the page's own visible text (bounded slice kept by
+    // the miner), not a re-fetch — and never over the regex list alone.
     const prompt = [
       `Page: ${m.title || m.url}`,
       `URL: ${m.url}`,
       'Page text (may be truncated):',
-      htmlToText((m as unknown as { html?: string }).html || m.title || '', chars),
-      'Regex pre-pass already found (verify/extend, do not trust blindly):',
+      (m.text || m.title || '').slice(0, chars),
+      'Regex pre-pass already found (verify/extend; copy verbatim, do not invent):',
       `emails: ${m.emails.join(', ') || 'none'} | phones: ${m.phones.join(', ') || 'none'} | addresses: ${m.addresses.join(', ') || 'none'}`,
     ].join('\n');
     const raw = await chat(LLM_EXTRACT_SYSTEM, prompt).catch(() => '');

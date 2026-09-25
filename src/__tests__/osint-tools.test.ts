@@ -495,3 +495,23 @@ describe('ShadowDragon steps 3+5 (correlation + historical recovery)', () => {
     expect(bioTokens('the the and about').size).toBe(0);
   });
 });
+describe('local-LLM assist layer (unverified second opinion)', () => {
+  it('parseLlmContactJson tolerates fences + prose and re-validates formats', async () => {
+    const { parseLlmContactJson } = await import('../tools/osint.js');
+    const fence = String.fromCharCode(96).repeat(3);
+    const raw = 'Here you go:' + fence + 'json' + String.fromCharCode(10) + JSON.stringify({ emails: ['a@b.co', 'not an email'], phones: ['(212) 555-1234'], addresses: ['350 Fifth Ave, New York, NY 10118'] }) + String.fromCharCode(10) + fence;
+    const ok = parseLlmContactJson(raw);
+    expect(ok.emails).toContain('a@b.co');
+    expect(ok.emails).toHaveLength(1); // the non-email died format validation
+    expect(ok.phones).toContain('(212) 555-1234');
+    expect(ok.addresses.some((a) => a.includes('350 Fifth Ave'))).toBe(true);
+    expect(parseLlmContactJson('no json here').emails).toHaveLength(0);
+  });
+
+  it('llmAssistAcross returns empty without pages (never throws)', async () => {
+    const { llmAssistAcross } = await import('../tools/osint.js');
+    const out = await llmAssistAcross([{ url: 'x', title: 'x', fetched: false, emails: [], phones: [], addresses: [], socialUrls: [] }], async () => '{}');
+    expect(out.pages).toBe(0);
+    expect(out.emails).toHaveLength(0);
+  });
+});
