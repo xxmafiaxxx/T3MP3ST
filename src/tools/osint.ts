@@ -14,6 +14,7 @@
 import { createHash } from 'crypto';
 import { promises as dns } from 'dns';
 import { directFetch } from '../net/proxy.js';
+import { buildSherlockMergedCatalog } from './sherlock-sites.js';
 import type { Credential, CustomTool } from '../types/index.js';
 
 const UA =
@@ -168,6 +169,19 @@ export const OSINT_SITES: OsintSite[] = [
   { name: 'Ko-fi', category: 'money', urlTemplate: 'https://ko-fi.com/{u}', probeUrlTemplate: 'https://ko-fi.com/{u}', probeType: 'status', reliability: 'medium' },
   { name: 'Buy Me a Coffee', category: 'money', urlTemplate: 'https://buymeacoff.ee/{u}', probeUrlTemplate: 'https://buymeacoff.ee/{u}', probeType: 'status', reliability: 'medium' },
 ];
+
+// =============================================================================
+// SHERLOCK MERGE — the curated catalog above plus the vendored Sherlock database
+// (tools/sherlock/data.json). Curated entries win on name collision because they
+// carry API probes + identity corroboration a generic page check cannot.
+// Cached once per process; the database is ~480 entries and read from disk.
+// =============================================================================
+let mergedCatalogCache: ReturnType<typeof buildSherlockMergedCatalog> | null = null;
+
+export function getMergedSiteCatalog() {
+  if (!mergedCatalogCache) mergedCatalogCache = buildSherlockMergedCatalog(OSINT_SITES);
+  return mergedCatalogCache;
+}
 
 // Steam's probe is inverted (the marker string means ABSENT) — encode via a
 // dedicated probeType so the classifier stays dumb and correct.
@@ -449,7 +463,7 @@ async function probeSite(site: ResolvedSite, username: string, hints?: { name?: 
 
   // A body is needed whenever the classifier reads it — including the Sherlock
   // soft-404 marker list, which rides on a 2xx response.
-  const needsBody = (t: OsintSite['probeType']) =>
+  const needsBody = (t: OsintSite['probeType'] | 'body_missing') =>
     t !== 'status' || Boolean(site.absentMarkers?.length) || Boolean(site.absentRedirectPrefix);
 
   // — Pass 1: primary probe over normal egress —
@@ -1365,6 +1379,10 @@ export interface OsintDossier {
     hits: { url: string; title: string; emails: string[]; phones: string[]; addresses: string[] }[];
   }[];
   /** Public-records person records (browser-rendered page mining). */
+  /** ShadowDragon Step 3 — cross-platform verification signals (same avatar, shared bio). */
+  socialSignals: SocialCorrelationSignal[];
+  /** ShadowDragon Step 5 — Wayback recovery of deleted profile pages, mined for contacts. */
+  historicalRecovery: { url: string; snapshotCount: number; recoveredAt?: string; recoveredUrl?: string; emails: string[]; phones: string[]; addresses: string[] }[];
   peopleRecords: PersonRecord[];
   /** Operator-ready markdown report (the DETAILED REPORT section). */
   report: string;
@@ -1977,6 +1995,8 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     geoPoints: [],
     sourcesChecked,
     searchExtraction: [],
+    socialSignals: [],
+    historicalRecovery: [],
     peopleRecords: [],
     report: '',
     identities,
@@ -2253,6 +2273,56 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
   }
 
   dossier.socialAccounts = kept.sort((a, b) => weight(b) - weight(a));
+
+  // ── ShadowDragon Step 3 — cross-platform correlation on the FOUND accounts ──
+  // Two signals beyond name-match: the same profile image reused across
+  // platforms, and shared bio wording (city/employer/school). Fingerprints are
+  // computed for a bounded set of accounts that expose a public avatar.
+  if (dossier.socialAccounts.length >= 2) {
+    const withImages = dossier.socialAccounts
+      .filter((a) => a.profile?.imageUrl)
+      .slice(0, 10);
+    const fps = await Promise.all(withImages.map(async (a) => ({
+      site: a.site, url: a.url, bio: a.profile?.bio || a.profile?.displayName || null,
+      avatarFingerprint: await avatarFingerprint(a.profile!.imageUrl!).catch(() => null),
+    })));
+    dossier.socialSignals = correlateSocialSignals([
+      ...fps,
+      ...dossier.socialAccounts.map((a) => ({ site: a.site, url: a.url, bio: a.profile?.bio || a.profile?.displayName || null, avatarFingerprint: null })),
+    ]);
+    for (const sig of dossier.socialSignals) {
+      identities.push({
+        source: 'correlation',
+        detail: sig.kind === 'avatar'
+          ? `same profile image across ${sig.accounts.length} platforms (${sig.accounts.map((a) => a.site).join(', ')}) — strongest cross-platform link`
+          : `shared bio term "${sig.value}" across ${sig.accounts.map((a) => a.site).join(', ')}`,
+      });
+    }
+  }
+
+  // ── ShadowDragon Step 5 — historical recovery on corroborated profiles ──
+  // Deleted bios/pages are archived; the Wayback snapshot body is mined for
+  // contact data. Bounded to the top corroborated accounts (skip handle-only).
+  const recoveryTargets = dossier.socialAccounts.filter((a) => a.identity !== 'handle-only').slice(0, 3);
+  for (const acct of recoveryTargets) {
+    const rec = await historicalProfileRecovery(acct.url).catch(() => null);
+    if (!rec || rec.snapshots.length === 0) continue;
+    dossier.historicalRecovery.push({
+      url: rec.url, snapshotCount: rec.snapshots.length,
+      recoveredAt: rec.recoveredAt, recoveredUrl: rec.recoveredUrl,
+      emails: rec.mined.emails.slice(0, 8), phones: rec.mined.phones.slice(0, 5), addresses: rec.mined.addresses.slice(0, 5),
+    });
+    for (const e of rec.mined.emails) {
+      if (!emails.includes(e)) { emails.push(e); identities.push({ source: `wayback:${acct.site}`, detail: `email in archived snapshot ${rec.recoveredAt}: ${e}` }); }
+    }
+    for (const p of rec.mined.phones) {
+      if (!phones.includes(p)) { phones.push(p); identities.push({ source: `wayback:${acct.site}`, detail: `phone in archived snapshot ${rec.recoveredAt}: ${p}` }); }
+    }
+    for (const a of rec.mined.addresses) {
+      if (!addresses.some((x) => x.toLowerCase() === a.toLowerCase())) { addresses.push(a); identities.push({ source: `wayback:${acct.site}`, detail: `address in archived snapshot ${rec.recoveredAt}: ${a}` }); }
+    }
+  }
+
   dossier.dorks = personDorks({
     name: dossier.name,
     email,
@@ -2289,8 +2359,13 @@ export async function torFetchAny(urlRaw: string, maxBytes = 400_000): Promise<{
   }
   const marker = stdout.lastIndexOf('__T3MP3ST_STATUS__');
   const body = (marker >= 0 ? stdout.slice(0, marker) : stdout).slice(0, maxBytes);
-  const status = marker >= 0 ? parseInt(stdout.slice(marker + 18).trim(), 10) || 0 : 0;
-  return { url, status, body };
+  const tail = marker >= 0 ? stdout.slice(marker + 18).trim() : '0';
+  const sp = tail.indexOf(' ');
+  const status = parseInt(sp >= 0 ? tail.slice(0, sp) : tail, 10) || 0;
+  // %{url_effective} — the post-redirect URL, which is the signal for sites that
+  // bounce a missing profile onto an error page (Sherlock errorType: response_url).
+  const finalUrl = sp >= 0 ? tail.slice(sp + 1).trim() : url;
+  return { url, finalUrl: finalUrl || url, status, body };
 }
 
 /** Fetch with automatic Tor fallback: primary egress first, Tor circuit when the
@@ -2568,6 +2643,152 @@ export async function mineResultPage(url: string, title: string, fetchers = SEAR
 
 const MERGE_UNIQUE = (a: string[], b: string[]): string[] => [...a, ...b.filter((x) => !a.includes(x))];
 
+// =============================================================================
+// SHADOWDRAGON 5-STEP METHOD — Step 3 (correlation) + Step 5 (historical recovery)
+// Step 3 adds the strongest verification signals beyond name-match: the SAME
+// profile image reused across platforms, and overlapping bio tokens (city /
+// employer / school wording). Three or more agreeing signals = high confidence.
+// Step 5 recovers what a subject deleted: Wayback CDX snapshot listing + the
+// archived page body — old bios/pages classically leak emails, phones and
+// addresses. Public archive data only; nothing behind a login is touched.
+// =============================================================================
+
+export interface ArchiveSnapshot { timestamp: string; url: string; status: string; digest?: string }
+
+/** Parse Wayback CDX JSON (row 0 is the header) into snapshot records. */
+export function parseCdxSnapshots(json: unknown): ArchiveSnapshot[] {
+  if (!Array.isArray(json) || json.length < 2) return [];
+  const header = (json[0] as unknown[]).map((h) => String(h));
+  const iTs = header.indexOf('timestamp');
+  const iUrl = header.indexOf('original');
+  const iSt = header.indexOf('statuscode');
+  const iDg = header.indexOf('digest');
+  if (iTs === -1 || iUrl === -1) return [];
+  const out: ArchiveSnapshot[] = [];
+  for (const row of json.slice(1)) {
+    if (!Array.isArray(row)) continue;
+    const status = iSt !== -1 ? String(row[iSt]) : '';
+    if (status && status !== '200') continue;
+    out.push({
+      timestamp: String(row[iTs] || ''),
+      url: String(row[iUrl] || ''),
+      status: status || '200',
+      digest: iDg !== -1 && row[iDg] ? String(row[iDg]) : undefined,
+    });
+  }
+  return out.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+export interface HistoricalRecovery {
+  url: string;
+  snapshots: ArchiveSnapshot[];
+  recoveredAt?: string;
+  recoveredUrl?: string;
+  recoveredText?: string;
+  mined: ExtractedContacts;
+  note?: string;
+}
+
+/** Wayback CDX lane: list snapshots for a profile/page URL, fetch the most recent
+ *  one and mine its body (emails/phones/addresses/socials) — deleted-page recovery. */
+export async function historicalProfileRecovery(urlRaw: string, opts: { limit?: number; fetchRaw?: (u: string) => Promise<string | null> } = {}): Promise<HistoricalRecovery> {
+  const url = urlRaw.trim();
+  if (!/^https?:\/\//i.test(url)) throw new Error(`URL required (http/https): ${urlRaw}`);
+  const fetchRaw = opts.fetchRaw || (async (u: string) => {
+    try {
+      const res = await osintFetch(u, { signal: AbortSignal.timeout(15_000) });
+      return res.status === 200 ? await res.text() : null;
+    } catch { return null; }
+  });
+  const limit = Math.max(1, Math.min(opts.limit ?? 25, 100));
+  const cdxUrl = `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(url)}&output=json&fl=timestamp,original,statuscode,digest&filter=statuscode:200&collapse=digest&limit=${limit}`;
+  const cdxText = await fetchRaw(cdxUrl);
+  if (!cdxText) return { url, snapshots: [], mined: { emails: [], phones: [], addresses: [], socialUrls: [] }, note: 'Wayback CDX unreachable' };
+  let snapshots: ArchiveSnapshot[] = [];
+  try { snapshots = parseCdxSnapshots(JSON.parse(cdxText)); } catch { /* malformed */ }
+  if (snapshots.length === 0) {
+    return { url, snapshots: [], mined: { emails: [], phones: [], addresses: [], socialUrls: [] }, note: 'no archived snapshots for this URL' };
+  }
+  const latest = snapshots[snapshots.length - 1];
+  const wbUrl = `https://web.archive.org/web/${latest.timestamp}id_/${latest.url}`;
+  const pageText = await fetchRaw(wbUrl);
+  const mined = pageText ? extractContacts(htmlToText(pageText)) : { emails: [], phones: [], addresses: [], socialUrls: [] };
+  const recoveredText = pageText ? htmlToText(pageText).replace(/\s+/g, ' ').trim().slice(0, 600) : undefined;
+  return {
+    url, snapshots,
+    recoveredAt: latest.timestamp,
+    recoveredUrl: wbUrl,
+    recoveredText: recoveredText && recoveredText.length > 40 ? recoveredText : undefined,
+    mined,
+    note: pageText ? undefined : 'snapshot listed but body fetch failed (rate limit or JS-only page)',
+  };
+}
+
+export function avatarFingerprintBytes(buf: Uint8Array): string {
+  return createHash('sha256').update(buf).digest('hex').slice(0, 16);
+}
+
+/** Fingerprint a public profile image (bytes hash) — identical hashes on different
+ *  platforms = the same photo reused = the strongest single identity link. */
+export async function avatarFingerprint(imageUrl: string, opts: { fetcher?: (u: string) => Promise<ArrayBuffer | null> } = {}): Promise<string | null> {
+  if (!/^https?:\/\//i.test(imageUrl)) return null;
+  const fetcher = opts.fetcher || (async (u: string) => {
+    const legs: Array<() => Promise<{ status: number; arrayBuffer: () => Promise<ArrayBuffer> } | null>> = [
+      async () => { const r = await osintFetch(u, { signal: AbortSignal.timeout(8000) }); return r.status === 200 ? r : null; },
+      async () => { if (!directAllowed()) return null; const r = await directFetch(u, { signal: AbortSignal.timeout(8000) } as never); return r.status === 200 ? r : null; },
+    ];
+    for (const leg of legs) { const r = await leg().catch(() => null); if (r) return r; }
+    return null;
+  });
+  try {
+    const fetched = await fetcher(imageUrl);
+    if (!fetched) return null;
+    // Default fetcher yields a structural Response-like; injected test fetchers yield ArrayBuffer.
+    const buf = fetched instanceof ArrayBuffer ? fetched : await (fetched as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
+    return avatarFingerprintBytes(new Uint8Array(buf.slice(0, 1_500_000)));
+  } catch { return null; }
+}
+
+const BIO_STOPWORDS = new Set(['about', 'their', 'there', 'these', 'those', 'with', 'from', 'have', 'been', 'were', 'they', 'them', 'your', 'what', 'when', 'will', 'would', 'could', 'should', 'and', 'the', 'for', 'you', 'not', 'but', 'all', 'can', 'just', 'like', 'more', 'than', 'then', 'some', 'only', 'over', 'into', 'also', 'here', 'that', 'this', 'was', 'are', 'our', 'out', 'get', 'has', 'his', 'her', 'him', 'she']);
+
+export function bioTokens(bio?: string | null): Set<string> {
+  const out = new Set<string>();
+  for (const t of (bio || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)) {
+    if (t.length >= 4 && !BIO_STOPWORDS.has(t) && !/^\d+$/.test(t)) out.add(t);
+  }
+  return out;
+}
+
+export interface SocialCorrelationSignal { kind: 'avatar' | 'bio'; value: string; accounts: { site: string; url: string }[] }
+
+/** Step-3 correlation across FOUND accounts: identical avatar bytes, or shared bio
+ *  tokens (city / employer / school wording), spanning DIFFERENT platforms. */
+export function correlateSocialSignals(accounts: { site: string; url: string; avatarFingerprint?: string | null; bio?: string | null }[]): SocialCorrelationSignal[] {
+  const out: SocialCorrelationSignal[] = [];
+  const byAvatar = new Map<string, { site: string; url: string }[]>();
+  for (const a of accounts) {
+    if (!a.avatarFingerprint) continue;
+    const list = byAvatar.get(a.avatarFingerprint) || [];
+    list.push({ site: a.site, url: a.url });
+    byAvatar.set(a.avatarFingerprint, list);
+  }
+  for (const [fp, list] of byAvatar) {
+    if (new Set(list.map((x) => x.site)).size >= 2) out.push({ kind: 'avatar', value: fp, accounts: list });
+  }
+  const tokenSites = new Map<string, Map<string, { site: string; url: string }>>();
+  for (const a of accounts) {
+    for (const tok of bioTokens(a.bio)) {
+      const sites = tokenSites.get(tok) || new Map<string, { site: string; url: string }>();
+      if (!sites.has(a.site)) sites.set(a.site, { site: a.site, url: a.url });
+      tokenSites.set(tok, sites);
+    }
+  }
+  for (const [tok, sites] of tokenSites) {
+    if (sites.size >= 2) out.push({ kind: 'bio', value: tok, accounts: [...sites.values()].slice(0, 6) });
+  }
+  return out.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'avatar' ? -1 : 1)).slice(0, 20);
+}
+
 /** Run a Bing search, then PARSE the linked result pages themselves for contact data —
  *  addresses, phones and emails mined from full page text, not just SERP snippets. */
 export async function searchExtract(queryRaw: string, opts: { maxPages?: number } = {}): Promise<{
@@ -2810,6 +3031,9 @@ function fmtSweep(sweep: SweepResult): string {
   return [
     `Username sweep for "${sweep.username}": ${sweep.found.length} found (${corroborated} corroborated as subject, ${mismatched} mismatched) / ${sweep.absent} absent / ${sweep.unknown.length} unknown (${sweep.checked} sites, ${sweep.durationMs}ms)`,
     ...lines,
+    sweep.skippedByShape.length
+      ? `  ${sweep.skippedByShape.length} site(s) not probed — the username cannot exist there (Sherlock regexCheck): ${sweep.skippedByShape.join(', ')}`
+      : '',
     sweep.unknown.length ? `  unknown: ${sweep.unknown.map((u) => u.site).join(', ')}` : '',
   ].filter(Boolean).join('\n');
 }
@@ -2817,19 +3041,24 @@ function fmtSweep(sweep: SweepResult): string {
 export const OSINT_TOOLS: CustomTool[] = [
   {
     name: 'osint_username_sweep',
-    description: 'Sweep a username across 60+ public social/developer/gaming sites (public profile probes, keyless). Returns claimed accounts.',
+    description: 'Sweep a username across ~490 public social/developer/gaming sites (curated probes + the vendored Sherlock platform database, keyless). Returns claimed accounts.',
     category: 'osint',
     parameters: [
       { name: 'username', type: 'string', description: 'Username to sweep (no @)', required: true },
       { name: 'sites', type: 'string', description: 'Comma-separated site names to limit the sweep (default: all)', required: false },
       { name: 'name', type: 'string', description: 'Known full name of the subject — enables identity corroboration on hits (recommended)', required: false },
+      { name: 'catalog', type: 'string', description: 'Catalog breadth: "curated" (fast, hand-probed), "sherlock" (vendored database only), "full" (default — both)', required: false },
+      { name: 'includeAdult', type: 'boolean', description: 'Include adult platforms (excluded by default)', required: false },
     ],
     handler: async (context) => {
       const username = context.parameters.username as string;
       const sites = (context.parameters.sites as string | undefined)?.split(',').map((s) => s.trim()).filter(Boolean);
       const name = context.parameters.name as string | undefined;
+      const catalogRaw = String(context.parameters.catalog || 'full').toLowerCase();
+      const catalog = (['curated', 'sherlock', 'full'].includes(catalogRaw) ? catalogRaw : 'full') as 'curated' | 'sherlock' | 'full';
+      const includeAdult = context.parameters.includeAdult === true;
       try {
-        const sweep = await runUsernameSweep(username, { sites, hints: { name } });
+        const sweep = await runUsernameSweep(username, { sites, hints: { name }, catalog, includeAdult });
         const findings = sweep.found.slice(0, 20).map((h) => ({
           title: `Social Account Found — ${h.site} (${sweep.username})`,
           severity: 'info' as const,
@@ -2986,6 +3215,37 @@ export const OSINT_TOOLS: CustomTool[] = [
         return { success: true, output: lines.join('\n'), findings };
       } catch (error) {
         return { success: false, error: `Infostealer check failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  },
+  {
+    name: 'osint_historical_recovery',
+    description: 'Step-5 historical recovery: list Wayback Machine snapshots for a profile/page URL and mine the newest archived copy for emails, phones, addresses and social links — recovers contact data from deleted bios/pages. Public archive data only.',
+    category: 'osint',
+    parameters: [
+      { name: 'url', type: 'string', description: 'Profile or page URL to recover (e.g. https://github.com/handle)', required: true },
+    ],
+    handler: async (context) => {
+      const url = context.parameters.url as string;
+      try {
+        const rec = await historicalProfileRecovery(url);
+        if (rec.snapshots.length === 0) {
+          return { success: true, output: 'No archived snapshots for ' + url + (rec.note ? ' (' + rec.note + ')' : '') };
+        }
+        const m = rec.mined;
+        const lines = [
+          'Historical recovery — ' + url + ': ' + rec.snapshots.length + ' snapshot(s), oldest ' + rec.snapshots[0].timestamp + ', newest ' + rec.recoveredAt,
+          '  mined from archived copy: ' + m.emails.length + ' email(s), ' + m.phones.length + ' phone(s), ' + m.addresses.length + ' address(es), ' + m.socialUrls.length + ' social link(s)',
+          ...m.emails.slice(0, 8).map((e) => '    ✉ ' + e),
+          ...m.phones.slice(0, 5).map((p) => '    ☎ ' + p),
+          ...m.addresses.slice(0, 5).map((a) => '    📍 ' + a),
+        ];
+        const findings = (m.emails.length || m.phones.length || m.addresses.length)
+          ? [{ title: 'Archived contact data recovered — ' + url, severity: 'medium' as const, details: lines.slice(1).join('; ') }]
+          : [];
+        return { success: true, output: lines.join(String.fromCharCode(10)), findings };
+      } catch (error) {
+        return { success: false, error: 'Historical recovery failed: ' + (error instanceof Error ? error.message : String(error)) };
       }
     },
   },

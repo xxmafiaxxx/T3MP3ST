@@ -41,8 +41,8 @@ describe('osint site catalog', () => {
 });
 
 describe('osint agent tools', () => {
-  it('registers 12 tools in the osint category with required parameters', () => {
-    expect(OSINT_TOOLS.length).toBe(12);
+  it('registers 13 tools in the osint category with required parameters', () => {
+    expect(OSINT_TOOLS.length).toBe(13);
     const names = new Set<string>();
     for (const t of OSINT_TOOLS) {
       expect(names.has(t.name), `duplicate tool ${t.name}`).toBe(false);
@@ -430,5 +430,64 @@ describe('new keyless breach lanes (Hudson Rock + HIBP catalogue)', () => {
     expect(entries[0].dataClasses).toContain('Password hints');
     expect(entries[0].isVerified).toBe(true);
     expect(parseHibpCatalog({ error: 'nope' })).toEqual([]);
+  });
+});
+
+describe('ShadowDragon steps 3+5 (correlation + historical recovery)', () => {
+  it('parseCdxSnapshots reads the CDX header row, keeps 200s, sorts, rejects junk', async () => {
+    const { parseCdxSnapshots } = await import('../tools/osint.js');
+    const snaps = parseCdxSnapshots([
+      ['timestamp', 'original', 'statuscode', 'digest'],
+      ['20200101', 'https://x.test/a', '404', 'd1'],
+      ['20190101', 'https://x.test/a', '200', 'd2'],
+      ['20210101', 'https://x.test/a', '200', 'd3'],
+    ]);
+    expect(snaps).toHaveLength(2);
+    expect(snaps[0].timestamp).toBe('20190101');
+    expect(snaps[1].digest).toBe('d3');
+    expect(parseCdxSnapshots([['timestamp']])).toEqual([]);
+    expect(parseCdxSnapshots({ error: 'rate limited' })).toEqual([]);
+  });
+
+  it('historicalProfileRecovery mines the newest archived snapshot for contacts', async () => {
+    const { historicalProfileRecovery } = await import('../tools/osint.js');
+    const cdx = JSON.stringify([['timestamp', 'original', 'statuscode'], ['20210101', 'https://site.test/u', '200']]);
+    const page = '<html><body><p>Old bio: mail old@site.test, desk (212) 555-1234, 10 Downing St, Springfield, IL 62704</p></body></html>';
+    const rec = await historicalProfileRecovery('https://site.test/u', {
+      fetchRaw: async (u: string) => (u.includes('cdx') ? cdx : page),
+    });
+    expect(rec.snapshots).toHaveLength(1);
+    expect(rec.recoveredAt).toBe('20210101');
+    expect(rec.recoveredUrl).toContain('/web/20210101id_/');
+    expect(rec.mined.emails).toContain('old@site.test');
+    expect(rec.mined.phones).toContain('(212) 555-1234');
+    expect(rec.mined.addresses.some((a) => a.includes('10 Downing St'))).toBe(true);
+  });
+
+  it('historicalProfileRecovery reports honestly when there are no snapshots', async () => {
+    const { historicalProfileRecovery } = await import('../tools/osint.js');
+    const rec = await historicalProfileRecovery('https://site.test/none', {
+      fetchRaw: async () => JSON.stringify([['timestamp', 'original', 'statuscode']]),
+    });
+    expect(rec.snapshots).toHaveLength(0);
+    expect(rec.note).toContain('no archived snapshots');
+    expect(rec.mined.emails).toHaveLength(0);
+  });
+
+  it('correlateSocialSignals links same-avatar accounts across platforms and shared bio terms', async () => {
+    const { correlateSocialSignals, bioTokens, avatarFingerprintBytes } = await import('../tools/osint.js');
+    const fp = avatarFingerprintBytes(new Uint8Array([1, 2, 3, 4]));
+    const sigs = correlateSocialSignals([
+      { site: 'GitHub', url: 'https://github.com/x', avatarFingerprint: fp, bio: 'security researcher in Berlin' },
+      { site: 'Mastodon', url: 'https://m.test/@x', avatarFingerprint: fp, bio: 'infosec Berlin' },
+      { site: 'Reddit', url: 'https://reddit.com/u/x', avatarFingerprint: 'other', bio: 'gardening in Lisbon' },
+    ]);
+    const avatar = sigs.find((s) => s.kind === 'avatar');
+    expect(avatar).toBeTruthy();
+    expect(avatar!.accounts.map((a) => a.site).sort()).toEqual(['GitHub', 'Mastodon']);
+    const bio = sigs.filter((s) => s.kind === 'bio').map((s) => s.value);
+    expect(bio).toContain('berlin');
+    expect(bio).not.toContain('lisbon');
+    expect(bioTokens('the the and about').size).toBe(0);
   });
 });

@@ -1317,6 +1317,27 @@
                 }).join('');
             }
 
+            // ── Step 3/5 sections (ShadowDragon method) ──
+            if (d.socialSignals && d.socialSignals.length) {
+                html += '<div class="dossier-section-title" style="margin-top:18px;">🖼️ CROSS-PLATFORM CORRELATION <span class="count">' + d.socialSignals.length + ' signal(s)</span></div>';
+                html += d.socialSignals.slice(0, 10).map(function (s) {
+                    return s.kind === 'avatar'
+                        ? '<div class="dork-item" style="margin-bottom:4px;"><span class="label">📷 SAME PROFILE IMAGE across ' + s.accounts.length + ' platforms</span><span style="color:var(--text-muted);font-size:10.5px;">strongest cross-platform identity link — ' + s.accounts.map(function (a) { return escapeHtml(a.site); }).join(' · ') + '</span></div>'
+                        : '<div class="dork-item" style="margin-bottom:4px;"><span class="label">📝 shared bio term "' + escapeHtml(s.value) + '"</span><span style="color:var(--text-muted);font-size:10.5px;">city / employer / school overlap — ' + s.accounts.map(function (a) { return escapeHtml(a.site); }).join(' · ') + '</span></div>';
+                }).join('');
+            }
+
+            if (d.historicalRecovery && d.historicalRecovery.length) {
+                html += '<div class="dossier-section-title" style="margin-top:18px;">🕰️ HISTORICAL RECOVERY <span class="count">' + d.historicalRecovery.length + ' profile(s)</span></div>';
+                html += '<div class="hint-line" style="margin:4px 0 8px;">Deleted bios and pages, recovered from the Wayback Machine and mined for contact data.</div>';
+                html += d.historicalRecovery.map(function (r) {
+                    var rows = '';
+                    (r.emails || []).forEach(function (x) { rows += '<div class="cred-row"><span>✉</span><span style="color:var(--text-primary);">' + escapeHtml(x) + '</span><span class="meta">archived ' + escapeHtml(r.recoveredAt || '') + '</span></div>'; });
+                    (r.phones || []).forEach(function (x) { rows += '<div class="cred-row"><span>☎</span><span style="color:var(--text-primary);">' + escapeHtml(x) + '</span><span class="meta">archived ' + escapeHtml(r.recoveredAt || '') + '</span></div>'; });
+                    (r.addresses || []).forEach(function (x) { rows += '<div class="cred-row"><span>📍</span><span style="color:var(--text-primary);">' + escapeHtml(x) + '</span><span class="meta">archived ' + escapeHtml(r.recoveredAt || '') + '</span></div>'; });
+                    return '<div style="margin-bottom:10px;"><div class="dork-item"><span class="label">' + escapeHtml(r.url) + '</span><span style="color:var(--text-muted);font-size:10.5px;">' + r.snapshotCount + ' snapshot(s), newest ' + escapeHtml(r.recoveredAt || '?') + ' — ' + (r.emails||[]).length + 'e / ' + (r.phones||[]).length + 'p / ' + (r.addresses||[]).length + 'a</span></div>' + rows + '</div>';
+                }).join('');
+            }
             if (d.dorks && d.dorks.length) {
                 html += '<div class="dossier-section-title" style="margin-top:18px;">🔎 OPERATOR DEEP-LINKS <span class="count">' + d.dorks.length + ' dorks</span></div>';
                 html += '<div class="dork-list">' + d.dorks.map(function (l) {
