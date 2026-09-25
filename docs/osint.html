@@ -594,7 +594,15 @@
                                     <option value="rapport_recon">Rapport &amp; open recon</option>
                                 </select>
                             </div>
+                            <div class="search-box" style="max-width:280px;min-width:240px;" title="Local Ollama model — used by the pretext lab, the search director and the extraction assist">
+                                <span>🦙</span>
+                                <select id="pretextModel" onchange="saveOllamaModel(this.value)" style="background:transparent;border:none;color:inherit;font-size:12px;padding:4px;max-width:220px;">
+                                    <option value="">— loading Ollama models … —</option>
+                                </select>
+                                <button class="btn ghost" style="padding:2px 7px;font-size:11px;" onclick="loadOllamaModels(true)" title="Re-query the Ollama box for its model list">⟳</button>
+                            </div>
                         </div>
+                        <div class="hint-line" id="ollamaStatus" style="margin:0 0 10px;font-size:11px;">Ollama: checking…</div>
                         <div class="form-group" style="margin-bottom:8px;">
                             <label style="font-size:12px;color:var(--text-muted);">Scenario — your words</label>
                             <textarea id="pretextScenario" rows="4" placeholder="e.g. Simulated vendor invoice callback to a finance analyst at a mid-size manufacturer, testing whether the new 'verify via known number' policy holds. The target has been trained to report suspicious calls." style="width:100%;padding:10px 12px;font-size:12.5px;background:rgba(0,0,0,0.35);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);font-family:'JetBrains Mono',monospace;resize:vertical;"></textarea>
@@ -2165,6 +2173,52 @@
                 s.callToAction ? 'CALL TO ACTION / EXIT: ' + s.callToAction : '',
             ].filter(function (x) { return x !== ''; }).join('\n');
         }
+        // ── Local Ollama model selection (pretext lab + search director + assist) ──
+        var ollamaModelsLoaded = false;
+        async function loadOllamaModels(loud) {
+            var sel = document.getElementById('pretextModel');
+            var st = document.getElementById('ollamaStatus');
+            try {
+                var d = await api('/api/osint/local-models');
+                var ids = (d.models || []);
+                var fmtSize = function (b) { if (!b) return ''; return b >= 1073741824 ? (b / 1073741824).toFixed(1) + ' GB' : Math.round(b / 1048576) + ' MB'; };
+                if (sel) {
+                    var cur = d.selected || (sel.value || '');
+                    sel.innerHTML = ids.length
+                        ? ids.map(function (m) { return '<option value="' + escapeHtml(m.id) + '"' + (m.id === cur ? ' selected' : '') + '>' + escapeHtml(m.id) + (m.size ? '  (' + fmtSize(m.size) + ')' : '') + '</option>'; }).join('')
+                        : '<option value="">— no models served —</option>';
+                    if (cur && ids.some(function (m) { return m.id === cur; })) sel.value = cur;
+                }
+                if (st) { st.style.color = 'var(--text-muted)'; st.textContent = '🦙 Ollama ' + d.endpoint + ' (' + (d.native ? 'native /api' : 'OpenAI-compatible /v1') + ') · ' + ids.length + ' model(s) served' + (d.selected ? ' · active: ' + d.selected : '') + ' · sizes shown — CPU-only boxes: big GGUFs take minutes per script'; }
+                ollamaModelsLoaded = true;
+                if (loud) toast(ids.length + ' Ollama model(s) loaded', 'success');
+            } catch (e) {
+                if (st) { st.style.color = 'var(--danger)'; st.textContent = '🦙 Ollama unreachable — ' + escapeHtml(e.message); }
+                if (loud) toast('Ollama list failed: ' + e.message, 'error');
+            }
+        }
+        async function saveOllamaModel(model) {
+            if (!model) return;
+            try {
+                await api('/api/osint/local-model', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: model }) });
+                var st = document.getElementById('ollamaStatus');
+                if (st) st.textContent = '🦙 active model → ' + model + ' (pretext lab, search director, extraction assist)';
+                toast('Ollama model → ' + model, 'success');
+            } catch (e) { toast('Model save failed: ' + e.message, 'error'); }
+        }
+        // Preload the list when the panel first comes into view.
+        (function () {
+            var once = function () {
+                if (ollamaModelsLoaded) return;
+                var obs = document.getElementById('pretextPanel');
+                if (obs && 'IntersectionObserver' in window) {
+                    var io = new IntersectionObserver(function (es) { if (es.some(function (x) { return x.isIntersecting; })) { loadOllamaModels(false); io.disconnect(); } });
+                    io.observe(obs);
+                } else { setTimeout(function () { loadOllamaModels(false); }, 600); }
+            };
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', once); else once();
+        })();
+
         async function runPretext() {
             var scope = document.getElementById('pretextScope').value.trim();
             var scenario = document.getElementById('pretextScenario').value.trim();
@@ -2178,10 +2232,11 @@
             // Panel glows while the model composes (same busy treatment as the tool modules).
             document.getElementById('pretextPanel').classList.add('panel-running');
             if (btn) { btn.disabled = true; btn.textContent = '◉ COMPOSING…'; }
-            out.innerHTML = '<div class="dossier-empty">◈ ' + escapeHtml(channel) + ' · ' + escapeHtml(objective) + ' — drafting three scripts…</div>';
+            var pT0 = Date.now();
+            var pTick = setInterval(function () { out.innerHTML = '<div class="dossier-empty">◈ ' + escapeHtml(channel) + ' · ' + escapeHtml(objective) + ' — drafting on ' + escapeHtml((document.getElementById('pretextModel') || {}).value || 'ollama') + ' … ' + Math.round((Date.now() - pT0) / 1000) + 's (CPU-only boxes take minutes)</div>'; }, 1000);
             try {
-                var d = await api('/api/osint/pretext', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scope: scope, scenario: scenario, context: context || undefined, channel: channel, objective: objective }) });
-                var html = '<div class="dossier-section-title">🎭 ' + d.scripts.length + ' script(s) · ' + escapeHtml(d.channel) + ' · ' + escapeHtml(d.objective) + ' <span class="count">scope: ' + escapeHtml(d.scope) + '</span></div>';
+                var d = await api('/api/osint/pretext', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scope: scope, scenario: scenario, context: context || undefined, channel: channel, objective: objective, model: (document.getElementById('pretextModel') || {}).value || undefined }) });
+                var html = '<div class="dossier-section-title">🎭 ' + d.scripts.length + ' script(s) · ' + escapeHtml(d.channel) + ' · ' + escapeHtml(d.objective) + ' <span class="count">🦙 ' + escapeHtml(d.model || 'ollama') + ' · scope: ' + escapeHtml(d.scope) + '</span></div>';
                 d.scripts.forEach(function (s, i) {
                     var txt = pretextScriptText(s);
                     html += '<div class="panel-card" style="margin-bottom:10px;"><div class="panel-card-title">#' + (i + 1) + ' ' + escapeHtml(s.title) + '</div>';
@@ -2192,11 +2247,12 @@
                 });
                 out.innerHTML = html;
                 window.__pretextTexts = d.scripts.map(pretextScriptText);
-                toast(d.scripts.length + ' pretext scripts drafted (' + d.channel + ')', 'success');
+                toast(d.scripts.length + ' pretext scripts drafted via ' + (d.model || 'ollama') + ' (' + d.channel + ')', 'success');
             } catch (e) {
                 out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
                 toast(e.message, 'error');
             } finally {
+                clearInterval(pTick);
                 document.getElementById('pretextPanel').classList.remove('panel-running');
                 if (btn) { btn.disabled = false; btn.textContent = '✦ GENERATE SCRIPTS'; }
             }

@@ -131,6 +131,7 @@ import { haversineKm } from './tools/gps-copilot.js';
 import { fetchAreaNews, newsFactLines } from './tools/gps-area-news.js';
 import { CveCorrelator } from './recon/cve-correlator.js';
 import { SE_CHANNELS, SE_OBJECTIVES, buildPretextSystemPrompt, buildPretextUserPrompt, parsePretextResponse } from './tools/osint-aggressive.js';
+import { resolveOllamaEndpoint, listOllamaModels, ollamaChat } from './tools/ollama.js';
 import type { SeScenario, SeChannel, SeObjective } from './tools/osint-aggressive.js';
 import { DFIRManager, type PlaybookType, type IOCType } from './tools/dfir.js';
 import { burpManager } from './tools/burp.js';
@@ -7897,11 +7898,39 @@ app.post('/api/osint/infostealer', async (req: Request, res: Response): Promise<
   }
 });
 
+// ── Ollama model selection for the OSINT AI features ──
+// The OSINT AI (pretext lab, search director, extraction assist) runs on the
+// operator's own Ollama box. The model is chosen per-request from the live
+// served list and persisted as the remembered default.
+const osintSettings = (): Record<string, unknown> =>
+  (dbSettings.settings && typeof dbSettings.settings === 'object') ? dbSettings.settings as Record<string, unknown> : {};
+
+app.get('/api/osint/local-models', async (_req: Request, res: Response): Promise<void> => {
+  const st = osintSettings() as { localHost?: string; localPort?: string; localPath?: string; localModel?: string };
+  const ep = resolveOllamaEndpoint(st);
+  try {
+    const { models, endpoint, native } = await listOllamaModels(ep);
+    const selected = String(st.localModel || process.env.TEMPEST_LOCAL_MODEL || '');
+    res.json({ success: true, models, endpoint, native, selected });
+  } catch (err: any) {
+    res.status(502).json({ error: 'Ollama unreachable at ' + ep.base + ' — ' + (err?.message || String(err)) });
+  }
+});
+
+app.post('/api/osint/local-model', (req: Request, res: Response): void => {
+  const model = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  if (!model) { res.status(400).json({ error: 'model required' }); return; }
+  dbSettings['settings'] = { ...osintSettings(), localModel: model };
+  saveDbSettings('osint.local-model');
+  res.json({ success: true, selected: model });
+});
+
 // ── Social-engineering pretext lab ──
 // Scripted conversation material for AUTHORIZED engagements (phishing simulation,
 // awareness training, red-team playbooks). Every request carries an explicit
 // authorization reference — same scope discipline as the rest of the arsenal —
 // and the scenario is the researcher's own words; no dossier data is injected.
+// Runs on the selected local Ollama model (no cloud fallback — honest errors).
 app.post('/api/osint/pretext', async (req: Request, res: Response): Promise<void> => {
   const scope = typeof req.body?.scope === 'string' ? req.body.scope.trim() : '';
   const scenario = typeof req.body?.scenario === 'string' ? req.body.scenario.trim() : '';
@@ -7910,16 +7939,24 @@ app.post('/api/osint/pretext', async (req: Request, res: Response): Promise<void
   const objective = (SE_OBJECTIVES as readonly string[]).includes(String(req.body?.objective)) ? req.body.objective as SeObjective : 'credential_test';
   if (!scope || scope.length < 8) { res.status(400).json({ error: 'authorization reference required (engagement/ticket id + who authorized it) — this lab is for authorized engagements only' }); return; }
   if (!scenario || scenario.length < 10) { res.status(400).json({ error: 'scenario required (describe the situation in your own words)' }); return; }
-  if (!llm) { res.status(503).json({ error: 'LLM not configured' }); return; }
+  const st = osintSettings() as { localHost?: string; localPort?: string; localPath?: string; localModel?: string };
+  const model = (typeof req.body?.model === 'string' && req.body.model.trim()) || st.localModel || process.env.TEMPEST_LOCAL_MODEL || '';
+  if (!model) { res.status(503).json({ error: 'no Ollama model selected — pick one in the model dropdown (Settings → Local Model or the OSINT panel)' }); return; }
   const s: SeScenario = { channel, objective, scope, scenario, context };
   try {
-    console.log(`[T3MP3ST][OSINT] pretext lab: ${channel}/${objective} (scope: ${scope.slice(0, 40)})`);
-    const raw = await llm.prompt(buildPretextUserPrompt(s), buildPretextSystemPrompt(s));
-    const scripts = parsePretextResponse(raw || '', s);
-    if (scripts.length === 0) { res.status(502).json({ error: 'model returned no usable scripts — try rephrasing the scenario' }); return; }
-    res.json({ success: true, channel, objective, scope, scripts, model: 'configured backbone' });
+    console.log(`[T3MP3ST][OSINT] pretext lab: ${channel}/${objective} via ollama:${model} (scope: ${scope.slice(0, 40)})`);
+    const { content } = await ollamaChat(model, buildPretextSystemPrompt(s), buildPretextUserPrompt(s), resolveOllamaEndpoint(st));
+    const scripts = parsePretextResponse(content || '', s);
+    if (scripts.length === 0) { res.status(502).json({ error: 'model returned no usable scripts — try rephrasing the scenario or a larger model' }); return; }
+    res.json({ success: true, channel, objective, scope, scripts, model });
   } catch (err: any) {
-    res.status(500).json({ error: 'pretext generation failed: ' + (err?.message || String(err)) });
+    const msg = String(err?.message || err);
+    const slow = /abort|timeout|aborted/i.test(msg);
+    res.status(slow ? 504 : 500).json({
+      error: slow
+        ? 'local model (' + model + ') did not finish in time — the Ollama box is CPU-only and a 3-script generation takes minutes. Pick a smaller model in the dropdown, or a GPU box.'
+        : 'pretext generation failed: ' + msg,
+    });
   }
 });
 
@@ -8146,12 +8183,19 @@ app.post('/api/osint/locate', async (req: Request, res: Response): Promise<void>
       // Optional LLM assist over mined pages — routed through the CONFIGURED
       // backbone, which is the operator's LOCAL gemma4 when useLocal is on.
       // Bounded (≤2 pages/query) and kept as unverified second-opinion data.
-      llmChat: llm ? async (system: string, user: string) => {
-        const backbone = llm;
-        if (!backbone) return '';
-        return await backbone.prompt(user.slice(0, 4000), system);
-      } : undefined,
-      llmModel: llm ? String((llm as unknown as { activeModel?: string }).activeModel || 'configured backbone') : undefined,
+      // The OSINT AI (search director + extraction assist) runs on the selected
+      // local Ollama model — same one the pretext lab and dropdown use.
+      llmChat: (() => {
+        const st = osintSettings() as { localHost?: string; localPort?: string; localPath?: string; localModel?: string };
+        const model = st.localModel || process.env.TEMPEST_LOCAL_MODEL || '';
+        if (!model) return undefined;
+        const ep = resolveOllamaEndpoint(st);
+        return async (system: string, user: string) => {
+          const { content } = await ollamaChat(model, system, user.slice(0, 4000), ep);
+          return content;
+        };
+      })(),
+      llmModel: (osintSettings() as { localModel?: string }).localModel || process.env.TEMPEST_LOCAL_MODEL || undefined,
     });
     if (dossier.socialAccounts.length > 0) {
       upsertMissionFindingToLedger({
