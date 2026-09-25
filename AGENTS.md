@@ -1,5 +1,66 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-20 (Jarvis) — Two NEW keyless live breach sources: Hudson Rock infostealers + HIBP breach catalogue
+
+**Request:** "look for more live breach sources. add them to the app. search dark web" — doctrine held: licensed/keyless services + public victim-post monitors only; no pwndb-style dump-site harvesters (the same line the dark-web tab already runs).
+
+### Added (both keyless, verified live from this box before wiring)
+- **Hudson Rock** (`cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-email`) — free cybercrime-intelligence feed: LIVE infostealer infection records (family, date, computer name, IP, OS, installed software, corporate/user service counts). A compromise class the static dump lanes cannot see.
+- **HIBP breach catalogue** (`haveibeenpwned.com/api/v3/breaches`, keyless; optional `?Domain=`) — the full breach universe: dates, account counts, leaked data classes, descriptions. Answers "was this domain ever breached" with zero account keys (per-account HIBP stays behind the keyed lanes).
+
+### Wiring
+- **`src/tools/osint.ts`**: `parseHudsonRock` (defensive: snake_case+camelCase field picks, junk-tolerant) + `hudsonRockEmail`; `parseHibpCatalog` + `hibpBreachCatalog` (24h cache, domain filter, egress→Tor→direct fallback). `emailIntel()` now fires Hudson Rock in wave-1 and returns `infostealer` + a "Hudson Rock (infostealers)" breach row — so every email lookup/dossier gets it free.
+- **2 new agent tools**: `osint_infostealer_check` (email; high-severity finding on infection) and `osint_breach_catalog` (domain or `all`; required param per the osint registry rule; info finding). Wired to recon (all) and analyst.
+- **Server**: POST `/api/osint/infostealer` + `/api/osint/breach-catalog`, both writing the findings ledger.
+- **UI**: `docs/osint.html` BREACH & DUMPS tab — 🦠 LIVE INFOSTEALER CHECK (table: family/date/host/IP/OS/software) + 📚 BREACH CATALOGUE (table: breach/date/accounts/leaked data).
+- **Counts**: arsenal honesty lock 131→133, README headline 129→133, osint registry lock 10(stale)→12 — moved together.
+
+### Verified
+- tsc 0 · build 0 · osint suite **28/28** (6 new parse tests: hit/miss/camelCase/junk payloads + catalogue mapping) · no-phantom/operator-toolkits/arsenal-honesty **41/41** · full suite **1174/8/29** — the 8 reds are the parallel session's in-flight src work (config-directory, mission-status-endpoint, tool-call-boundary, cve-correlation) + the Windows `python3` stub in ctf-rsa-static, unchanged by this pass.
+- LIVE on :3333: infostealer check on a clean address → honest miss with the provider's own message; breach catalog `adobe.com` → 1 entry, 152,445,165 accounts, 2013-10-04; `/api/osint/email` now returns the `infostealer` object + the Hudson Rock breach row.
+
+## Session Log — 2026-09-20 (Jarvis) — War Room blank-page fix: stray sidebar `</div>` + the check=1 pool-starvation that flipped the header OFFLINE
+
+**Request:** "fix the fucking war room bitch"
+
+### Symptom (live IAB, standalone load of /ui/index.html)
+Sidebar rendered but the ENTIRE content column was empty grid. Measured: `main.main-content` was a direct child of `<body>` at y=1578 with orphaned `nav-item`/`nav-label`/`sidebar-footer` fragments between it and `.app-container`; `page-warroom` (all 9 SPA pages nested inside it — a leftover artifact of the merge-scar repair inserting before the compat marker) started at y=1663, below the fold.
+
+### Fix 1 — stray `</div>` in the sidebar nav (docs/index.html:3647)
+The merge left ONE extra `</div>` after the Evidence Vault `<a>` nav item. The HTML parser honored it, closing `.app-container` mid-list — everything after (rest of nav, `<main>`) leaked to body level. Removed; container div-depth now 0; `main` back inside `.app-container`; warroom at top of content. NOTE: shell-embedded view (`/ui/` shell.html wrapping pages) masked this — embed CSS force-hides the own sidebar, so Raul's shell view looked fine while standalone was broken.
+
+### Fix 2 — `/api/agents/local/status?check=1` pool starvation (THE "flips OFFLINE after ~60s" bug)
+After the layout fix the header still flipped `API + LLM Ready → Offline` ~60-75s after every load. Resource-timing probe: from t≈45s EVERY page fetch took 84–122s (`/api/agents/local/status?check=1` 122s, mission/status 108s, pack/status, net/ip, preflight…) while curl `/api/health` stayed 0.3s. Root cause: the system-status poller (in index.html 20232, settings.html 17649, live-scan.html 17187 — same copied block) **awaited `?check=1`** — a FORCED live agent re-detect that takes 30s+ on this CLI-heavy box (where.exe/WSL/CLI version probes). Awaited on every poll cycle it piled up in the browser's 6-connections-per-host pool until every other fetch — including the 5s-abort `/api/health` — queued behind it → `signal is aborted without reason` → Offline, and once starved it never recovered.
+**Fix (scratch/fix-agent-status-poll.mjs, all 3 pages):** poller now uses the server's 60s-cached endpoint (no `check=1` — 0.15s), `AbortSignal.timeout(5000)`, and a `window.__agentStatusInFlight` single-flight guard. Explicit deep checks still run via Settings ➕/↻ (`/api/agents/local/detect`). Live re-detect on demand is untouched.
+
+### Verified
+- Live IAB: warroomY 85 (top), `main` in container, 0 stray body navs; all 9 pages switch via `navigateTo` (benchmarks/ctf-range/general/settings/about/cve-vault each render); findings infrastructure present (`findingsBody`, live `tmNode_fnd_*` nodes, warGangConsole).
+- Status stability: `API + LLM Ready` held at +22s/+65s/+115s (old flip point was ~60-75s), and it now RECOVERS from a transient boot blip instead of sticking. Final screenshot: BACKEND `● ONLINE real ops` (was OFFLINE client-side/sim), LOCAL AGENTS `hermes live · claude live`, egress IP GREEN (proxy healthy), findings 145.
+- Gates: ui-parse + sfx + warroom + mission-controls **92/92**; scripts parse 11/11 + 9/9 + 9/9 on the three patched pages.
+- Diagnostic artifacts kept: `scratch/nudge-behavior.mjs` (watchdog VM harness, 8/8), `scratch/fix-agent-status-poll.mjs`.
+
+## Session Log — 2026-09-19 (Jarvis) — "No agent or API backend connected" nudge fixed everywhere + index.html merge-corruption REPAIR
+
+**Request:** "No agent or API backend connected keeps showing. fix that fucking process completely and test"
+
+### 1) Nudge root causes (both fixed across ALL 14 leaf pages)
+- **Sticky banner:** after the 12s nudge fired, `clearInterval(iv)` KILLED the watchdog — when the backend later appeared (server restarts all day), the banner never hid and re-showed every reload. Fixed: watchdog keeps polling every 2s (10-min post-nudge lifetime), hides the banner + stops the moment any backend answers, nudges exactly ONCE (no toast spam).
+- **Server-blind `hasBackend()`:** the check only looked at browser localStorage keys/local agents and `T3MP3ST_API.llmAvailable` (which is false while checkHealth hasn't run or while the server was briefly down). Fixed: `bootLocalAgents()` now probes `/api/health` every 10s and caches `window.__t3ServerLlm = llm.connected`; `hasBackend()` checks `__t3ServerLlm` FIRST — the API server's own .env-configured LLM counts as a backend even with a keyless browser.
+- Bulk-patched via `scratch/fix-backend-nudge.mjs` (CRLF-safe): 14 watchdogs + 14 hasBackend variants (obsidivm's simpler shape handled separately). Verified by `scratch/nudge-behavior.mjs` — a VM harness running the REAL patched ctf.html code with a manual clock: server healthy + keyless browser → NO nudge; server down → nudge fires once, no spam; server recovers → banner auto-hides WITHOUT reload. 8/8 PASS.
+
+### 2) index.html merge-corruption REPAIR (002f405 "merge: resolve conflicts with origin/main" had union-shredded the file)
+The parallel session's merge had left index.html with inline script blocks that could not parse (ui-parse gate red at HEAD): a ~1,413-line run of origin/main BODY markup (Run Options Row, benchmark panels, CTF Range/General/SelfImprove/Settings/Configs/About/CVE-Vault pages) was concatenated INSIDE the main script block, splitting `const T3MP3ST_API = {` into two half-heads; the mission-complete segment had two variants jammed (missing `}`); old sync `abortMission` head was fused to origin's `controlMission` body; duplicate `controlMission`/`resumeMission`/`navigateTo`/`pollUntilComplete` declarations; unguarded `window.T3MP3STShell.updateReadiness(...)` calls (T3MP3STShell undefined in this file → checkHealth would throw). Repaired:
+- Stray body HTML spliced out of the script; the SAME page run re-inserted CLEAN from the origin parent (29824d5, `<!-- Benchmarks -->` → llm-queue) before `<!-- Hidden compat elements -->` — every `id="page-*"` now appears exactly once, in the body (`scratch/fix-index-merge-scar.mjs`, with a refusal-guard that verified every removed line exists in origin).
+- Mission-complete segment reconciled (null-guard first, error/paused throws, mission-status check, missing brace restored).
+- Fused abortMission/controlMission untangled: origin's `async controlMission(action)` head restored; stub controlMission + legacy resumeMission duplicates removed; `pauseMission`/`resumeMission` wrappers + new abortMission kept.
+- `navigateTo`: kept the SPA version matching this file's body; removed the shell-delegating duplicate; 4 updateReadiness calls → optional-chained.
+- **Dispatch contract reunited both test suites** (`warroom-reporting-static` pins the HEAD honesty regexes, `mission-controls` behaviorally pins the origin run-aware poll): `getStatus()` throws on transport/HTTP/malformed (no-arg, AbortController 15s); `getStatusSafe()` = `catch { return null; }` wrapper; `pollUntilComplete(onUpdate, intervalMs, run = missionLifecycle)` = origin loop + `MAX_CONSECUTIVE_FAILURES = 3` counter (hidden-tab immune, `{statusError}` updates, hard throw after 3 consecutive failures). Both suites green simultaneously: 87/87.
+
+### Verified
+- docs/index.html inline scripts parse **11/11** (gate + served copy); all 9 SPA pages exactly once in body; tsc 0; ui-parse + sfx gates **76/76** → with warroom+mission-controls **87/87**; nudge harness 8/8; LIVE :3333 serves the repaired page (11/11 parse, 9 body pages, watchdog present), health ok.
+- Full suite **1171/8/29** — the 8 remaining failures are NOT this session's: config-directory (3) + mission-status-endpoint (2) + tool-call-boundary (1) + cve-correlation (1) are the parallel session's in-flight src work (suite grew 1027→1208 from their commits mid-session), and ctf-rsa-static (1) is the Windows `python3` stub (WindowsApps shim) failing 3.10+ union syntax — environmental.
+- NOTE for next session: the parallel session is actively rewriting the mission-dispatch area (their tests describe a target state; 8 reds are theirs to converge). Do not re-shuffle `getStatus`/`pollUntilComplete`/`controlMission` in docs/index.html without reading BOTH `warroom-reporting-static.test.ts` (static regexes) and `mission-controls.test.ts` (behavioral harness slices `async missionRequest` → `};` and `controlMission` → `// Update mission timer`) — the joint contract above satisfies both.
+
 ## Session Log — 2026-09-19 (Jarvis) — GitHub issues #154/#162/#164/#215 fixed (Ollama provider, Kali, auth docs, UX spike)
 
 **Request:** "https://github.com/elder-plinius/T3MP3ST/issues FIX THESE ISSUES" — the four open issues.
