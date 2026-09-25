@@ -1,5 +1,19 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — Tool panels glow while in use + local-LLM extraction assist
+
+**Request:** "the modules in use do not fucking glow. username sweep, breach and dumps, dark web, google dorks etc should all light up when in use. also what llm are you using for the search. can this be done using the local llm already set up"
+
+### Panel glow (all tool modules)
+- `setPanelBusy(paneId, busy)` + a `withBusy` decorator applied to EVERY runner (sweep, breach, email, phone, dorks, dark-web leak check, onion search/fetch, infostealer, breach catalog, sites, the locator) — no runner can forget the state. Tab pulses (modGlow), panel header carries a ◉ IN USE badge, tab keeps a green "done" state after.
+- **Live-verified in-browser**: BREACH & DUMPS tab mid-run → class `tool-tab running`, animation `modGlow`, live box-shadow halo, pane `panel-running`. Screenshot captured.
+- The locator module-rail (SSE `osint:module`, 24 events on a real run) uses the same glow.
+
+### Local-LLM search assist (unverified, second opinion)
+- **The search lane uses NO LLM** — deterministic regex extraction (Bing SERP → fetch result pages → mine text + raw HTML). Deliberate: an LLM invents perfectly-formatted contact data.
+- Added an OPTIONAL assist through the CONFIGURED backbone — the operator's local model (`gemma4:latest` @ 192.168.1.162, useLocal=true): `llmAssistAcross` feeds mined page text (bounded 2 pages × 1.6k chars) with a strict JSON-only system prompt, re-validates every value through the same format filters, and files results in a SEPARATE `llmAssisted` bucket (never merged into the confident lists; dossier renders them amber as UNVERIFIED).
+- Live: direct `/api/llm/chat` probe returned correct JSON in 2.3s (local model warm); end-to-end assist on a contact page reproduced email+phone+address through the whole loop. Empty results are honest (pages with no contacts).
+
 ## Session Log — 2026-09-25 (Jarvis) — PHONEINFOGA wired into OSINT: 5 scanner ports + swagger-v2 remote instance adapter
 
 **Request:** "wire this into the osint section https://github.com/sundowndev/phoneinfoga" + "integrate this in your searches https://petstore.swagger.io/?url=…/web/docs/swagger.yaml" + "push when done and do a PR".
