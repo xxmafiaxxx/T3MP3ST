@@ -3785,6 +3785,15 @@
                                     <input type="text" class="form-input" id="localModel" placeholder="e.g. qwen2.5-coder / llama3 / the loaded gguf name" style="flex:1;">
                                     <button type="button" class="btn btn-sm" onclick="scanLocalModels()" title="Ask the local server for its available models (llama.cpp / LM Studio / Ollama)" style="background:rgba(255,255,255,0.05);border:1px solid rgba(0,200,255,0.3);color:#bcd;white-space:nowrap;">🔎 Scan</button>
                                 </div>
+                                <!-- Always-present Ollama/local model picker: auto-fills from the
+                                     live model list on load; picking saves the tag. The text
+                                     input stays for custom/unlisted tags. -->
+                                <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+                                    <select id="localModelPick" onchange="pickScannedLocalModel(this.value)" style="flex:1; padding:8px 10px; font-size:12px; background:rgba(0,0,0,0.35); border:1px solid rgba(0,200,255,0.35); border-radius:6px; color:#cde; cursor:pointer;">
+                                        <option value="">— loading models from the local server … —</option>
+                                    </select>
+                                    <button type="button" class="btn btn-sm" onclick="refreshLocalModelPicker(true)" title="Re-query the local server for its model list" style="background:rgba(255,255,255,0.05);border:1px solid rgba(0,200,255,0.3);color:#bcd;">⟳</button>
+                                </div>
                                 <select id="localModelScan" onchange="pickScannedLocalModel(this.value)" style="display:none; margin-top:8px; width:100%; padding:8px 10px; font-size:12px; background:rgba(0,0,0,0.35); border:1px solid rgba(0,200,255,0.35); border-radius:6px; color:#cde; cursor:pointer;"></select>
                                 <div id="localScanStatus" style="font-size:11px; margin-top:6px; color:var(--text-muted);"></div>
                             </div>
@@ -5266,6 +5275,11 @@ Correlating findings across agents, identifying patterns, producing actionable i
             // local cache. If the server has one set via TEMPEST_PROXY_URL, the badge shows it.
             setV('proxyUrl', localStorage.getItem('t3mp3st_proxy_url') || '');
             if (hfKey) hfKey.value = state.settings.huggingfaceKey || '';
+            // The local-model picker must query the CONFIGURED endpoint, so it only
+            // runs after the form values above are in the inputs.
+            if (typeof window.refreshLocalModelPicker === 'function') {
+                setTimeout(function () { window.refreshLocalModelPicker(false); }, 250);
+            }
         }
 
         function saveState() {
@@ -7323,6 +7337,7 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
                     sel.style.display = 'block';
                 }
                 if (st) { st.style.color = '#3ad29f'; st.textContent = '✅ ' + ids.length + ' model(s) on ' + url; }
+                if (typeof window.refreshLocalModelPicker === 'function') window.refreshLocalModelPicker(false);
                 toast(ids.length + ' local model(s) found — pick one below the input', 'success');
             } catch (e) {
                 if (st) { st.style.color = '#ff6b6b'; st.textContent = '❌ Scan failed: ' + e.message + ' — tried ' + url + '. Ollama → port 11434 path /api (and the remote must run with OLLAMA_HOST=0.0.0.0) · llama.cpp/LM Studio → path /v1.'; }
@@ -7339,6 +7354,84 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             if (typeof updatePreflightChecklist === 'function') updatePreflightChecklist();
             toast('Model tag → ' + id + ' (saved)', 'success');
         };
+
+        // Always-present local/Ollama model picker. Auto-fills from the LIVE model
+        // list the T3MP3ST server reads (browser can't — CORS), preselects the
+        // configured tag, and keeps the free-text input for unlisted tags.
+        window.refreshLocalModelPicker = async function(loud) {
+            const sel = document.getElementById('localModelPick');
+            const st = document.getElementById('localScanStatus');
+            if (!sel) return;
+            // Only read the inputs when they actually hold a host — reading empty
+            // inputs would overwrite the saved endpoint with the 127.0.0.1 default.
+            const hostInput = document.getElementById('localHost');
+            if (hostInput && String(hostInput.value || '').trim()) {
+                try { readLocalInputsIntoState(); } catch (_) {}
+            }
+            const saved = (typeof state !== 'undefined' && state.settings) ? state.settings : {};
+            const current = (document.getElementById('localModel') || {}).value || saved.localModel || '';
+            let url = '';
+            try { url = buildLocalBaseUrl(); } catch (_) {}
+            if (!url && saved.localHost) url = 'http://' + saved.localHost + ':' + (saved.localPort || '11434') + (saved.localPath || '/api');
+            sel.innerHTML = '<option value="">⏳ querying ' + String(url || 'local server').replace(/</g, '&lt;') + ' …</option>';
+            try {
+                const base = (typeof getApiBase === 'function' ? getApiBase() : (typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API.baseUrl) ? T3MP3ST_API.baseUrl : '');
+                // Candidate endpoints: the page-configured one (unless it's still the
+                // untouched 127.0.0.1:8080 default), then the SERVER-configured local
+                // endpoint — the page state can be stale while the server knows the real
+                // Ollama. First live list wins.
+                const isDefaultHost = String(saved.localHost || '') === '127.0.0.1' && String(saved.localPort || '8080') === '8080';
+                const candidates = [];
+                if (url && !isDefaultHost) candidates.push({ baseUrl: url });
+                candidates.push({});
+                let d = null;
+                let usedUrl = url;
+                for (const c of candidates) {
+                    const r = await fetch(`${base}/api/models`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            provider: 'local',
+                            ...(c.baseUrl ? { baseUrl: c.baseUrl } : {}),
+                            apiKey: (typeof state !== 'undefined' && state.settings ? state.settings.localApiKey : '') || undefined,
+                        }),
+                    }).catch(() => null);
+                    const j = r ? await r.json().catch(() => ({})) : {};
+                    if (r && r.ok) {
+                        d = j;
+                        usedUrl = c.baseUrl || 'server-configured';
+                        if (j.source === 'live') break;
+                    }
+                }
+                if (!d) throw new Error('no local model list');
+                const live = d.source === 'live';
+                const ids = live ? (d.models || []).map(m => m.id).filter(Boolean) : []; // static fallbacks are meaningless for 'local'
+                const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+                const opts = [];
+                if (current && ids.indexOf(current) < 0) opts.push('<option value="' + esc(current) + '" selected>' + esc(current) + (live ? ' (configured — not in live list)' : ' (configured)') + '</option>');
+                if (!ids.length) {
+                    opts.push('<option value="' + esc(current) + '">' + (current ? esc(current) : '— no live models —') + '</option>');
+                } else {
+                    opts.push('<option value="">— ' + ids.length + ' model(s) — pick one —</option>');
+                    ids.forEach(id => opts.push('<option value="' + esc(id) + '"' + (id === current ? ' selected' : '') + '>' + esc(id) + '</option>'));
+                }
+                sel.innerHTML = opts.join('');
+                if (st) {
+                    if (live) { st.style.color = '#3ad29f'; st.textContent = '✅ ' + ids.length + ' model(s) live on ' + usedUrl; }
+                    else { st.style.color = 'var(--warning)'; st.textContent = '⚠ local server not reachable (' + (d.note || 'no live list') + ') — type a tag manually.'; }
+                }
+                if (loud) toast(ids.length ? ids.length + ' local model(s) loaded' : 'No local models returned — type a tag manually', ids.length ? 'success' : 'warning');
+            } catch (e) {
+                sel.innerHTML = '<option value="' + String(current).replace(/"/g, '&quot;') + '">' + (current || '— scan failed —') + '</option>';
+                if (st) { st.style.color = '#ff6b6b'; st.textContent = '❌ ' + (e.message || e); }
+                if (loud) toast('Model list failed: ' + (e.message || e), 'error');
+            }
+        };
+        // Auto-fill the picker when the settings page boots.
+        (function () {
+            const boot = function () { setTimeout(function () { refreshLocalModelPicker(false); }, 900); };
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+            else boot();
+        })();
 
         function renderModels() {
             const container = document.getElementById('modelSelector');

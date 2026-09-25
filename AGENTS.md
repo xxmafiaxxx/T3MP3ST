@@ -1,5 +1,12 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — Settings: always-present Ollama model dropdown
+
+**Request:** "integrate a drop down box to chose the ollama model"
+
+- **Settings → 🖥️ Local Model** now carries a permanent model picker (`localModelPick`) beside the model-tag input. It auto-fills on load from the LIVE model list (server-side via `/api/models` — the browser can't cross CORS to Ollama), preselects the configured tag, and saves on pick (`pickScannedLocalModel` → state + persistence). The text input stays for custom/unlisted tags; the old post-Scan select remains and now syncs into the picker.
+- **Endpoint resolution fixed**: the page's settings state can be stale (defaults 127.0.0.1:8080) while the SERVER knows the real Ollama (192.168.1.162:11434). The picker now tries the page-configured endpoint (unless it's the untouched default) and then the server-configured one — first LIVE list wins, and the status line names which endpoint answered. Static fallback entries are never shown (meaningless for the local provider).
+- **Live-verified in-browser**: 7 real models listed (Muse-Glimmer-30B, Qwen3.8-27B, Qwen3.6-35B, gemma4:latest, gemma-4-12B-coder, qwen3.6:latest, supergemma4-26b) from server-configured; picking `qwen3.6:latest` updated the input+state and persisted (reverted to gemma4:latest afterwards, config unchanged). UI gates 76/76.
 ## Session Log — 2026-09-25 (Jarvis) — LLM SEARCH DIRECTOR: the model plans, directs and ranks the searches
 
 **Request:** "evereythng you ficking said i want the fucking llm to do. fucking do it!!" (after "so now the llm should be directing and sorting the searches correct?")
@@ -31,9 +38,16 @@ Model chip (probe on load) · 6 quick chips (brief / nearest quake / fly-to-ISS-
 
 ### Verified
 - `tsc --noEmit` 0 · `npm run build` 0 · **new suite `src/__tests__/gps-copilot.test.ts` 27/27** — geodesy vs known distances, viewport filtering, nearest≠biggest quake, the pin→ISS fact, unset-pin honesty, feed caveats, prompt grounding + doctrine, fence/prose/array parsing, prose-only degradation, unknown-action drop, every clamp, every documented action valid, measure filled + a measure with no ISS fix dropped.
-- Gates: ui-inline-scripts-parse 71/71 · sfx-wiring 5/5 · public-gps 19/19. Scratch DOM cross-check (`scratch/gps-copilot-dom-check.mjs`): 41/41 getElementById targets exist, 12 copilot functions defined, 16/16 onclick handlers resolve, 8/8 layer chips are in the action whitelist.
+- Gates: ui-inline-scripts-parse 71/71 · sfx-wiring 5/5 · public-gps 19/19. Scratch DOM cross-check (`scratch/gps-copilot-dom-check.mjs`): 44/44 getElementById targets exist, 15 copilot functions defined, 17/17 onclick handlers resolve, 8/8 layer chips are in the action whitelist.
 - **LIVE on :3333** against the real local model (LAN Ollama 192.168.1.162:11434, gemma4:latest): command mode "how far is the ISS from my pin" → `measure` action with the server's **9,521.5 km / 13° NNE** + 65-point path, model prose matching the fact line exactly; brief mode → 1,023 prompt / 571 completion tokens, prose + a `pois{hospital,1000m}` follow-up, ISS coordinates quoted verbatim from FACTS (48.72, 113.46). Real feeds in the facts: 45 aircraft, 0 quakes, honest `NWS feed unavailable: HTTP 400` caveat. Down-local path 502s honestly; `baseUrl: ftp://` 400s; empty prompt 400s.
-- Server restarted on the new dist (:3333, health ok). NOT committed (repo convention). Files: `src/tools/gps-copilot.ts` (new), `src/__tests__/gps-copilot.test.ts` (new), `src/server.ts` (2 routes + import), `docs/gps.html` (panel + client).
+- Server restarted on the new dist (:3333, health ok). Full suite **1244 passed / 8 failed** — the same standing parallel-session set (config-directory ×3, cve-correlation, mission-status-endpoint ×2, tool-call-boundary, ctf-rsa-static's Windows `python3` stub), each re-run in isolation, none GPS-related. NOT committed (repo convention). Files: `src/tools/gps-copilot.ts` (new), `src/__tests__/gps-copilot.test.ts` (new), `src/server.ts` (2 routes + import), `docs/gps.html` (panel + client).
+
+### Follow-up — it actually runs on the local Ollama + a model dropdown (Raul: "no i want you to use the local ollama. and add a dropdown panel to select the ollama models")
+The first pass let the page forward a hardcoded `127.0.0.1:8080/v1` default, so with Settings unconfigured every call pointed at a dead port and only worked because the test passed a baseUrl by hand. Fixed at the source:
+- **`.env` now names the real Ollama**: `TEMPEST_LOCAL_BASE_URL=http://192.168.1.162:11434/api` (native `/api` wire) + `TEMPEST_LOCAL_MODEL=gemma4:latest` — a tag that box actually serves; the old `qwen3:8b` was NOT in its catalog. Without the base URL the local provider silently defaulted to `localhost:11434`, where nothing listens.
+- **The page sends a `baseUrl` only when the operator EXPLICITLY saved a host/port in Settings**; otherwise the request omits it and the server env wins. The dropdown selection writes back to the shared `localStorage.t3mp3st.settings.localModel`, so Settings → Local Model and every other page's local calls follow the same tag.
+- **Model dropdown panel**: `⟳ SCAN OLLAMA` POSTs `{provider:'local'}` to the existing `/api/models` route (server-side, so the browser never hits Ollama's CORS wall) and fills a `<select>` with the live `/api/tags` list; the chip reads `Ollama: <model> · local only`; an unreachable Ollama shows the honest `source:'static'` note naming `TEMPEST_LOCAL_BASE_URL`/`TEMPEST_LOCAL_MODEL` instead of a fake list. First option is "(server default)" = let the env decide.
+- **Verified live**: `GET /api/gps/copilot` → `model: gemma4:latest, localOnly: true`; `POST /api/models {provider:'local'}` → **7 live models** (Muse-Glimmer-30B, Qwen3.8-27B, Qwen3.6-35B-A3B, gemma4:latest, gemma-4-12B-coder, qwen3.6, supergemma4-26b); and a copilot POST with **no client config at all** answered from the local model in 82s — "11,268 km on a bearing of 317° (NW)", matching the server fact `Pin-to-ISS great-circle distance: 11,268 km on bearing 317° (NW)` exactly. Gates: ui-parse + sfx + gps-copilot **103/103**, DOM cross-check green, server restarted on the new dist.
 
 ## Session Log — 2026-09-25 (Jarvis) — Tool panels glow while in use + local-LLM extraction assist
 
