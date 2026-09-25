@@ -446,7 +446,10 @@
                 <a class="nav-item active" href="osint.html"><span class="icon">🕵️</span> OSINT</a>
                 <a class="nav-item" href="gps.html"><span class="icon">🛰️</span> GPS Map</a>
                 <a class="nav-item" href="dfir.html"><span class="icon">🛡️</span> DFIR Response</a>
-                <a class="nav-item" href="terminal.html"><span class="icon">💻</span> Terminal</a>
+                                <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
+                    <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
+                </a>
+<a class="nav-item" href="terminal.html"><span class="icon">💻</span> Terminal</a>
                 <a class="nav-item" href="configs.html"><span class="icon">💾</span> Config Library</a>
 
                 <div class="nav-label">Command</div>
@@ -569,6 +572,26 @@
                             </div>
                             <div class="hint-line">Free lanes always run (LeakCheck public, XposedOrNot, HIBP Pwned Passwords). Deep dump lanes (LeakCheck v2, DeHashed, Snusbase) fire automatically when the operator configures keys — status below.</div>
                             <div id="dumpLaneStatus" style="margin-top:10px;"></div>
+                            <div class="dossier-section-title" style="margin-top:16px;">🦠 LIVE INFOSTEALER CHECK — HUDSON ROCK (keyless)</div>
+                            <div class="hint-line" style="margin:4px 0 8px;">Real infostealer infection records (family, date, computer name, IP, OS, installed software) — live compromise signals static dump lanes can't see. No key needed.</div>
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>📧</span>
+                                    <input type="text" id="stealerEmail" placeholder="subject email to check" onkeydown="if(event.key==='Enter')runInfostealerCheck()">
+                                </div>
+                                <button class="btn danger" onclick="runInfostealerCheck()">🦠 CHECK INFECTION</button>
+                            </div>
+                            <div id="stealerOut" style="margin-top:10px;"></div>
+                            <div class="dossier-section-title" style="margin-top:22px;">📚 BREACH CATALOGUE — HIBP (keyless, all known breaches)</div>
+                            <div class="hint-line" style="margin:4px 0 8px;">The full HIBP breach universe with dates, account counts and leaked data classes. Filter by breached domain. No key needed (per-account HIBP stays behind the keyed lanes).</div>
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>🏢</span>
+                                    <input type="text" id="catalogDomain" placeholder="domain to filter (blank = full catalogue)" onkeydown="if(event.key==='Enter')runBreachCatalog()">
+                                </div>
+                                <button class="btn primary" onclick="runBreachCatalog()">📚 QUERY CATALOGUE</button>
+                            </div>
+                            <div id="catalogOut" style="margin-top:10px;"></div>
                             <details style="margin-top:12px;border:1px solid var(--border-color);border-radius:6px;padding:10px 14px;background:var(--bg-primary);">
                                 <summary style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);">🔑 ARM DUMP LANES — paste your keys (live, no restart)</summary>
                                 <div class="hint-line" style="margin:8px 0;">Keys are stored server-side only (masked everywhere) and arm the deep lanes instantly. Get them: <a href="https://leakcheck.io" target="_blank" rel="noopener noreferrer" style="color:var(--info)">leakcheck.io</a> · <a href="https://www.dehashed.com" target="_blank" rel="noopener noreferrer" style="color:var(--info)">dehashed.com</a> (use `email:password` as the key) · <a href="https://snusbase.com" target="_blank" rel="noopener noreferrer" style="color:var(--info)">snusbase.com</a>. Leave blank = keep current.</div>
@@ -1573,6 +1596,49 @@
                 }).join('');
             } catch (e) {
                 host.innerHTML = '<div class="hint-line">dump-status unavailable: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        // ── NEW keyless lanes: Hudson Rock infostealer check + HIBP breach catalogue ──
+        async function runInfostealerCheck() {
+            const email = document.getElementById('stealerEmail').value.trim();
+            const out = document.getElementById('stealerOut');
+            if (!email) { toast('Enter an email address', 'error'); return; }
+            out.innerHTML = '<div class="hint-line">Checking infostealer records…</div>';
+            try {
+                const d = await api('/api/osint/infostealer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email }) });
+                const r = d.infostealer;
+                if (!r.infected) {
+                    out.innerHTML = '<div class="dossier-empty" style="color:var(--success);">🟢 No infostealer infection on record for ' + escapeHtml(email) + (r.note ? ' — ' + escapeHtml(r.note) : '') + '</div>';
+                    return;
+                }
+                out.innerHTML = '<div class="dossier-section-title" style="color:var(--danger);">🦠 INFECTED — ' + r.infections.length + ' infection record(s) · ' + r.corporateServices + ' corporate / ' + r.userServices + ' user services on record</div>' +
+                    '<table class="ident-table"><tbody><tr><th>Family</th><th>Date</th><th>Computer</th><th>IP</th><th>OS</th><th>Software</th></tr>' +
+                    r.infections.map(function (i) {
+                        return '<tr><td>' + escapeHtml(i.family || '?') + '</td><td>' + escapeHtml(i.date || '?') + '</td><td>' + escapeHtml(i.computerName || '?') +
+                            '</td><td>' + escapeHtml(i.ip || '?') + '</td><td>' + escapeHtml(i.os || '?') + '</td><td>' + escapeHtml((i.software || []).join(', ')) + '</td></tr>';
+                    }).join('') + '</tbody></table>';
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">lane error: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function runBreachCatalog() {
+            const domain = document.getElementById('catalogDomain').value.trim();
+            const out = document.getElementById('catalogOut');
+            out.innerHTML = '<div class="hint-line">Querying HIBP catalogue…</div>';
+            try {
+                const d = await api('/api/osint/breach-catalog', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ domain: domain || undefined }) });
+                const c = d.catalog;
+                if (!c.total) { out.innerHTML = '<div class="dossier-empty">' + (c.note ? escapeHtml(c.note) : 'no breach entries found') + '</div>'; return; }
+                out.innerHTML = '<div class="dossier-section-title">📚 ' + c.total + ' breach(es)' + (c.domain ? ' touching ' + escapeHtml(c.domain) : '') + (c.note ? ' — ' + escapeHtml(c.note) : '') + '</div>' +
+                    '<table class="ident-table"><tbody><tr><th>Breach</th><th>Date</th><th>Accounts</th><th>Leaked data</th></tr>' +
+                    c.entries.slice(0, 40).map(function (e) {
+                        return '<tr><td>' + escapeHtml(e.title || e.name) + '</td><td>' + escapeHtml(e.breachDate || '?') + '</td><td>' +
+                            (e.pwnCount ? e.pwnCount.toLocaleString() : '?') + '</td><td>' + escapeHtml((e.dataClasses || []).join(', ')) + '</td></tr>';
+                    }).join('') + '</tbody></table>';
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">lane error: ' + escapeHtml(e.message) + '</div>';
             }
         }
 

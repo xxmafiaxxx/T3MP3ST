@@ -10,6 +10,8 @@ import {
   isPrivateIp,
   ipGeo,
   geocodeText,
+  parseHudsonRock,
+  parseHibpCatalog,
 } from '../tools/osint.js';
 
 describe('osint site catalog', () => {
@@ -39,8 +41,8 @@ describe('osint site catalog', () => {
 });
 
 describe('osint agent tools', () => {
-  it('registers 10 tools in the osint category with required parameters', () => {
-    expect(OSINT_TOOLS.length).toBe(10);
+  it('registers 12 tools in the osint category with required parameters', () => {
+    expect(OSINT_TOOLS.length).toBe(12);
     const names = new Set<string>();
     for (const t of OSINT_TOOLS) {
       expect(names.has(t.name), `duplicate tool ${t.name}`).toBe(false);
@@ -351,5 +353,45 @@ describe('person dorks', () => {
     const venmoProfile = dorks.find((d) => d.label.includes('Venmo: profile'));
     expect(venmoProfile!.url).toBe('https://venmo.com/u/jsmith');
     expect(dorks.every((d) => d.url.startsWith('https://'))).toBe(true);
+  });
+});
+
+describe('new keyless breach lanes (Hudson Rock + HIBP catalogue)', () => {
+  it('parseHudsonRock maps stealer infection records and handles the clean miss', () => {
+    const hit = parseHudsonRock({
+      total_corporate_services: 3, total_user_services: 7,
+      stealers: [{ stealer_family: 'RedLine', date_compromised: '2026-08-14', computer_name: 'WS-42', ip_address: '203.0.113.9', operating_system: 'Windows 11', installed_software: ['Chrome', 'Slack'] }],
+    });
+    expect(hit.service).toBe('Hudson Rock');
+    expect(hit.infected).toBe(true);
+    expect(hit.infections[0].family).toBe('RedLine');
+    expect(hit.infections[0].computerName).toBe('WS-42');
+    expect(hit.infections[0].ip).toBe('203.0.113.9');
+    expect(hit.infections[0].software).toEqual(['Chrome', 'Slack']);
+    expect(hit.corporateServices).toBe(3);
+    const miss = parseHudsonRock({ message: 'This email address is not associated with a computer infected by an info-stealer.', stealers: [] });
+    expect(miss.infected).toBe(false);
+    expect(miss.note).toContain('not associated');
+  });
+
+  it('parseHudsonRock tolerates camelCase and junk payloads', () => {
+    const j = parseHudsonRock({ stealers: [{ malware: 'Raccoon', computerName: 'MBP', ip: '198.51.100.4', installedSoftware: 'not-an-array' }] });
+    expect(j.infections[0].family).toBe('Raccoon');
+    expect(j.infections[0].computerName).toBe('MBP');
+    expect(j.infections[0].software).toBeUndefined();
+    expect(parseHudsonRock(null).infected).toBe(false);
+    expect(parseHudsonRock({ stealers: 'nope' }).infections).toHaveLength(0);
+  });
+
+  it('parseHibpCatalog maps catalogue entries and ignores non-arrays', () => {
+    const entries = parseHibpCatalog([
+      { Name: 'Adobe', Title: 'Adobe', Domain: 'adobe.com', BreachDate: '2013-10-04', PwnCount: 152445165, DataClasses: ['Email addresses', 'Password hints'], IsVerified: true, Description: '153M accounts' },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].name).toBe('Adobe');
+    expect(entries[0].pwnCount).toBe(152445165);
+    expect(entries[0].dataClasses).toContain('Password hints');
+    expect(entries[0].isVerified).toBe(true);
+    expect(parseHibpCatalog({ error: 'nope' })).toEqual([]);
   });
 });

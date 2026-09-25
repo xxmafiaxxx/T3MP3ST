@@ -632,11 +632,115 @@ export async function pwnedPasswordCount(password: string): Promise<number> {
   return 0;
 }
 
+// --- NEW keyless lanes: Hudson Rock (live infostealer infections) + HIBP catalogue ---
+// Hudson Rock's free cybercrime-intelligence feed: real infostealer infection records
+// (family, date, computer name, IP, OS, installed software) — a live-compromise class
+// the static dump lanes can't see. HIBP's breach catalogue (haveibeenpwned.com/api/v3/
+// breaches) is keyless and answers "was this domain ever breached" with pwn counts.
+
+export interface InfostealerHit {
+  family?: string;
+  date?: string;
+  computerName?: string;
+  ip?: string;
+  os?: string;
+  software?: string[];
+  url?: string;
+}
+export interface HudsonRockResult {
+  service: 'Hudson Rock';
+  infected: boolean;
+  infections: InfostealerHit[];
+  corporateServices: number;
+  userServices: number;
+  note?: string;
+}
+
+export function parseHudsonRock(j: unknown): HudsonRockResult {
+  const o = (j || {}) as Record<string, unknown>;
+  const raw = Array.isArray(o.stealers) ? (o.stealers as Record<string, unknown>[]) : [];
+  const pick = (r: Record<string, unknown>, ...keys: string[]): string | undefined => {
+    for (const k of keys) { const v = r[k]; if (typeof v === 'string' && v.trim()) return v.trim(); }
+    return undefined;
+  };
+  const strArray = (r: Record<string, unknown>, ...keys: string[]): string[] | undefined => {
+    for (const k of keys) if (Array.isArray(r[k])) return (r[k] as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 12);
+    return undefined;
+  };
+  const infections: InfostealerHit[] = raw.slice(0, 10).map((r) => ({
+    family: pick(r, 'stealer_family', 'stealerFamily', 'family', 'malware'),
+    date: pick(r, 'date_compromised', 'dateCompromised', 'date', 'compromise_date'),
+    computerName: pick(r, 'computer_name', 'computerName', 'hostname'),
+    ip: pick(r, 'ip_address', 'ipAddress', 'ip'),
+    os: pick(r, 'operating_system', 'operatingSystem', 'os'),
+    software: strArray(r, 'installed_software', 'installedSoftware'),
+    url: pick(r, 'url', 'c2_url', 'malicious_url'),
+  }));
+  return {
+    service: 'Hudson Rock',
+    infected: infections.length > 0,
+    infections,
+    corporateServices: typeof o.total_corporate_services === 'number' ? o.total_corporate_services : 0,
+    userServices: typeof o.total_user_services === 'number' ? o.total_user_services : 0,
+    note: infections.length === 0 && typeof o.message === 'string' ? o.message.slice(0, 160) : undefined,
+  };
+}
+
+export async function hudsonRockEmail(emailRaw: string): Promise<HudsonRockResult> {
+  const email = emailRaw.trim().toLowerCase();
+  if (!EMAIL_RE.test(email)) throw new Error(`Invalid email address: ${emailRaw}`);
+  const j = await osintJsonWithFallback<unknown>(`https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-email?email=${encodeURIComponent(email)}`);
+  if (!j) return { service: 'Hudson Rock', infected: false, infections: [], corporateServices: 0, userServices: 0, note: 'lane unavailable (egress/Tor/direct all failed)' };
+  return parseHudsonRock(j);
+}
+
+export interface HibpCatalogEntry {
+  name: string; title: string; domain?: string; breachDate?: string; addedDate?: string;
+  modifiedDate?: string; pwnCount?: number; description?: string; dataClasses?: string[]; isVerified?: boolean;
+}
+
+export function parseHibpCatalog(j: unknown): HibpCatalogEntry[] {
+  if (!Array.isArray(j)) return [];
+  return (j as Record<string, unknown>[]).slice(0, 800).map((e) => ({
+    name: String(e.Name || ''),
+    title: String(e.Title || e.Name || ''),
+    domain: typeof e.Domain === 'string' ? e.Domain : undefined,
+    breachDate: typeof e.BreachDate === 'string' ? e.BreachDate : undefined,
+    addedDate: typeof e.AddedDate === 'string' ? e.AddedDate : undefined,
+    modifiedDate: typeof e.ModifiedDate === 'string' ? e.ModifiedDate : undefined,
+    pwnCount: typeof e.PwnCount === 'number' ? e.PwnCount : undefined,
+    description: typeof e.Description === 'string' ? e.Description.slice(0, 400) : undefined,
+    dataClasses: Array.isArray(e.DataClasses) ? (e.DataClasses as unknown[]).filter((x): x is string => typeof x === 'string') : undefined,
+    isVerified: typeof e.IsVerified === 'boolean' ? e.IsVerified : undefined,
+  }));
+}
+
+const hibpCatalogCache = new Map<string, { at: number; entries: HibpCatalogEntry[] }>();
+
+/** HIBP breach catalogue — keyless, 24h cache. Optional domain filter (?Domain=). */
+export async function hibpBreachCatalog(domainRaw?: string): Promise<{ domain: string | null; total: number; entries: HibpCatalogEntry[]; note?: string }> {
+  const domain = (domainRaw || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  if (domainRaw && domain && !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) throw new Error(`Invalid domain: ${domainRaw}`);
+  const key = domain || '*';
+  const hit = hibpCatalogCache.get(key);
+  if (hit && Date.now() - hit.at < 86_400_000) return { domain: domain || null, total: hit.entries.length, entries: hit.entries };
+  const j = await osintJsonWithFallback<unknown>(
+    `https://haveibeenpwned.com/api/v3/breaches${domain ? `?Domain=${encodeURIComponent(domain)}` : ''}`,
+    {},
+    { 'user-agent': 'T3MP3ST-OSINT/1.0' }
+  );
+  if (!j) return { domain: domain || null, total: 0, entries: [], note: 'lane unavailable (HIBP unreachable)' };
+  const entries = parseHibpCatalog(j);
+  hibpCatalogCache.set(key, { at: Date.now(), entries });
+  return { domain: domain || null, total: entries.length, entries };
+}
+
 export interface EmailIntelResult {
   email: string;
   valid: boolean;
   gravatar: GravatarProfile;
   breaches: BreachSummary[];
+  infostealer: HudsonRockResult;
   domain: { name: string; mxRecords: string[]; aRecord?: string; acceptsMail: boolean } | null;
 }
 
@@ -647,19 +751,28 @@ export async function emailIntel(emailRaw: string): Promise<EmailIntelResult> {
   if (!EMAIL_RE.test(email)) throw new Error(`Invalid email address: ${emailRaw}`);
   const [, domain] = email.split('@');
 
-  const [gravatar, lc, xo, mx, a] = await Promise.all([
+  const [gravatar, lc, xo, hr, mx, a] = await Promise.all([
     gravatarProfile(email),
     leakcheckPublic(email).catch((e): BreachSummary => ({ service: 'LeakCheck', found: 'unknown', note: String(e).slice(0, 100) })),
     xposedOrNot(email).catch((e): BreachSummary => ({ service: 'XposedOrNot', found: 'unknown', note: String(e).slice(0, 100) })),
+    hudsonRockEmail(email).catch((e): HudsonRockResult => ({ service: 'Hudson Rock', infected: false, infections: [], corporateServices: 0, userServices: 0, note: String(e).slice(0, 100) })),
     dns.resolveMx(domain).catch(() => [] as { exchange: string; priority: number }[]),
     dns.resolve4(domain).then((r) => r[0]).catch(() => undefined),
   ]);
+
+  const hrSummary: BreachSummary = {
+    service: 'Hudson Rock (infostealers)',
+    found: hr.infected ? hr.infections.length : 0,
+    sources: [...new Set(hr.infections.map((i) => i.family).filter((f): f is string => Boolean(f)))],
+    note: hr.infected ? `LIVE infostealer infection on record (${hr.corporateServices} corporate / ${hr.userServices} user services exposed)` : hr.note,
+  };
 
   return {
     email,
     valid: true,
     gravatar,
-    breaches: [xo, lc],
+    breaches: [xo, lc, hrSummary],
+    infostealer: hr,
     domain: {
       name: domain,
       mxRecords: mx.map((m) => m.exchange).slice(0, 5),
@@ -2626,6 +2739,67 @@ export const OSINT_TOOLS: CustomTool[] = [
         };
       } catch (error) {
         return { success: false, error: `Breach lookup failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  },
+  {
+    name: 'osint_infostealer_check',
+    description: 'Check an email against Hudson Rock\'s free cybercrime-intelligence feed for LIVE infostealer infections (malware family, compromise date, computer name, IP, OS, installed software). Keyless — a live-compromise class static dump lanes cannot see.',
+    category: 'osint',
+    parameters: [
+      { name: 'email', type: 'string', description: 'Email address to check', required: true },
+    ],
+    handler: async (context) => {
+      const email = context.parameters.email as string;
+      try {
+        const r = await hudsonRockEmail(email);
+        const lines = [
+          `Infostealer check — ${email}:`,
+          r.infected
+            ? `  INFECTED — ${r.infections.length} infection record(s); corporate services on record: ${r.corporateServices}, user services: ${r.userServices}`
+            : `  no infostealer infection on record${r.note ? ` — ${r.note}` : ''}`,
+          ...r.infections.map((i) => `  ${i.family || '?'} · ${i.date || '?'} · host=${i.computerName || '?'} · ip=${i.ip || '?'}${i.os ? ` · os=${i.os}` : ''}${i.software?.length ? ` · software=${i.software.slice(0, 6).join(', ')}` : ''}`),
+        ];
+        const findings = r.infected
+          ? [{
+            title: `Infostealer Infection — ${email}`,
+            severity: 'high' as const,
+            details: r.infections.map((i) => `${i.family || 'stealer'} on ${i.computerName || '?'} (${i.ip || '?'}) at ${i.date || '?'}`).join('; '),
+          }]
+          : [];
+        return { success: true, output: lines.join('\n'), findings };
+      } catch (error) {
+        return { success: false, error: `Infostealer check failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  },
+  {
+    name: 'osint_breach_catalog',
+    description: 'Query the HIBP breach catalogue (keyless): every known breach touching a domain, with dates, account counts and leaked data classes. Pass "all" for the full universe. Answers "was this domain ever breached" with zero account keys.',
+    category: 'osint',
+    parameters: [
+      { name: 'domain', type: 'string', description: 'Breached domain to query (e.g. adobe.com), or "all" for the full catalogue', required: true },
+    ],
+    handler: async (context) => {
+      const raw = String(context.parameters.domain || '').trim();
+      const domain = !raw || raw.toLowerCase() === 'all' ? undefined : raw;
+      try {
+        const c = await hibpBreachCatalog(domain);
+        const lines = [
+          `HIBP breach catalogue${c.domain ? ` for ${c.domain}` : ''} — ${c.total} breach(es)${c.note ? ` (${c.note})` : ''}:`,
+          ...c.entries.slice(0, 25).map((e) => `  ${e.name} · ${e.breachDate || '?'} · ${e.pwnCount ? e.pwnCount.toLocaleString() : '?'} accounts${e.dataClasses?.length ? ` · leaked: ${e.dataClasses.slice(0, 8).join(', ')}` : ''}`),
+          c.total > 25 ? `  … ${c.total - 25} more (ask again with a domain filter to narrow)` : '',
+        ];
+        const findings = c.total > 0
+          ? [{
+            title: `Breach Catalogue — ${c.domain || 'all known breaches'} (${c.total} entries)`,
+            severity: 'info' as const,
+            details: c.entries.slice(0, 10).map((e) => `${e.name} (${e.breachDate || '?'}, ${e.pwnCount || '?'} accounts)`).join('; '),
+          }]
+          : [];
+        return { success: true, output: lines.filter(Boolean).join('\n'), findings };
+      } catch (error) {
+        return { success: false, error: `Breach catalogue failed: ${error instanceof Error ? error.message : String(error)}` };
       }
     },
   },
