@@ -17,6 +17,8 @@ import { directFetch } from '../net/proxy.js';
 import { buildSherlockMergedCatalog } from './sherlock-sites.js';
 import type { Credential, CustomTool } from '../types/index.js';
 import { buildGoogleDorks } from './google-dorks.js';
+import { DIRECTOR_SYSTEM, buildDirectorBrief, parseDirectorPicks, directorHandleCandidates, queryHasUnknownIdentifier } from './osint-aggressive.js';
+import type { AggressiveSearchResult, DirectorMethodRun, DirectorPick, DirectorMethodId } from './osint-aggressive.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -1949,6 +1951,10 @@ export interface OsintDossier {
   /** LLM-directed search plan + ranked pages (the model DIRECTED these searches;
    *  the deterministic layer executed and validated every result). */
   searchPlan?: SearchDirectorResult;
+  /** Aggressive multi-round director: which playbook method ran in which round. */
+  directorCoverage?: DirectorMethodRun[];
+  /** Gaps the director still names after its last round (drives the next plan). */
+  directorGaps?: string[];
   /** Operator-ready markdown report (the DETAILED REPORT section). */
   report: string;
   identities: { source: string; detail: string }[];
@@ -2989,6 +2995,45 @@ export async function locatePerson(input: LocatorInput): Promise<OsintDossier> {
     };
   });
 
+  // ── AGGRESSIVE DIRECTOR — playbook-driven multi-round people search. The LLM
+  // sees a versioned method playbook + current coverage each round and picks the
+  // next 1-3 methods/parameters; this code executes them against PUBLIC sources,
+  // validates every result, and loops until the budget ends or gaps close.
+  let directorResult: AggressiveSearchResult | null = null;
+  await runModule('AGGRESSIVE DIRECTOR', Boolean(input.llmChat), 'no LLM configured — deterministic lanes only', async () => {
+    const known = {
+      emails: [...emails], phones: [...phones], addresses: [...addresses],
+      handles: dossier.socialAccounts.map((a) => a.url),
+      urls: dossier.socialAccounts.map((a) => a.url),
+      accounts: dossier.socialAccounts.map((a) => a.site).join(', ') || 'none',
+    };
+    directorResult = await aggressivePeopleSearch(input.llmChat!, {
+      subject: dossier.subject, name: dossier.name, email, username: username || undefined, phone, domain,
+      known,
+    }, { model: input.llmModel, maxRounds: 3 });
+    dossier.directorCoverage = directorResult.runs;
+    dossier.directorGaps = directorResult.remainingGaps;
+    for (const e of directorResult.found.emails) {
+      if (!emails.includes(e)) { emails.push(e); identities.push({ source: 'aggressive director', detail: `email via directed method: ${e}` }); }
+    }
+    for (const p of directorResult.found.phones) {
+      if (!phones.includes(p)) { phones.push(p); identities.push({ source: 'aggressive director', detail: `phone via directed method: ${p}` }); }
+    }
+    for (const a of directorResult.found.addresses) {
+      if (!addresses.some((x) => x.toLowerCase() === a.toLowerCase())) { addresses.push(a); identities.push({ source: 'aggressive director', detail: `address via directed method: ${a}` }); }
+    }
+    for (const l of directorResult.found.locations) {
+      if (!locations.some((x) => x.toLowerCase() === l.toLowerCase())) locations.push(l);
+    }
+    for (const h of directorResult.found.handles) {
+      if (!derivedHandles.some((c) => c.handle === h)) derivedHandles.push({ handle: h, source: 'aggressive director' });
+    }
+    return {
+      found: directorResult.found.emails.length + directorResult.found.phones.length + directorResult.found.addresses.length + directorResult.found.handles.length,
+      note: `${directorResult.rounds} round(s), ${directorResult.runs.length} method run(s) — ${directorResult.runs.map((r) => r.method).join(', ')}${directorResult.remainingGaps.length ? ` · gaps: ${directorResult.remainingGaps.slice(0, 2).join('; ')}` : ''}`,
+    };
+  });
+
   await runModule('OPERATOR DORKS', true, '', async () => {
     const base = personDorks({
       name: dossier.name,
@@ -3644,6 +3689,225 @@ export function parseLlmPageVerdicts(raw: string, allowedUrls: string[]): LlmPag
 }
 
 /** The director pass: plan → execute (queries + direct public pages) → rank. */
+/** The AGGRESSIVE director executor: up to `maxRounds` LLM planning rounds; each
+ *  round the model picks 1-3 playbook methods with parameters, the engine runs
+ *  them against public sources, and every result is validated by the existing
+ *  extractors. (Method implementations + parsing live in osint-aggressive.ts.) */
+export async function aggressivePeopleSearch(
+  chat: (system: string, user: string) => Promise<string>,
+  input: {
+    subject: string; name?: string; email?: string; username?: string; phone?: string; domain?: string;
+    known: { emails: string[]; phones: string[]; addresses: string[]; handles: string[]; urls: string[]; accounts: string };
+  },
+  opts: { model?: string; maxRounds?: number } = {},
+): Promise<AggressiveSearchResult> {
+  const maxRounds = Math.max(1, Math.min(opts.maxRounds ?? 3, 5));
+  const runs: DirectorMethodRun[] = [];
+  const allPicks: DirectorPick[] = [];
+  const found = { emails: [] as string[], phones: [] as string[], addresses: [] as string[], locations: [] as string[], handles: [] as string[], urls: [] as string[] };
+  found.emails.push(...input.known.emails); found.phones.push(...input.known.phones);
+  found.addresses.push(...input.known.addresses); found.urls.push(...input.known.urls);
+  let gaps: string[] = [];
+  const doneKeys = new Set<string>();
+  const dirT0 = Date.now();
+  const DIR_BUDGET_MS = 150_000;
+
+  const merge = (src: { emails?: string[]; phones?: string[]; addresses?: string[]; socialUrls?: string[] }) => {
+    found.emails.push(...(src.emails || []));
+    found.phones.push(...(src.phones || []));
+    found.addresses.push(...(src.addresses || []));
+    found.urls.push(...(src.socialUrls || []));
+  };
+
+  for (let round = 1; round <= maxRounds; round++) {
+    const brief = buildDirectorBrief({
+      subject: input.subject, name: input.name, email: input.email, username: input.username, phone: input.phone, domain: input.domain,
+      known: { ...found, accounts: input.known.accounts },
+      ran: runs,
+    });
+    const raw = await chat(DIRECTOR_SYSTEM, brief).catch(() => '');
+    let { picks, gaps: g } = parseDirectorPicks(raw);
+    gaps = g;
+    if (picks.length === 0) {
+      // Model flakiness must never idle an aggressive search: fall back to the
+      // first playbook methods that have not produced a run yet.
+      const { OSINT_PLAYBOOK: PB } = await import('./osint-aggressive.js');
+      const ranAny = new Set(runs.map((r) => r.method));
+      // Wave 1 already covered these lanes — the fallback must not re-run the
+      // slowest of them (public records alone is ~70s).
+      const WAVE1_DONE = new Set(['breach_dump', 'people_records', 'screening', 'web_search', 'username_sweep']);
+      const FAST_FIRST: DirectorMethodId[] = ['contact_page', 'breach_catalog', 'darkweb_monitor', 'infostealer', 'historical', 'geolocation', 'associates'];
+      picks = FAST_FIRST.filter((id) => !ranAny.has(id) && !WAVE1_DONE.has(id)).slice(0, 2)
+        .map((id) => ({ method: id, reason: 'deterministic fallback (model returned no usable picks)' }));
+      if (!picks.length) picks = PB.filter((m) => !ranAny.has(m.id)).slice(0, 2).map((m) => ({ method: m.id, reason: 'deterministic fallback (slow lane)' }));
+      if (picks.length === 0) break;
+    }
+    let ranAny = false;
+    const perMethod = new Map<string, number>();
+    for (const pick of picks) {
+      // The LLM may COMBINE known identifiers but never INVENT one: a query or
+      // url carrying an email/phone/url outside the known set is refused (small
+      // local models fabricate plausible contacts; executing those searches
+      // poisons the dossier with invented evidence).
+      const knownAll = { emails: [...input.known.emails, ...found.emails], phones: [...input.known.phones, ...found.phones], urls: [...input.known.urls, ...found.urls], handles: [...input.known.handles, ...found.handles] };
+      if (pick.query) {
+        const bad = queryHasUnknownIdentifier(pick.query, knownAll);
+        if (bad) { runs.push({ method: pick.method, round, status: 'skip', found: 0, note: 'refused — query contains unverified identifier (' + bad + ')' }); continue; }
+      }
+      if (pick.url) {
+        let host = ''; try { host = new URL(pick.url).hostname.toLowerCase(); } catch (_) {}
+        const hostKnown = knownAll.urls.some((u) => { try { return new URL(u).hostname.toLowerCase() === host; } catch (_) { return false; } });
+        if (!hostKnown) { runs.push({ method: pick.method, round, status: 'skip', found: 0, note: 'refused — url host not previously surfaced' }); continue; }
+      }
+      const used = perMethod.get(pick.method) || 0;
+      if (used >= 2) { runs.push({ method: pick.method, round, status: 'skip', found: 0, note: 'skipped — method already picked twice this round (diversity)' }); continue; }
+      perMethod.set(pick.method, used + 1);
+      const param = pick.query || pick.url || pick.username || '';
+      if (param && doneKeys.has(`${pick.method}::${param}`)) continue; // never re-run the same ask
+      if (param) doneKeys.add(`${pick.method}::${param}`);
+      if (Date.now() - dirT0 > DIR_BUDGET_MS) { runs.push({ method: pick.method, round, status: 'skip', found: 0, note: 'skipped — director time budget exhausted' }); continue; }
+      ranAny = true;
+      allPicks.push(pick);
+      const before = found.emails.length + found.phones.length + found.addresses.length;
+      const run = await runDirectorMethod(pick, round, input, found, merge);
+      run.found = found.emails.length + found.phones.length + found.addresses.length - before + (run.note?.startsWith('accounts:') ? 1 : 0);
+      runs.push(run);
+    }
+    if (!ranAny) break;
+    // Early exit: the model says nothing is left to chase.
+    if (gaps.length === 0 && round >= 2) break;
+  }
+  return {
+    model: opts.model,
+    rounds: runs.length ? Math.max(...runs.map((r) => r.round)) : 0,
+    picks: allPicks,
+    runs,
+    found: {
+      emails: [...new Set(found.emails)].slice(0, 25),
+      phones: [...new Set(found.phones)].slice(0, 15),
+      addresses: [...new Set(found.addresses)].slice(0, 15),
+      locations: [...new Set(found.locations)].slice(0, 10),
+      handles: [...new Set(found.handles)].slice(0, 15),
+      urls: [...new Set(found.urls)].slice(0, 20),
+    },
+    remainingGaps: gaps,
+  };
+}
+
+/** Execute one playbook method (public sources only). */
+async function runDirectorMethod(
+  pick: DirectorPick,
+  round: number,
+  input: { subject: string; name?: string; email?: string; username?: string; phone?: string; domain?: string; known: { emails: string[]; phones: string[]; addresses: string[]; handles: string[]; urls: string[]; accounts: string } },
+  found: { emails: string[]; phones: string[]; addresses: string[]; locations: string[]; handles: string[]; urls: string[] },
+  merge: (src: { emails?: string[]; phones?: string[]; addresses?: string[]; socialUrls?: string[] }) => void,
+): Promise<DirectorMethodRun> {
+  const t0 = Date.now();
+  const ok = (n: number, note?: string): DirectorMethodRun => ({ method: pick.method, round, status: 'ok', found: n, note });
+  const bad = (e: unknown): DirectorMethodRun => ({ method: pick.method, round, status: 'error', found: 0, note: String(e instanceof Error ? e.message : e).slice(0, 100) });
+  const skip = (why: string): DirectorMethodRun => ({ method: pick.method, round, status: 'skip', found: 0, note: why });
+  try {
+    switch (pick.method) {
+      case 'web_search': {
+        const r = await searchExtract(pick.query || input.subject, { maxPages: 4 });
+        merge(r.extracted);
+        return ok(r.mined.filter((m) => m.fetched).length, `query "${(pick.query || '').slice(0, 40)}" · ${r.via} · ${r.results.length} results`);
+      }
+      case 'contact_page': {
+        if (!pick.url) return skip('no url given');
+        const m = await mineResultPage(pick.url, pick.reason || pick.url);
+        if (!m.fetched) return skip('fetch failed');
+        merge(m);
+        return ok(m.emails.length + m.phones.length + m.addresses.length, `fetched ${pick.url.slice(0, 50)}`);
+      }
+      case 'username_sweep': {
+        const candidates = pick.username ? [pick.username] : (input.name ? directorHandleCandidates(input.name) : []).slice(0, 2);
+        if (candidates.length === 0) return skip('no handle candidates');
+        let hits = 0;
+        for (const c of candidates) {
+          const sw = await runUsernameSweep(c);
+          hits += sw.found.length;
+          for (const h of sw.found) found.handles.push(h.url);
+        }
+        return ok(hits, `accounts: ${hits} for ${candidates.join(', ')}`);
+      }
+      case 'breach_dump': {
+        const q = pick.query || pick.username || input.email || input.username || input.phone;
+        if (!q) return skip('no identifier');
+        const kind = q.includes('@') ? 'email' : (q.replace(/\D/g, '').length >= 7 ? 'phone' : 'username');
+        const r = await dumpDatabaseLookup(q, kind);
+        const n = r.free.reduce((a, f) => a + (typeof f.found === 'number' ? f.found : 0), 0);
+        if (kind === 'email') found.emails.push(q);
+        return ok(n, `free-lane records for ${q} (${kind})`);
+      }
+      case 'infostealer': {
+        const e = pick.query && pick.query.includes('@') ? pick.query : input.email;
+        if (!e) return skip('no email');
+        const r = await hudsonRockEmail(e);
+        if (r.infected) for (const i of r.infections) { if (i.ip) found.phones.push(i.ip); }
+        return ok(r.infected ? r.infections.length : 0, r.infected ? `${r.infections.length} infection(s)` : 'no infection on record');
+      }
+      case 'breach_catalog': {
+        const d = pick.query || input.domain || (input.email ? input.email.split('@')[1] : '');
+        if (!d) return skip('no domain');
+        const c = await hibpBreachCatalog(d);
+        return ok(c.total, c.total ? `${c.total} breach(es) touching ${d}` : `no breaches recorded for ${d}`);
+      }
+      case 'people_records': {
+        if (!input.name) return skip('needs full name');
+        const r = await peopleRecordSearch(input.name);
+        for (const rec of r.records) {
+          if (rec.city) found.locations.push(rec.city);
+          for (const a of rec.pastAddresses) found.addresses.push(a);
+          for (const aka of rec.akas) found.handles.push(aka);
+        }
+        return ok(r.records.length, `${r.records.length} record(s) via ${r.via}`);
+      }
+      case 'screening': {
+        if (!input.name) return skip('needs full name');
+        const s = await screenSubject(input.name);
+        return ok(s.sources.length, `${s.sources.length} source(s) screened`);
+      }
+      case 'darkweb_monitor': {
+        const kw = pick.query || input.domain || input.name;
+        if (!kw) return skip('no keyword');
+        const l = await ransomwareLeakSearch(kw);
+        return ok(l.victims.length, l.victims.length ? `${l.victims.length} victim post(s) for ${kw}` : `no leak-site posts for ${kw}`);
+      }
+      case 'historical': {
+        const url = pick.url || found.urls[0] || input.known.urls[0];
+        if (!url) return skip('no URL recovered yet');
+        const rec = await historicalProfileRecovery(url);
+        if (rec.snapshots.length === 0) return skip('no snapshots');
+        merge(rec.mined);
+        return ok(rec.mined.emails.length + rec.mined.phones.length + rec.mined.addresses.length, `${rec.snapshots.length} snapshot(s) of ${url.slice(0, 40)}`);
+      }
+      case 'geolocation': {
+        const q = pick.query || found.addresses[0] || found.locations[0];
+        if (!q) return skip('no location string yet');
+        const g = await geocodeText(q);
+        if (g) found.locations.push(g.label);
+        return ok(g ? 1 : 0, g ? `geocoded "${q.slice(0, 40)}"` : `no geocode for "${q.slice(0, 40)}"`);
+      }
+      case 'associates': {
+        const name = input.name;
+        if (!name) return skip('needs full name');
+        // Classic missing-persons pivot: mine relatives/associates mentions, then
+        // back-search the strongest as new leads.
+        const r = await searchExtract(`"${name}" relatives OR family OR "associated with" OR colleague`, { maxPages: 3 });
+        merge(r.extracted);
+        return ok(r.mined.filter((m) => m.fetched).length, `associates pivot via web search`);
+      }
+      default:
+        return skip('method not implemented');
+    }
+  } catch (e) {
+    return bad(e);
+  } finally {
+    void t0;
+  }
+}
+
 export async function llmDirectSearch(
   chat: (system: string, user: string) => Promise<string>,
   ctx: {

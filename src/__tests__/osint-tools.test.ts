@@ -562,3 +562,44 @@ describe('LLM search director (plan/rank parsing + guards)', () => {
     expect(v.some((x) => x.url.includes('never-fetched'))).toBe(false);
   });
 });
+describe('aggressive director: playbook + fabrication guard', () => {
+  it('queryHasUnknownIdentifier permits known identifiers and REFUSES fabricated ones', async () => {
+    const { queryHasUnknownIdentifier } = await import('../tools/osint-aggressive.js');
+    const known = { emails: ['jane@corp.example'], phones: ['4155550132'], urls: ['https://corp.example/team'], handles: ['jdoe'] };
+    expect(queryHasUnknownIdentifier('"Jane Doe" ("jdoe" OR "janedoe") github', known)).toBeNull();
+    expect(queryHasUnknownIdentifier('"Jane Doe" jane@corp.example', known)).toBeNull();
+    expect(queryHasUnknownIdentifier('"Jane Doe" OR "zac.peters@onefiinix.com"', known)).toContain('email');
+    expect(queryHasUnknownIdentifier('call (646) 555-7788', known)).toContain('phone');
+    expect(queryHasUnknownIdentifier('site:invented-domain.test jane', known)).toContain('site');
+  });
+
+  it('parseDirectorPicks drops invented methods, unsafe urls and paramless picks', async () => {
+    const { parseDirectorPicks } = await import('../tools/osint-aggressive.js');
+    const raw = JSON.stringify({
+      picks: [
+        { method: 'web_search', query: '"Jane Doe" jdoe', reason: 'pivot' },
+        { method: 'teleport_subject', query: 'hack the planet' },
+        { method: 'contact_page', url: 'file:///etc/passwd' },
+        { method: 'username_sweep' },
+      ],
+      gaps: ['no DOB', 'no linkage'],
+    });
+    const { picks, gaps } = parseDirectorPicks(raw);
+    expect(picks).toHaveLength(2); // web_search + paramless username_sweep; teleport + file:// url refused
+    expect(picks[0].method).toBe('web_search');
+    expect(picks[1].method).toBe('username_sweep');
+    expect(gaps).toEqual(['no DOB', 'no linkage']);
+    expect(parseDirectorPicks('garbage').picks).toHaveLength(0);
+  });
+
+  it('directorHandleCandidates permutes a full name and rejects a single name', async () => {
+    const { directorHandleCandidates, OSINT_PLAYBOOK } = await import('../tools/osint-aggressive.js');
+    expect(OSINT_PLAYBOOK.length).toBeGreaterThanOrEqual(10);
+    expect(OSINT_PLAYBOOK.map((m) => m.id)).toContain('people_records');
+    expect(OSINT_PLAYBOOK.map((m) => m.id)).toContain('associates');
+    const c = directorHandleCandidates('Jane Doe');
+    expect(c.length).toBeGreaterThan(2);
+    expect(c.some((h) => /jane|doe/i.test(h))).toBe(true);
+    expect(directorHandleCandidates('Cher')).toEqual([]);
+  });
+});
