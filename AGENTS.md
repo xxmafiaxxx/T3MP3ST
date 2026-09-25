@@ -1,5 +1,28 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — GPS MAP: local-LLM copilot wired in (grounded analyst + whitelisted map actions)
+
+**Request:** "wire in th local llm into the gps page. how can the llm make this page better?"
+
+The GPS screen answers "what is where" but never "what does this view mean". The copilot closes that gap WITHOUT letting a model invent map facts: the server computes every number, the model only picks whitelisted actions and writes the prose.
+
+### The split (the whole design)
+1. **`src/tools/gps-copilot.ts` (new)** owns the deterministic half: `buildCopilotContext()` reads the SAME cached feeds the map renders (OpenSky 45s / USGS+NWS 120s / ISS 15s), filters to the viewport, and emits a `facts[]` block — counts, strongest quake, **closest quake to the pin with real km + bearing**, top alerts by severity, live ISS fix, **pin→ISS great-circle leg**. Geodesy is in-module: `haversineKm` / `bearingDeg` / `compassPoint` / `greatCirclePath` (64 sampled points so the browser can draw the leg without a second implementation).
+2. The model only ever emits `{"say":…,"actions":[…]}` over a **10-verb whitelist** (`answer, fly_to, search_place, set_pin, layer, satellites, pois, measure, clear_measure, auto`). `parseCopilotReply()` tolerates fences/prose/bare arrays; `validateCopilotAction()` clamps zoom 1–18, POI radius 50–2000, sat limit 10–500 and **drops** anything else (out-of-range coords, unknown layers/groups/kinds, non-whitelisted verbs). `resolveCopilotPlan()` then fills `measure` with the server's own numbers — a leg with no live ISS fix is dropped, never faked.
+3. **`POST /api/gps/copilot`** (server) = context build + LLMBackbone→LocalAdapter. Reuses the `/api/llm/local` trust rules (`sanitizeLocalBaseUrl`; a client-chosen baseUrl never receives the server's key), streams the browser's abort through to the model, and answers 502 with an actionable reason when the local model is down. `GET /api/gps/copilot` = model/configured/actions.
+
+### CLOUD-LEAK CAUGHT LIVE (worth remembering)
+The first unconfigured live call returned `model: z-ai/glm-5.3-flash` — `LLMBackbone` appends `config.fallbackChain`, and `.env` has `TEMPEST_MODEL_FALLBACK=1`, so a copilot run with the local backend down was **silently answered by paid OpenRouter and shipping the map context off-box**. The route now passes `fallbackChain: []` — a down local model reports down. Re-verified: no baseUrl → `502 local model unavailable — Could not connect to local LLM…`, never a cloud answer.
+
+### UI (`docs/gps.html`) — 🤖 LOCAL COPILOT panel
+Model chip (probe on load) · 6 quick chips (brief / nearest quake / fly-to-ISS-and-measure / Starlink / hospitals / "what can this map tell me and what can it not") · Ctrl+Enter box · STOP (aborts through the proxy) · elapsed timer · escape-first mini-markdown (only `**bold**`/`` `code` `` survive, so a model reply can never inject) · per-action ✓/✕ chips · collapsible "server-computed facts" so every number is auditable. Executor: `fly_to` flyTo · `search_place` Nominatim geocode+center · `set_pin` · `layer` toggle (lazy-loads) · `satellites` (adds the option if CelesTrak's group list hasn't loaded) · `pois` (refuses honestly with "no operator pin") · `measure` draws the server's great-circle polyline + km/bearing label · `auto` toggles the 30s refresher. Settings are read from the shared `localStorage.t3mp3st.settings` local-model block, so the page tracks Settings without its own config UI.
+
+### Verified
+- `tsc --noEmit` 0 · `npm run build` 0 · **new suite `src/__tests__/gps-copilot.test.ts` 27/27** — geodesy vs known distances, viewport filtering, nearest≠biggest quake, the pin→ISS fact, unset-pin honesty, feed caveats, prompt grounding + doctrine, fence/prose/array parsing, prose-only degradation, unknown-action drop, every clamp, every documented action valid, measure filled + a measure with no ISS fix dropped.
+- Gates: ui-inline-scripts-parse 71/71 · sfx-wiring 5/5 · public-gps 19/19. Scratch DOM cross-check (`scratch/gps-copilot-dom-check.mjs`): 41/41 getElementById targets exist, 12 copilot functions defined, 16/16 onclick handlers resolve, 8/8 layer chips are in the action whitelist.
+- **LIVE on :3333** against the real local model (LAN Ollama 192.168.1.162:11434, gemma4:latest): command mode "how far is the ISS from my pin" → `measure` action with the server's **9,521.5 km / 13° NNE** + 65-point path, model prose matching the fact line exactly; brief mode → 1,023 prompt / 571 completion tokens, prose + a `pois{hospital,1000m}` follow-up, ISS coordinates quoted verbatim from FACTS (48.72, 113.46). Real feeds in the facts: 45 aircraft, 0 quakes, honest `NWS feed unavailable: HTTP 400` caveat. Down-local path 502s honestly; `baseUrl: ftp://` 400s; empty prompt 400s.
+- Server restarted on the new dist (:3333, health ok). NOT committed (repo convention). Files: `src/tools/gps-copilot.ts` (new), `src/__tests__/gps-copilot.test.ts` (new), `src/server.ts` (2 routes + import), `docs/gps.html` (panel + client).
+
 ## Session Log — 2026-09-25 (Jarvis) — Tool panels glow while in use + local-LLM extraction assist
 
 **Request:** "the modules in use do not fucking glow. username sweep, breach and dumps, dark web, google dorks etc should all light up when in use. also what llm are you using for the search. can this be done using the local llm already set up"
