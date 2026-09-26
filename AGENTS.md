@@ -1,5 +1,27 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — THE 8 "STANDING FAILURES" CLEARED: two were real product bugs, not a parallel session's
+
+**Request:** "FIX IT" — i.e. stop writing off the 8 red tests I had been attributing to other work and fix them.
+
+**THE HONEST HEADLINE: my "not mine, it's the parallel session" framing was wrong on two counts.** A failing test is a claim about the product. Reading them rather than filing them found **one feature that was never implemented at all** and **one security regression**.
+
+1. **`T3MP3ST_CONFIG_DIR` DID NOT EXIST.** `grep -rn T3MP3ST_CONFIG_DIR src/` returned only the test file. The test was describing a config-isolation feature nobody had built — it was not a flaky assertion, it was a red flag for missing functionality. Now implemented as a **hard boundary, not a preference**: a relative path is rejected at `ConfigManager` construction (it would otherwise resolve against whatever dir a task runs in — i.e. a hunt target), Conf is pinned via `cwd`, and a pinned directory reads **only its own .env** — repo cwd / `~/.t3mp3st/.env` / `~/.env` all skipped so a pinned profile can never silently inherit the operator's real keys.
+2. **`POST /api/mission/start` LEAKED THE RAW RESOLVER ERROR.** It returned `err.message` from `resolveGeneralLLMConfig` straight to the client — and that message can carry credentials or internal configuration. Now routed through `resolveMissionLaunchConfig`, with the diagnostic exported as `LLM_BACKEND_UNCONFIGURED` so the route and helper cannot drift into two strings. Still 400, still before any mutation.
+3. **`GET /api/mission/status` IGNORED `?missionId=`.** A client polling a finished run got whatever mission was active *now*, or null once a newer one took over — so a completed run's final state was unreachable. Now resolves the requested run via `resolveMissionStatus`, and `active` describes the REQUESTED mission, not the process.
+4. **`POST /api/recon/correlate-cves` HAD DRIFTED OFF ITS BOUNDARY.** The validated handler `handleCorrelationApi` existed; the route called `CveCorrelator` directly, so malformed input reached the matcher and the request path did its own feed work. Route is now a thin I/O-free adapter; the live-feed correlator moved to `/live` (no UI consumed the old shape, checked first).
+5. **`agent:reflection` WAS NEVER EMITTED.** Both anti-stall paths existed and steered the model, but nothing surfaced them to the operator. Now emitted from both via `reflectStrategy`, with a typed `AgentEvents` entry. **Advisory only**: `mayExecute` is hard-typed `false`, the boundary is copied from options and NEVER from tool output, and it cannot widen scope, approve a tool, or relax a receipt/evidence gate.
+6. **`ctf-rsa-static` RAN `python3` BLINDLY.** On Windows that is usually the Microsoft Store app-execution alias — a non-functional stub that fails as "Permission denied", or (when it does resolve) as a `TypeError` on `int | str` that reads exactly like the solver being broken. **Neither failure is about the solver, so neither may be reported as if it were.** Now discovers a real Python 3.10+ across the usual names, splits provenance assertions (no interpreter needed) from the solver run, and marks the solver **skipped, never silently passed** — the repo's existing `skipIf` idiom.
+
+**One gate updated rather than weakened:** `local-api-hardening-static` pinned the exact literal `resolveGeneralLLMConfig(provider, model, apiKey)`. The route now reaches the resolver through the sanitizing wrapper, which forwards those exact fields, so the assertion became a regex accepting either shape. The invariant it protects — the request's provider/model/apiKey reach the resolver — is unchanged, and **both hardcoded-provider/model bans are still asserted**.
+
+### Verified
+- `tsc --noEmit` **exit 0** in a clean worktree of the staged tree (real exit code, not a piped one).
+- **FULL SUITE: 117/117 files · 1313 passed · 0 failed · 30 skipped** — reproduced across **three consecutive** runs. The two flake suspects (`index`, `oracle-consistency`) pass in isolation and did not recur.
+- Committed `7dbedca`, pushed to `feat/osint-geo-darkweb-suite`.
+
+**STANDING LESSON, now written down: a failing test is a claim about the product, not a claim about who owns the file.** "It's the parallel session's" is a hypothesis that feels like a conclusion, and it cost a missing feature and a credential leak to actually read the failures. And when a static gate pins a literal, ask whether the product got BETTER before you bend the gate back — the mission-route change here is strictly safer than what it replaced.
+
 ## Session Log — 2026-09-25 (Jarvis) — LEAKCHECK.IO lane + the four bugs live probing found
 
 **Request:** "also add the leakcheck.io scan. to osint https://docs.leakcheck.io/overview — api key is in the env file".
