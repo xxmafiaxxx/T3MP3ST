@@ -43,6 +43,8 @@ import { RapidResponseEngine, RAPID_RESPONSE_CATALOG } from './tools/rapid-respo
 import { TripwireManager, type TripwireTriggerEvent } from './tools/tripwires.js';
 import { WebhookDispatcher } from './config/webhooks.js';
 import { CveFeedEngine } from './tools/cve-feed.js';
+import { handleCorrelationApi } from './threat-intel/correlation.js';
+import { resolveMissionLaunchConfig, resolveMissionStatus } from './mission/http-lifecycle.js';
 import { getPayloadsForCve, CVE_PAYLOAD_CATALOG } from './tools/cve-payloads.js';
 import {
   getMergedSiteCatalog,
@@ -9106,7 +9108,21 @@ app.get('/api/cves/:cveId/epss', async (req: Request, res: Response): Promise<vo
   res.json({ success: true, ...epss });
 });
 
-app.post('/api/recon/correlate-cves', async (req: Request, res: Response): Promise<void> => {
+// CVE correlation — THIN ADAPTER over the validated boundary handler.
+// handleCorrelationApi owns request validation AND correlation in one place, so
+// malformed input can never reach the matcher, and the route itself performs no
+// I/O: the caller supplies the KEV/EPSS feed payload (with provenance) and this
+// layer only translates the validated result into HTTP. Anything that reaches
+// for a live feed belongs in a tool, not in the request path.
+app.post('/api/recon/correlate-cves', (req: Request, res: Response): void => {
+  const result = handleCorrelationApi(req.body);
+  res.status(result.status).json(result.body);
+});
+
+// The live-feed correlator: it fetches CISA KEV + FIRST EPSS itself and can
+// auto-probe suggested CVEs, so it is deliberately NOT the request-path handler
+// above. Kept as its own route for operators who want the live behaviour.
+app.post('/api/recon/correlate-cves/live', async (req: Request, res: Response): Promise<void> => {
   const body = req.body as Record<string, unknown>;
   const target = typeof body.target === 'string' && body.target.trim() ? body.target.trim() : 'target';
   const technologies = Array.isArray(body.technologies) ? body.technologies.map(String) : undefined;
@@ -9116,7 +9132,7 @@ app.post('/api/recon/correlate-cves', async (req: Request, res: Response): Promi
 
   try {
     const result = CveCorrelator.correlate({ target, technologies, banner, headers });
-    
+
     // Broadcast intel alert if ransomware-linked or critical KEVs detected
     if (result.matchedCount > 0) {
       emitContractEvent('intel.kev_match', {
@@ -10240,18 +10256,17 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
   // the local operator (loopback bind + origin guard). Header move is out of scope.
   // resolveGeneralLLMConfig THROWS on a missing key / malformed local baseUrl. Express 4 does not
   // catch rejections from async handlers — an uncaught throw here left the client hanging forever
-  // (unhandledRejection, no response). Map the expected errors to their proper 4xx responses.
-  let missionLLMConfig;
-  try {
-    missionLLMConfig = baseUrl === undefined
-      ? resolveGeneralLLMConfig(provider, model, apiKey)
-      : resolveGeneralLLMConfig(provider, model, apiKey, baseUrl);
-  } catch (err: any) {
-    const msg = String(err?.message || err);
-    const status = /API key required|Unknown provider/.test(msg) ? 400 : 500;
-    res.status(status).json({ error: msg });
+  // (unhandledRejection, no response). resolveMissionLaunchConfig owns that: it catches, and
+  // returns the FIXED LLM_BACKEND_UNCONFIGURED diagnostic instead of the raw resolver message,
+  // which can carry credentials or internal configuration. It still forwards the REQUEST's
+  // provider/model/apiKey/baseUrl to the resolver — nothing is hardcoded here. This runs BEFORE
+  // any mission mutation.
+  const launch = resolveMissionLaunchConfig({ provider, model, apiKey, baseUrl }, resolveGeneralLLMConfig);
+  if (!launch.ok) {
+    res.status(400).json({ error: launch.error });
     return;
   }
+  const missionLLMConfig = launch.config;
   const effectiveKey = missionLLMConfig.apiKey;
   if (providerNeedsApiKey(missionLLMConfig.provider) && !effectiveKey) {
     res.status(400).json({ error: 'API key required — pass apiKey, configure one on the server, or connect a supported local agent' });
@@ -10578,7 +10593,7 @@ app.post('/api/mission/resume', (_req: Request, res: Response) => {
 /**
  * GET /api/mission/status — Get full mission status
  */
-app.get('/api/mission/status', (_req: Request, res: Response) => {
+app.get('/api/mission/status', (req: Request, res: Response) => {
   const cmd = getTempestCommand();
   if (!cmd) {
     res.json({ active: false, progress: [], tasks: [] });
@@ -10586,12 +10601,20 @@ app.get('/api/mission/status', (_req: Request, res: Response) => {
   }
 
   const status = cmd.getStatus();
-  const mission = cmd.mission.getActiveMission();
+  // ?missionId= selects a specific mission. Without it the active mission is
+  // used. This matters because a client polling a run that has already
+  // finished must keep seeing THAT mission's final state instead of silently
+  // falling through to whatever mission happens to be active now — or to null
+  // when a newer one has taken over.
+  const activeMission = cmd.mission.getActiveMission();
+  const mission = resolveMissionStatus(cmd.mission, req.query.missionId);
   const findings = cmd.vault.getAllFindings();
   const allOperators = cmd.cell.getAllOperators().map(op => op.getSummary());
 
   res.json({
-    active: status.running,
+    // "active" describes the REQUESTED mission, not the process: a completed
+    // run is correctly inactive even while its tasks are still being read back.
+    active: Boolean(mission) && mission?.id === activeMission?.id && status.running,
     paused: status.paused,
     stallReason: status.stallReason,
     name: status.name,

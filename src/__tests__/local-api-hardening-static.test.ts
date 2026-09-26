@@ -27,7 +27,16 @@ describe('local API authorization hardening invariants', () => {
 
     expect(resolver).toContain('config.getLLMConfig()');
     expect(resolver).toContain('provider || defaultConfig.provider');
-    expect(missionRoute).toContain('resolveGeneralLLMConfig(provider, model, apiKey)');
+    // The mission route must resolve the LLM config from the REQUEST's
+    // provider/model/apiKey — never a hardcoded backend. It now reaches the
+    // resolver through resolveMissionLaunchConfig, which forwards those exact
+    // fields and additionally turns a thrown resolver message (which can carry
+    // credentials) into a fixed 400. The invariant is "the request's values reach
+    // the resolver", so either call shape satisfies it; the hardcoded
+    // provider/model bans below are what actually matter and are asserted on both.
+    expect(missionRoute).toMatch(
+      /resolveGeneralLLMConfig\(provider,\s*model,\s*apiKey\)|resolveMissionLaunchConfig\(\{\s*provider,\s*model,\s*apiKey/,
+    );
     expect(`${missionRoute}\n${generalRoutes}`).not.toMatch(/provider\s*=\s*['"]openrouter['"]/);
     expect(`${missionRoute}\n${generalRoutes}`).not.toMatch(/model\s*=\s*['"]anthropic\/claude-sonnet-4['"]/);
   });

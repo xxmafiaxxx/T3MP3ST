@@ -7,7 +7,7 @@
 
 import Conf from 'conf';
 import { homedir } from 'os';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
 
@@ -826,13 +826,56 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
 // CONFIGURATION MANAGER
 // =============================================================================
 
+// =============================================================================
+// EXPLICIT CONFIGURATION DIRECTORY
+// =============================================================================
+// T3MP3ST_CONFIG_DIR pins every piece of on-disk state — the Conf store and the
+// .env it reads — to one absolute directory. This exists so an operator can run
+// several isolated instances (or a hardened throwaway profile) without one
+// reading another's keys, and WITHOUT the usual home-directory fallback that
+// would otherwise leak the operator's own ~/.t3mp3st/.env into the run.
+//
+// It is a hard isolation boundary, not a preference:
+//   • a relative path is rejected outright (it would resolve against whatever
+//     cwd a task happened to be running in — i.e. a hunt target);
+//   • the repo cwd .env, ~/.t3mp3st/.env and ~/.env are ALL skipped, so a
+//     pinned directory can never silently inherit the operator's real keys;
+//   • only real process env vars and the pinned directory's own .env are read.
+export function resolveConfigDir(): string | undefined {
+  const raw = (process.env.T3MP3ST_CONFIG_DIR || '').trim();
+  if (!raw) return undefined;
+  if (!isAbsolute(raw)) {
+    // Fail loudly and early: a silently-relativised path is a security bug,
+    // not a convenience.
+    throw new Error(
+      `T3MP3ST_CONFIG_DIR must be an absolute path (got "${raw}"). ` +
+      `A relative path would resolve against whatever directory a task runs in — including a hunt target.`,
+    );
+  }
+  return raw;
+}
+
+/** True when the operator pinned an explicit config directory. */
+export function hasExplicitConfigDir(): boolean {
+  return Boolean((process.env.T3MP3ST_CONFIG_DIR || '').trim());
+}
+
 class ConfigManager {
   private config: Conf<TempestSettings>;
   private envLoaded: boolean = false;
+  /** Set once in the constructor — see T3MP3ST_CONFIG_DIR above. */
+  private readonly explicitDir?: string;
 
   constructor() {
+    // Read BEFORE the store is constructed: an invalid path must fail here,
+    // not on the first getApiKey() call deep inside a mission.
+    this.explicitDir = resolveConfigDir();
+
     this.config = new Conf<TempestSettings>({
       projectName: 't3mp3st',
+      // With a pinned directory, `cwd` makes Conf write config.json exactly
+      // there instead of under the OS config dir.
+      ...(this.explicitDir ? { cwd: this.explicitDir } : {}),
       defaults: DEFAULT_SETTINGS,
     });
 
@@ -860,24 +903,32 @@ class ConfigManager {
     // locations the Settings→.env bridge writes to. Never read a target repo's
     // .env when cwd is a hunt target; the guard is: repo .env only if CWD
     // positively identifies as the T3MP3ST package checkout (package.json name === 't3mp3st').
+    //
+    // T3MP3ST_CONFIG_DIR short-circuits ALL of that: a pinned directory reads
+    // its own .env and nothing else — no repo cwd file, no ~/.t3mp3st/.env, no
+    // ~/.env. That is the whole point of the override.
     const repoEnv = join(process.cwd(), '.env');
     const homedirEnv = join(homedir(), '.t3mp3st', '.env');
     const homeEnv = join(homedir(), '.env');
     // Order: repo .env first in dev (authoritative for Settings), then
     // homedir fallbacks. Real env vars still win (process.env[key]===undefined gate).
     const envPaths: string[] = [];
-    try {
-      if (process.env.T3MP3ST_DEV === '1') {
-        envPaths.push(repoEnv);
-      } else {
-        const pkgPath = join(process.cwd(), 'package.json');
-        if (existsSync(pkgPath)) {
-          const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-          if (pkg?.name === 't3mp3st') envPaths.push(repoEnv);
+    if (this.explicitDir) {
+      envPaths.push(join(this.explicitDir, '.env'));
+    } else {
+      try {
+        if (process.env.T3MP3ST_DEV === '1') {
+          envPaths.push(repoEnv);
+        } else {
+          const pkgPath = join(process.cwd(), 'package.json');
+          if (existsSync(pkgPath)) {
+            const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+            if (pkg?.name === 't3mp3st') envPaths.push(repoEnv);
+          }
         }
-      }
-    } catch { /* ignore package.json read failure */ }
-    envPaths.push(homedirEnv, homeEnv);
+      } catch { /* ignore package.json read failure */ }
+      envPaths.push(homedirEnv, homeEnv);
+    }
 
     let envProvider: string | undefined;
 

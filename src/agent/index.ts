@@ -25,6 +25,7 @@ import type {
   Task,
 } from '../types/index.js';
 import { ExecutionMonitor, formatEnhancedToolResponse, performMentor, fixToolCallArgs } from './monitor.js';
+import { reflectStrategy } from '../llm/tool-call-boundary.js';
 
 // =============================================================================
 // TYPES
@@ -124,6 +125,23 @@ export interface AgentEvents {
   /** Emitted the moment tool findings are collected — before task completion — so a
    * backstop-reaped task still persists its discoveries. */
   'agent:findings': { findings: AgentResult['findings'] };
+  /** Advisory-only anti-stall signal. It can RECOMMEND a pivot; it can never
+   *  execute one, widen scope, approve a tool, or relax a receipt/evidence
+   *  gate — mayExecute is hard-typed false and the boundary is copied. */
+  'agent:reflection': {
+    iteration: number;
+    trigger: 'duplicate-tool-call' | 'no-new-findings';
+    tool?: string;
+    assessment: 'progress' | 'stalled' | 'retry-exhausted';
+    recommendation: string;
+    mayExecute: false;
+    requiresApproval: boolean;
+    boundary: {
+      scope: string[]; approvedTools: string[]; approvalsRequired: boolean;
+      receiptsRequired: boolean; evidenceRequired: boolean;
+      remainingIterations: number; remainingTokens: number;
+    };
+  };
   'agent:complete': AgentResult;
   'agent:error': { error: Error; step: number };
 }
@@ -275,6 +293,23 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
                 error: `Duplicate call — you already ran ${toolCall.name} with these exact arguments. ` +
                   `Prior result: ${seenCalls.get(callHash)}. Do NOT repeat it — change the arguments, pick a different tool, or move to your final debrief.`,
               };
+              // ADVISORY ONLY. reflectStrategy can recommend a pivot; it can never
+              // execute one, widen the boundary, or grant authority. The steering
+              // itself stays in the message above.
+              // all scope, approval, receipt, budget, and evidence gates still apply
+              this.emit('agent:reflection', {
+                iteration: i,
+                trigger: 'duplicate-tool-call',
+                tool: toolCall.name,
+                ...reflectStrategy({
+                  successful: false,
+                  duplicate: true,
+                  attempts: noProgress + 1,
+                  maxAttempts: this.options.maxIterations,
+                  proposedTool: toolCall.name,
+                  boundary: this.reflectionBoundary(i),
+                }),
+              });
               toolSteps[idx] = { iteration: i, type: 'tool_call', toolName: toolCall.name, toolArgs: toolCall.arguments, toolResult: dup, timestamp: Date.now() };
               return;
             }
@@ -343,6 +378,18 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           // vector or a final debrief — don't let the agent grind the budget on a dead approach.
           noProgress = allFindings.length > findingsBefore ? 0 : noProgress + 1;
           if (noProgress >= 4 && i < this.options.maxIterations - 2) {
+            // Same rule as the duplicate path: advisory only, no authority, no execution.
+            this.emit('agent:reflection', {
+              iteration: i,
+              trigger: 'no-new-findings',
+              ...reflectStrategy({
+                successful: false,
+                duplicate: false,
+                attempts: noProgress,
+                maxAttempts: this.options.maxIterations,
+                boundary: this.reflectionBoundary(i),
+              }),
+            });
             messages.push({
               role: 'user',
               content: '[System: 4 iterations with no new findings. Either pursue a GENUINELY different vector/tool/argument now, or produce your final debrief if the surface is exhausted. Do not keep repeating the current approach.]',
@@ -452,6 +499,22 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
 
     this.emit('agent:complete', result);
     return result;
+  }
+
+  /** The authority envelope a reflection is allowed to see. Deliberately derived
+   *  from options, never from tool output: reflectStrategy copies it defensively
+   *  and may recommend a pivot, but it cannot widen scope, approve a tool, or
+   *  relax a receipt/evidence requirement. */
+  private reflectionBoundary(iteration: number) {
+    return {
+      scope: [],
+      approvedTools: [...this.options.tools],
+      approvalsRequired: true,
+      receiptsRequired: true,
+      evidenceRequired: true,
+      remainingIterations: Math.max(0, this.options.maxIterations - iteration),
+      remainingTokens: Math.max(0, this.options.maxTokens - iteration),
+    };
   }
 
   private getLocalReconBootstrap(
