@@ -81,6 +81,23 @@ coverage-pr/
 .codex/
 .agents/
 
+# Local cache & debug artifacts
+.t3mp3st-cache/
+.zcode/
+scratch/
+bash.exe.stackdump
+nul
+# operator settings DB (holds API keys — never publish)
+memory/
+
+# transient probe / harvest detritus (rebuilt from the wire)
+.fp_*
+.b_*
+*.stackdump
+.bounup.html
+.login.html
+.memberlist.html
+.core*.js
 data/
 reports/
 drills/
