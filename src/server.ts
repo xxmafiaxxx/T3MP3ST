@@ -7770,23 +7770,39 @@ app.get('/api/osint/sites', (req: Request, res: Response) => {
 });
 
 app.get('/api/osint/dump-status', (_req: Request, res: Response) => {
+  // `service` is the SAME string the lane reports its results under, so the
+  // status row and a run result always read identically. `envVars` lists every
+  // name that arms the lane — a key present under an alias must not be reported
+  // as "runtime", which would send the operator hunting for a setting they
+  // already have in their .env.
   const lanes = [
-    { service: 'LeakCheck v2', envVar: 'T3MP3ST_LEAKCHECK_KEY', unlocks: 'full dump records incl. password fields (email/username/phone/domain)' },
-    { service: 'DeHashed', envVar: 'T3MP3ST_DEHASHED_KEY', unlocks: 'deep-web breach search, 40B+ records (email/username)' },
-    { service: 'Snusbase', envVar: 'T3MP3ST_SNUSBASE_KEY', unlocks: 'dump database search incl. phone lookups' },
+    {
+      service: 'LeakCheck Pro v2 (keyed)',
+      key: 'leakcheck' as const,
+      envVars: ['T3MP3ST_LEAKCHECK_KEY', 'LEAKCHECKIO_API_KEY', 'LEAKCHECK_APIKEY'],
+      unlocks: 'full dump records incl. password fields, per-breach attribution and remaining quota (email/username/phone/hash — domain & password search are Enterprise-plan)',
+    },
+    { service: 'DeHashed', key: 'dehashed' as const, envVars: ['T3MP3ST_DEHASHED_KEY'], unlocks: 'deep-web breach search, 40B+ records (email/username)' },
+    { service: 'Snusbase', key: 'snusbase' as const, envVars: ['T3MP3ST_SNUSBASE_KEY'], unlocks: 'dump database search incl. phone lookups' },
   ];
   const armed = dumpKeyStatus();
-  const byEnv: Record<string, boolean> = {
-    'T3MP3ST_LEAKCHECK_KEY': Boolean(process.env.T3MP3ST_LEAKCHECK_KEY),
-    'T3MP3ST_DEHASHED_KEY': Boolean(process.env.T3MP3ST_DEHASHED_KEY),
-    'T3MP3ST_SNUSBASE_KEY': Boolean(process.env.T3MP3ST_SNUSBASE_KEY),
-  };
   const ocArmed = Boolean(getOpencellidKey());
   res.json({
     free: ['LeakCheck public', 'XposedOrNot', 'HIBP Pwned Passwords (k-anonymity)'],
     lanes: lanes.map((l) => {
-      const svc = l.envVar === 'T3MP3ST_LEAKCHECK_KEY' ? 'leakcheck' : l.envVar === 'T3MP3ST_DEHASHED_KEY' ? 'dehashed' : 'snusbase';
-      return { ...l, armed: armed[svc as keyof typeof armed], source: armed[svc as keyof typeof armed] ? (byEnv[l.envVar] ? 'env-or-runtime' : 'runtime') : 'none' };
+      const isArmed = armed[l.key];
+      // Which env var (if any) supplied the key — reported so the operator can see
+      // which name is actually set instead of guessing between the aliases.
+      const setIn = l.envVars.filter((v) => (process.env[v] || '').trim());
+      return {
+        service: l.service,
+        envVar: l.envVars[0],
+        envVars: l.envVars,
+        setIn,
+        unlocks: l.unlocks,
+        armed: isArmed,
+        source: isArmed ? (setIn.length ? 'env-or-runtime' : 'runtime') : 'none',
+      };
     }),
     gps: {
       opencellid: {

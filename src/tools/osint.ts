@@ -697,7 +697,7 @@ interface XposedornotResponse { exposed?: string; breaches?: string[][]; breach?
  *  data while the bare fetch failed. */
 export async function leakcheckPublic(query: string): Promise<BreachSummary> {
   let r: { status: number; body: LeakcheckPublicResponse | null } | null = null;
-  try { r = await osintJsonWithFallbackStatus(`https://leakcheck.io/api/public?check=${encodeURIComponent(query)}`); } catch { r = null; }
+  try { r = await osintJsonWithFallbackStatus(`${leakcheckBase('public')}?check=${encodeURIComponent(query)}`); } catch { r = null; }
   if (!r || !r.body) return { service: 'LeakCheck public', found: 'unknown', note: 'public API unreachable via egress, Tor and direct' };
   if (r.status === 429) return { service: 'LeakCheck public', found: 'unknown', note: 'rate-limited — the public lane allows 1 request/second' };
   const j = r.body;
@@ -912,11 +912,34 @@ const DUMP_ENV: Record<DumpKeyService, string> = {
   dehashed: 'T3MP3ST_DEHASHED_KEY',
   snusbase: 'T3MP3ST_SNUSBASE_KEY',
 };
-// LeakCheck's own docs/tools name the variable LEAKCHECK_APIKEY, and operators
-// also carry LEAKCHECKIO. All three are read; the runtime-pasted key wins.
+// LeakCheck key variable names, in the order they are consulted. `LEAKCHECKIO`
+// is deliberately NOT here: in practice operators set it to the API BASE URL
+// (https://leakcheck.io/api/v2), not to a key — treating it as one armed the
+// lane with a URL, and every query then failed with "Invalid X-API-Key" while
+// the panel cheerfully reported the lane ARMED. The base URLs are honoured
+// separately below, where they belong.
 const DUMP_ENV_ALIASES: Partial<Record<DumpKeyService, string[]>> = {
-  leakcheck: ['LEAKCHECK_APIKEY', 'LEAKCHECKIO', 'LEAKCHECK_KEY'],
+  leakcheck: ['LEAKCHECKIO_API_KEY', 'LEAKCHECK_APIKEY', 'LEAKCHECK_KEY'],
 };
+// A pasted/env key that is actually a URL is a configuration mistake, not a key.
+// LeakCheck keys are ≥40 chars with no scheme, so reject anything URL-shaped
+// rather than arming a lane that can only ever return "Invalid X-API-Key".
+function isPlausibleKey(v: string | undefined): v is string {
+  if (!v) return false;
+  const t = v.trim();
+  return t.length >= 8 && !/^https?:\/\//i.test(t) && !/\s/.test(t);
+}
+
+/** Base URL overrides. `LEAKCHECKIO` / `LEAKCHECK_PUBLIC_API` are what operators
+ *  actually set those names to — a self-hosted or proxied LeakCheck endpoint. */
+function leakcheckBase(kind: 'pro' | 'public'): string {
+  const raw = (kind === 'pro'
+    ? process.env.LEAKCHECKIO || process.env.LEAKCHECK_BASE_URL
+    : process.env.LEAKCHECK_PUBLIC_API) || '';
+  const t = raw.trim();
+  if (!/^https?:\/\//i.test(t)) return kind === 'pro' ? 'https://leakcheck.io/api/v2' : 'https://leakcheck.io/api/public';
+  return t.replace(/\/+$/, '');
+}
 
 export function setDumpKey(service: DumpKeyService, key: string | undefined): void {
   if (key && key.trim()) dumpKeys[service] = key.trim();
@@ -924,7 +947,7 @@ export function setDumpKey(service: DumpKeyService, key: string | undefined): vo
 }
 
 export function getDumpKey(service: DumpKeyService): string | undefined {
-  const fromEnv = (v?: string) => (v || '').trim() || undefined;
+  const fromEnv = (v?: string) => (isPlausibleKey(v) ? v.trim() : undefined);
   const primary = fromEnv(process.env[DUMP_ENV[service]]);
   if (dumpKeys[service]) return dumpKeys[service];
   if (primary) return primary;
@@ -1043,7 +1066,7 @@ export async function leakcheckPro(
   const r = await osintJsonWithFallbackStatus<{
     success?: boolean; found?: number; quota?: number; error?: string; message?: string;
     result?: LeakcheckProRow[];
-  }>(`https://leakcheck.io/api/v2/query/${encodeURIComponent(query)}${type}`, {}, { 'X-API-Key': key, accept: 'application/json' });
+  }>(`${leakcheckBase('pro')}/query/${encodeURIComponent(query)}${type}`, {}, { 'X-API-Key': key, accept: 'application/json' });
   if (!r || !r.body) return { ...empty, note: 'LeakCheck Pro API unreachable via egress, Tor and direct' };
   const j = r.body;
   // 401/403/429 carry no useful body on some edges — name the status instead of

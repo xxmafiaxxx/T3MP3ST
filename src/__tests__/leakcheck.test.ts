@@ -149,6 +149,8 @@ describe('leakcheckPro — keyed lane', () => {
     delete process.env.LEAKCHECKIO;
     delete process.env.LEAKCHECK_APIKEY;
     delete process.env.LEAKCHECK_KEY;
+    delete process.env.LEAKCHECKIO_API_KEY;
+    delete process.env.LEAKCHECKIO;
     setDumpKey('leakcheck', undefined);
     const r = await leakcheckPro('a@example.com', 'email');
     expect(r.found).toBe(0);
@@ -156,14 +158,39 @@ describe('leakcheckPro — keyed lane', () => {
     expect(r.note).toMatch(/LEAKCHECKIO/);
   });
 
-  it('reads the key from the LEAKCHECKIO / LEAKCHECK_APIKEY aliases, not just T3MP3ST_LEAKCHECK_KEY', () => {
-    process.env = { ...env, T3MP3ST_LEAKCHECK_KEY: '', LEAKCHECKIO: 'io-key-1234' };
+  it('reads the key from the LEAKCHECKIO_API_KEY / LEAKCHECK_APIKEY aliases', () => {
+    process.env = { ...env, T3MP3ST_LEAKCHECK_KEY: '', LEAKCHECKIO_API_KEY: 'io-key-1234' };
     expect(getDumpKey('leakcheck')).toBe('io-key-1234');
-    process.env = { ...env, T3MP3ST_LEAKCHECK_KEY: '', LEAKCHECKIO: '', LEAKCHECK_APIKEY: 'docs-key-5678' };
+    process.env = { ...env, T3MP3ST_LEAKCHECK_KEY: '', LEAKCHECKIO_API_KEY: '', LEAKCHECK_APIKEY: 'docs-key-5678' };
     expect(getDumpKey('leakcheck')).toBe('docs-key-5678');
     // A runtime-pasted key still wins over every env var.
     setDumpKey('leakcheck', 'runtime-key');
     expect(getDumpKey('leakcheck')).toBe('runtime-key');
+  });
+
+  // Live-caught: operators set LEAKCHECKIO to the API BASE URL
+  // (https://leakcheck.io/api/v2), not to a key. Treating it as one armed the
+  // lane with a URL, so the panel reported ARMED while every query returned
+  // "Invalid X-API-Key" — the worst combination: confidently wrong.
+  it('never arms the lane from a URL-shaped value', () => {
+    process.env = {
+      ...env,
+      T3MP3ST_LEAKCHECK_KEY: '',
+      LEAKCHECKIO_API_KEY: '',
+      LEAKCHECK_APIKEY: '',
+      LEAKCHECKIO: 'https://leakcheck.io/api/v2',
+    };
+    setDumpKey('leakcheck', undefined);
+    expect(getDumpKey('leakcheck')).toBeUndefined();
+  });
+
+  it('falls back through the aliases when the primary holds a URL', () => {
+    process.env = {
+      ...env,
+      T3MP3ST_LEAKCHECK_KEY: 'https://leakcheck.io/api/v2',
+      LEAKCHECKIO_API_KEY: 'real-key-value-here',
+    };
+    expect(getDumpKey('leakcheck')).toBe('real-key-value-here');
   });
 
   it('parses the real `source` OBJECT — breach attribution is not lost', async () => {

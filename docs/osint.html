@@ -758,8 +758,9 @@
                                 </div>
                             </div>
                             <div class="hint-line">Free lanes always run (LeakCheck public, XposedOrNot, HIBP Pwned Passwords). Deep dump lanes (LeakCheck Pro v2, DeHashed, Snusbase) fire automatically when the operator configures keys — status below.</div>
-                            <div class="dossier-section-title" style="margin-top:16px;">🔎 LEAKCHECK.IO <span class="count">public free · Pro v2 keyed</span></div>
-                            <div class="hint-line" style="margin:4px 0 8px;">10B+ leaked records. The <b>public</b> lane returns which breach sources list the identifier and which data classes were exposed (never the values). <b>Pro v2</b> returns full records with per-breach attribution — key read from <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">T3MP3ST_LEAKCHECK_KEY</code> / <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECKIO</code> or the ARM DUMP LANES panel. A hit means a breach lists this identifier — it does not prove the account is still active.</div>
+                            <div class="dossier-section-title" style="margin-top:16px;">🔎 LEAKCHECK.IO <span class="count">public free · Pro v2 armed lane</span></div>
+                            <div class="hint-line" id="leakcheckArmed" style="margin:4px 0;font-size:11px;">checking lane state…</div>
+                            <div class="hint-line" style="margin:4px 0 8px;">10B+ leaked records. The <b>public</b> lane returns which breach sources list the identifier and which data classes were exposed (never the values) — it needs no key. <b>Pro v2</b> is an <a href="#" onclick="document.getElementById('keyLeakcheck').closest('details').open=true;return false;" style="color:var(--info);">ARM DUMP LANE</a>: it returns full records with per-breach attribution whenever a key is present, from <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">T3MP3ST_LEAKCHECK_KEY</code>, <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECKIO</code> or <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECK_APIKEY</code> in the env, or pasted into ARM DUMP LANES. A hit means a breach lists this identifier — it does not prove the account is still active.</div>
                             <div class="locator-form">
                                 <div class="search-box">
                                     <span>🔍</span>
@@ -802,7 +803,7 @@
                             <div id="catalogOut" style="margin-top:10px;"></div>
                             <details style="margin-top:12px;border:1px solid var(--border-color);border-radius:6px;padding:10px 14px;background:var(--bg-primary);">
                                 <summary style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);">🔑 ARM DUMP LANES — paste your keys (live, no restart)</summary>
-                                <div class="hint-line" style="margin:8px 0;">Keys are stored server-side only (masked everywhere) and arm the deep lanes instantly. Get them: <a href="https://leakcheck.io" target="_blank" rel="noopener noreferrer" style="color:var(--info)">leakcheck.io</a> · <a href="https://www.dehashed.com" target="_blank" rel="noopener noreferrer" style="color:var(--info)">dehashed.com</a> (use `email:password` as the key) · <a href="https://snusbase.com" target="_blank" rel="noopener noreferrer" style="color:var(--info)">snusbase.com</a>. Leave blank = keep current.</div>
+                                <div class="hint-line" style="margin:8px 0;">Keys are stored server-side only (masked everywhere) and arm the deep lanes instantly — no restart. Get them: <a href="https://leakcheck.io" target="_blank" rel="noopener noreferrer" style="color:var(--info)">leakcheck.io</a> · <a href="https://www.dehashed.com" target="_blank" rel="noopener noreferrer" style="color:var(--info)">dehashed.com</a> (use `email:password` as the key) · <a href="https://snusbase.com" target="_blank" rel="noopener noreferrer" style="color:var(--info)">snusbase.com</a>. Leave blank = keep current. <b>A lane already armed from the environment shows 🟢 above</b> — LeakCheck accepts <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">T3MP3ST_LEAKCHECK_KEY</code>, <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECKIO_API_KEY</code> or <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECK_APIKEY</code>, so pasting one here is optional. (<code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECKIO</code> / <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECK_PUBLIC_API</code> are endpoint URLs, not keys — they are honoured as base-URL overrides.)</div>
                                 <div class="locator-form">
                                     <div class="search-box" style="min-width:180px;"><span>LC</span><input type="password" id="keyLeakcheck" placeholder="LeakCheck v2 key" autocomplete="off"></div>
                                     <div class="search-box" style="min-width:180px;"><span>DH</span><input type="password" id="keyDehashed" placeholder="DeHashed user:key" autocomplete="off"></div>
@@ -2663,11 +2664,31 @@
             const host = document.getElementById('dumpLaneStatus');
             try {
                 const d = await api('/api/osint/dump-status');
+                window.__dumpLaneStatus = d;
                 const armed = d.lanes.filter(function (l) { return l.armed; }).length;
                 document.getElementById('statKeyedLanes').textContent = armed + '/' + d.lanes.length;
                 host.innerHTML = d.lanes.map(function (l) {
-                    return '<div class="dork-item" style="margin-bottom:4px;"><span class="label">' + (l.armed ? '🟢' : '🔒') + ' ' + escapeHtml(l.service) + (l.armed ? ' ARMED' : '') + '</span><span style="color:var(--text-muted);font-size:10.5px;">' + escapeHtml(l.unlocks) + (l.armed ? '' : ' — ARM DUMP LANES below (or ' + escapeHtml(l.envVar) + ')') + '</span></div>';
+                    // Name the env var that ACTUALLY supplied the key, not just the
+                    // first one we look for — with aliases in play, guessing sends
+                    // the operator hunting for a setting they already have.
+                    const from = l.armed
+                        ? ' <span style="color:var(--success);">ARMED</span>'
+                          + (l.setIn && l.setIn.length
+                            ? ' <span style="color:var(--text-muted);font-size:10px;">· from ' + escapeHtml(l.setIn.join(' / ')) + '</span>'
+                            : ' <span style="color:var(--text-muted);font-size:10px;">· pasted at runtime</span>')
+                        : ' — ARM DUMP LANES below (or ' + escapeHtml((l.envVars || [l.envVar]).join(' / ')) + ')';
+                    return '<div class="dork-item" style="margin-bottom:4px;"><span class="label">' + (l.armed ? '🟢' : '🔒') + ' ' + escapeHtml(l.service) + '</span><span style="color:var(--text-muted);font-size:10.5px;">' + escapeHtml(l.unlocks) + from + '</span></div>';
                 }).join('');
+                // Mirror the armed state onto the LeakCheck block, so the lane the
+                // operator is about to use says so BEFORE they press the button.
+                const lcRow = d.lanes.filter(function (l) { return /leakcheck/i.test(l.service); })[0];
+                const chip = document.getElementById('leakcheckArmed');
+                if (chip && lcRow) {
+                    chip.innerHTML = lcRow.armed
+                        ? '🟢 <b>' + escapeHtml(lcRow.service) + '</b> ARMED' + (lcRow.setIn && lcRow.setIn.length ? ' · key from ' + escapeHtml(lcRow.setIn.join(' / ')) : ' · pasted at runtime')
+                        : '🔒 <b>' + escapeHtml(lcRow.service) + '</b> not armed — set ' + escapeHtml((lcRow.envVars || [lcRow.envVar]).join(' / ')) + ' or paste one into ARM DUMP LANES';
+                    chip.style.color = lcRow.armed ? 'var(--success)' : 'var(--text-muted)';
+                }
             } catch (e) {
                 host.innerHTML = '<div class="hint-line">dump-status unavailable: ' + escapeHtml(e.message) + '</div>';
             }
