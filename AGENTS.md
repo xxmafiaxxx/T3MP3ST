@@ -1,5 +1,17 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — THE ARMED LANE COUNT WAS LYING: 1/3 while two lanes were live
+
+**Request:** "STILL NOT FUCKING DONE. SHOULD SAY 2/4 DUMP LANES ARMED."
+
+**HE WAS EXACTLY RIGHT, AND THE NUMBER WAS A LIE.** The stat card computes `armed / lanes.length` over the `lanes` array — and that array had **three entries and excluded OpenCellID**, which was parked in a separate `gps` object. With a LeakCheck key AND a `T3MP3ST_OPENCELLID_KEY` present, the panel said **1/3** while **two** lanes were armed. The one number the operator uses to answer "what is actually live here" under-reported by a whole lane, and no test covered it. OpenCellID is now a first-class `lanes` entry; `gps.opencellid` is **derived from that same entry** rather than computed independently, so the two views can never disagree again. The stat placeholder was hardcoded `0/3` → now `…/…` until the status call lands, so a stale fraction can't be misread as a measurement. Label → "Keyed Lanes Armed · dumps + GPS". The locked-lane hint pointed at "ARM DUMP LANES below" for every lane — wrong for OpenCellID, whose key lives in Settings → OSINT; each lane now names the place that actually arms it.
+
+**Three tests now pin it**, because this is the second time in two days a status number was wrong in a way only the operator's own env exposed: every keyed service must appear in the dump-status lane list, `opencellid` must be in `lanes` and not only in `gps`, and the stat card must not carry a hardcoded fraction.
+
+**VERIFIED LIVE on :3333 — the card reads 2/4**: `🟢 LeakCheck Pro v2 (keyed)` (from `T3MP3ST_LEAKCHECK_KEY`, `LEAKCHECKIO_API_KEY`), `🔒 DeHashed`, `🔒 Snusbase`, `🟢 OpenCellID (GPS towers)` (from `T3MP3ST_OPENCELLID_KEY`). LeakCheck still returns 1394 Pro records / 230 sources. Full suite **117/117 files, 1318 passed, 0 failed, 30 skipped** · `tsc --noEmit` **exit 0** in a clean worktree of the staged tree. Commit `b9b6ada`, pushed to `feat/osint-geo-darkweb-suite` (PR #1).
+
+**THE LESSON, now twice paid for: an aggregate that counts a subset is worse than no aggregate, because it looks authoritative.** Both this and the `LEAKCHECKIO` URL-not-a-key bug were invisible to the test suite and to me, and both were found only by reading the operator's actual environment. Test against the real `.env`, and make any "X of Y armed" figure derive from ONE list rather than being assembled from two.
+
 ## Session Log — 2026-09-25 (Jarvis) — LEAKCHECK AS A REAL ARM DUMP LANE, and the URL-vs-key bug only a live run could find
 
 **Request:** "LEAKCHECK IO SHOULD BE AN ARMED DUMP LANE" (after the bespoke LEAKCHECK.IO block landed).
