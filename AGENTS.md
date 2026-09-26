@@ -1,5 +1,32 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-09-25 (Jarvis) — LEAKCHECK.IO lane + the four bugs live probing found
+
+**Request:** "also add the leakcheck.io scan. to osint https://docs.leakcheck.io/overview — api key is in the env file".
+
+**FOUR REAL BUGS, all found by probing the live API instead of trusting the existing code** (the lesson of the pass — the lane LOOKED wired and was returning data; it was just returning the wrong data):
+1. **Breach attribution was entirely lost.** The Pro v2 API sends a `source` **object** (`{name, breach_date, unverified, passwordless, compilation}`); the lane read `rec.sources` — a string the API never sends. Every LeakCheck record came back with no breach source at all, which is the most important field in a breach result. Live proof: a `torvalds` row had `.source` and NO `.sources`.
+2. **The key was half-hidden.** The lane read only `T3MP3ST_LEAKCHECK_KEY`. LeakCheck's own docs/tools name it `LEAKCHECK_APIKEY` and operators also carry `LEAKCHECKIO` — and **Raul's .env carries BOTH `T3MP3ST_LEAKCHECK_KEY` and `LEAKCHECKIO` with DIFFERENT values** (both 40 chars, both verified working). All three are read now; a runtime-pasted key still wins.
+3. **The public lane reported a false unknown.** It used bare `osintFetch` (globalThis.fetch → armed SOCKS dispatcher) and died with `TypeError: fetch failed` whenever the proxy was unreachable. Caught live: `/api/osint/breach` returned `found:"unknown" TypeError: fetch failed` for BOTH LeakCheck public AND XposedOrNot (a lane I did not touch — the bug is class-wide, reported not silently fixed) while the keyed lane answered with 1394 records because it rides the fallback chain. Public lane now rides egress → Tor → direct via a NEW status-preserving `osintJsonWithFallbackStatus`, so it can tell a **429 rate-limit from a genuine zero** (a lane that says "clean" because it was throttled is worse than no lane).
+4. **Errors read as data.** "Active plan required" now reads as a plan gate and points at the still-working public lane; 401 and 429 are named instead of becoming "0 records".
+
+**ALSO corrected from live probes (the docs were not the whole truth):** the API **IGNORES `limit=`** (returns the whole match set) and **returns 0 rows for ANY `offset=`** on this plan — verified across 5 probe combinations. So the lane sends neither and caps client-side. The public lane's rate-limit note claimed "~1 query/10s"; the docs say 1/second. The docs list only email/hash/username for the public API, but the **live endpoint answers phone numbers** (4 sources returned) — the lane does not refuse them.
+
+### Built
+- `leakcheckPro(query, type, maxRows)` — full Pro v2: the real row shape, **per-source row counts** with unverified/compilation flags, the `fields` union, and the **remaining query quota** the API returns on every success (previously invisible to the operator).
+- `leakcheckPublic` rewritten onto the fallback chain; label now `LeakCheck public` (it collided with the keyed lane's label in the panel).
+- `osint_leakcheck` agent tool (query/type/pro), `POST /api/osint/leakcheck` writing findings to the ledger, a **LEAKCHECK.IO block in the BREACH & DUMPS pane** (public sources, per-source Pro attribution, exposure flags, quota, records with passwords REDACTED on screen — credential material goes to the Evidence Vault), plus its `OSINT_HELP` entry (the help gate fails any section without one).
+- Locks moved together: arsenal 145 → 146, osint registry 15 → 16.
+
+### A BUILD I SHIPPED WAS BROKEN — and my own check lied about it
+The previous commit (fb094fe) shipped `src/server.ts` importing `./tools/gps-copilot.js` and `./tools/gps-area-news.js` **which were never committed**, so a fresh clone of the branch did not compile. I had "verified" it with a staged-tree worktree check — and the check was worthless: I printed `$?` after a pipe to `head`, so I was reading **head's** exit code, not tsc's. Re-run properly the error appeared at once (`noThink does not exist in type ChatOptions` → `src/llm/index.ts` was uncommitted too). Fixed in 6090eba by including every untracked module `server.ts` reaches, and **re-verified with the real exit code: `tsc --noEmit` exit 0 in a clean worktree of the staged tree**, 154/154 there. RULE, now in the repo log: **a build check that pipes through `head`/`grep` proves nothing — capture the compiler's own exit status.**
+
+### Verified
+- `tsc --noEmit` exit 0 (clean worktree) · `npm run build` 0 · **new suite `src/__tests__/leakcheck.test.ts` 16/16** (row-shape regression pinned, key aliases, no-limit/no-offset, plan/401/429 honesty, key never in the URL) · gates **167/167** · 10 suites in the clean tree **154/154**.
+- **LIVE on :3333 against the real key** (proxy down at the time — exactly how the false-unknown bug surfaced): public **1394** sources; Pro v2 **found 1394, quota 182, 230 distinct attributed sources** — top `Stealer Logs ×786, Collection 1 ×151 (2019-01), Unknown ×82, Twitter.com ×71 (2015-11)`; `row0.source` = `{name:"saveonlens.com",…}` (attribution present, which the old lane could never produce). **phone type** 4/4 both lanes; **domain type** honestly `Active plan required — this key is on a plan without Pro v2 record access`; unknown username → `public API rejected the query: Not found`.
+- Full suite **1304 passed / 9 failed** — the 8 standing parallel-session set (config-directory ×3, cve-correlation, mission-status-endpoint ×2, tool-call-boundary) + the Windows `python3` stub in ctf-rsa-static, plus **`index.test.ts` which passes 45/45 in isolation** — a load-sensitive flake under `--maxWorkers=3`, not a regression. None OSINT/LeakCheck related.
+- Pushed to `feat/osint-geo-darkweb-suite` (6090eba) and **PR #1 description updated**: https://github.com/xxmafiaxxx/T3MP3ST/pull/1
+
 ## Session Log — 2026-09-25 (Jarvis) — AGGRESSIVE PEOPLE-SEARCH DIRECTOR (playbook-driven, multi-round, fabrication-guarded)
 
 **Request:** "i need the llm to be an aggressive people searcher… maximize your searches… be as aggressive and accurate as possible." Doctrine held: maximum-aggressive across every PUBLIC/licensed/open source + archives; not dark-web credential marketplaces or unauthorized doxing.
@@ -114,6 +141,64 @@ Fires from `scheduleAreaWatch()`, called on both pin-landing paths (reverse-geoc
 - New suite `src/__tests__/gps-area-news.test.ts` **18/18** — parsing (CDATA, entities, suffix recovery, host fallback, untitled skip), age math, query building (neighbourhood vs city, no state==city duplicate, house-number/zip strip, phrase quoting), merge+dedupe+sort across both feeds, cache hit, partial-failure, honest empty, unnamed-pin refusal, fact-line rendering.
 - **LIVE E2E, no client config**: pin 40.7000,-73.9700 / Brooklyn → query `"Brooklyn" AND "New York"`, **25 real articles** (NYT Brooklyn Bridge projection 3h, CBS nor'easter flooding 8h, NY Daily News arrest 11h, NY YIMBY permits 1h…), model gemma4:latest 887 prompt / 64 completion tokens in **42s**, brief: *"Permits were filed for a property at 152 Newton Street in Greenpoint, Brooklyn… water flooding a street after a main break."* — every claim traceable to a fetched headline. Unnamed place → 400 with the reason.
 - Gates: gps-area-news + gps-copilot + public-gps + ui-parse + sfx **140/140**; DOM cross-check green (63 ids, 53/53 lookups, 33 functions, 21/21 handlers); `tsc` clean for every file touched; server restarted on the new dist.
+
+## Session Log — 2026-09-25 (Jarvis) — OSINT PANEL: a "?" help menu in every section
+
+**Request:** "do tooltips and instructions on how to use the tools. have a ? mark icon for the help menu in each section".
+
+### What shipped (`docs/osint.html`)
+- **A `?` on every tool section header.** `injectHelpButtons()` walks `.panel-title` / `.dossier-section-title` and appends a small round `?` that opens a modal. Deliberately NOT attached to three things, each for a reason: the **tool tabs** (they are navigation, not sections — they get a one-line native tooltip instead, keyed by pane), the **geo layer chips** (a filter row), and the **locator's rendered dossier sub-titles** (result blocks inside one report, not tools you operate). Idempotent, so re-running is safe.
+- **One `OSINT_HELP` registry, 24 entries**, each with `what` / `needs` / `steps` / `out` / `limits` / `fix`. The content is the part that matters: every entry states what the section actually does, what you need before starting, numbered how-to steps, what you get back, **the limits and the honest caveat**, and what to do when a result looks wrong. The limits are not boilerplate — e.g. *"unknown means the site blocked us, NOT that the account is absent"*, *"A hit means a stealer ran on a machine that had the address saved — it does not mean the current mailbox is compromised"*, *"A 6-digit PIN… "*-class misreads get named instead of hidden. The Android entries carry the authorization boundary; the lock-probe entry states outright that it is not a bruteforcer.
+- **Modal + keys**: backdrop click and the ✕ close it, `Esc` closes it from anywhere, focus moves to ✕ on open, and every string is escaped before it reaches `innerHTML` (help text is static today, but a future entry interpolating a value must not become an injection — a test pins the escape).
+
+### The key rule, and why it is a test rather than a convention
+Keys are the section's own visible title, normalized (emoji stripped, whitespace collapsed, upper-cased) with **`.count` hint spans removed** — "keyless", "requires Tor", the PhoneInfoga licence line are annotations on a title, not part of it. Two sections had those hints as bare text inside the title, and the PhoneInfoga note had no `count` class at all; both are now marked-up consistently rather than special-cased in code.
+`src/__tests__/osint-help.test.ts` **6/6** re-derives the section list from the static markup (script blocks stripped, so JS templates that render the locator's output cannot masquerade as sections) using the same rule, and asserts: every section has an entry, **no orphan entries** (a stale key would hide a removed section), every entry states what + steps, the injector/modal/Esc are wired, and the copy is escaped. **24 sections ↔ 24 entries.** A new tool section without help is now a failing test, not a silent gap.
+
+### Two real bugs the test caught on the way
+1. The first extractor ran past element boundaries and picked up JS-template strings, producing one 65-element "section" that spanned half the file — fixed with a boundary-safe capture plus script stripping.
+2. Seven headers folded their `.count` hint into `textContent`, so the keys the browser would compute did not match the keys in the registry. That is exactly the bug the lock exists to prevent, and it surfaced before a single `?` shipped.
+
+Gates: osint-help + ui-parse + sfx-wiring + osint-tools **127/127**; scratch cross-check `scratch/osint-help-dom-check.mjs` green (24↔24, no orphans, modal ids + CSS present); served page on :3333 carries the system. Page-only change. NOT committed (repo convention). Files: `docs/osint.html`, `src/__tests__/osint-help.test.ts` (new), `scratch/osint-help-dom-check.mjs` (new).
+
+## Session Log — 2026-09-25 (Jarvis) — OSINT: tool nav moved to the top of the page and made sticky
+
+**Request:** "username sweep breach drumps dark web google dorks buttons etc should be at the top".
+
+The ten tool tabs sat BELOW the Locator and the Pretext Lab, so every other tool on the page was a scroll away — the page is built around the tools, and the nav was filed under a feature.
+
+- **The `.tool-tabs` block moved to the top of `.page-content`**, directly under the stats grid and above the Locator. DOM order verified: `toolNav` → `locatorPanel` → `pretextPanel` → `paneSweep`.
+- **It is now sticky** (`.tool-tabs.tool-nav`, `top: 53px`, z 45 — the page header is sticky at top:0/z 50, so the nav parks flush beneath it) with a `TOOLS` label via `::before`. Without stickiness the move alone just relocated the problem: a long scroll down to a tool pane would still leave no way back to the others.
+- **A tab click now follows through**: `switchTool()` scrolls the activated pane into view. The nav is above the locator, so the panes are ~900px below it — without the scroll the button appears to do nothing. `.tool-pane` gets `scroll-margin-top: 118px` so the pane title lands BELOW both sticky bars instead of under them.
+- Nothing else moved: pane order, the Locator, and the Pretext Lab are untouched, and `switchTool` still calls `ensureGeoMap()` for the geo pane before scrolling.
+
+Verified: gates osint-help + ui-parse + sfx-wiring + osint-tools **127/127**; the help cross-check still green (24 sections ↔ 24 entries — the move did not disturb the section scan); DOM order asserted; served page on :3333 returns 200 with the nav in place. Page-only change. NOT committed (repo convention). File: `docs/osint.html`.
+
+## Session Log — 2026-09-25 (Jarvis) — UnlockAndroid lock-screen probe added to the OSINT panel's Android section
+
+**Request:** "https://github.com/DouglasFreshHabian/UnlockAndroid add this to the osint panel".
+
+**Checked the repo before wiring anything, and it is not what the README's framing implies.** The contents are exactly two files: `README.md` and `unlock.sh` (2371 bytes). `unlock.sh` wakes the handset, swipes up, sends the keycode sequence for a **hardcoded PIN 1234**, then reads `dumpsys trust` and greps `deviceLocked=0|1`. The README also describes a second script, `adbBrute.sh`, for repeated attempts — **that file is not in the repository (404)**, so no brute-force capability exists upstream. The repo also declares **no license** (unlike its sibling `AndroidForensics`, MIT, which this project already vendors).
+
+### Where it went, and why not a new module
+`src/tools/android-forensics.ts` is ALREADY vendored from the same author (AndroidForensics, MIT) and the OSINT panel already carries an Android section. So the probe went into that module and that panel — not a parallel file. That module's header carried a written doctrine line, **"no bypass of lock-screen protections"**; it is now amended explicitly rather than silently contradicted.
+
+### What was built
+- **`getLockState()`** reads the `dumpsys trust` oracle (the same one upstream uses) and surfaces Android's own failed-attempt counter alongside the lock state — watching that before/after a probe is the honest part of the instrument.
+- **`planPinKeyevents()`** maps a 4–12 digit PIN to the `KEYCODE_n` sequence; rejects anything else. Pure + tested.
+- **`probeLockPin()`** does exactly what `unlock.sh` does, natively: wake → swipe → type the operator-supplied PIN → ENTER → settle → re-read the state, returning the full command trace. **`MAX_PIN_ATTEMPTS = 1` and no code path iterates PINs** — that is the deliberate line, and a test pins it.
+- **Reimplemented, not vendored**: upstream declares no license, so nothing third-party is downloaded or executed. `ANDROID_UNLOCK_SOURCE` / `ANDROID_UNLOCK_VERSION` record the provenance instead.
+- **Two agent tools**: `android_adb_lock_state` (`riskTier: 'local_read'`, read-only) and `android_adb_lock_probe` (**`riskTier: 'intrusive'`** → the arsenal refuses to run it until an operator approves it, and every call fires the loud audited warning; an unattended run cannot drive it).
+- **Server**: `POST /api/android/lock-probe` + `GET /api/android/lock-state`. The route **403s without `confirmAuthorized: true`**, writes an info-severity finding to the ledger on a real probe, and returns the command trace.
+- **UI** (`docs/osint.html`, new 🔓 LOCK-SCREEN PROBE block under the ADB console): read-state button, PIN + serial fields, a mandatory **"I own this device or am authorized to test it"** checkbox (cleared after each use so one acknowledgement authorises one action), before/after state, the attempt cap, and the exact commands sent. The block states the upstream provenance, that the artifact is a single hardcoded-PIN attempt, and that `adbBrute.sh` is absent.
+
+### The doctrine line, stated plainly
+`android-forensics.ts` previously said "no bypass of lock-screen protections". That is amended in the header rather than quietly contradicted: the probe is a **lab/repair instrument for a device in hand** and is only reachable once the device owner has **already** enabled USB debugging and granted this host ADB authorization — the device has already surrendered debug authority. Unlocking a handset you do not own or are not authorized to test is a criminal offence in most jurisdictions (CFAA / UK CMA equivalents), and the panel says so on the button itself. What was NOT built: a PIN bruteforcer, a candidate enumerator, or a lockout-hammering loop.
+
+### Verified
+- `tsc` 0 · `npm run build` 0 · **new suite `src/__tests__/android-lock-probe.test.ts` 13/13** — keycode planning incl. every malformed-PIN rejection, the one-attempt cap, refusal-without-acknowledgement (sends nothing, `steps: []`), refusal-before-touching-device on a malformed PIN, honest `locked: null` with no adb, and tool registration incl. the intrusive tier and required params.
+- Count locks moved **together**: arsenal 143 → **145** (two tools) in `arsenal-count-honesty.test.ts` + the README headline. Gates: lock-probe + count-honesty + no-phantom + operator-toolkits + ui-parse **97/97**.
+- **LIVE on :3333** (adb is installed; no handset attached): `/api/android/lock-state` → honest `locked:null` + the real adb reason; probe **without** the box → `403` with the legal line; probe **with** the box but no device → `ok:false, attempts:0, steps:0` ("Connect an ADB-authorized device first") — it refuses before injecting anything. NOT committed (repo convention). Files: `src/tools/android-forensics.ts` (engine + 2 tools + doctrine), `src/server.ts` (2 routes + imports), `docs/osint.html` (panel block + client), `src/__tests__/android-lock-probe.test.ts` (new), `README.md`, `src/__tests__/arsenal-count-honesty.test.ts`.
 
 ## Session Log — 2026-09-25 (Jarvis) — Tool panels glow while in use + local-LLM extraction assist
 
