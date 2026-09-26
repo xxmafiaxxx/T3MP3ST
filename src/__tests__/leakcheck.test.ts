@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { createServer, type Server } from 'http';
+import { readFileSync } from 'node:fs';
 import { AddressInfo } from 'net';
 import {
   leakcheckPublic,
@@ -293,5 +294,37 @@ describe('osint_leakcheck agent tool', () => {
     expect(tool!.description).toContain('LeakCheck');
     expect(tool!.description).toMatch(/does not prove the account is still active/i);
     expect(tool!.parameters?.find((p) => p.name === 'query')?.required).toBe(true);
+  });
+});
+
+describe('dump-lane arming is complete', () => {
+  // The ARMED count on the OSINT panel is the operator's only at-a-glance answer
+  // to "what is actually live here". It once read 1/3 while TWO lanes were
+  // armed, because the OpenCellID key lived in a separate `gps` object that the
+  // lane list — and therefore the counter — never saw. Any lane with a key must
+  // appear in `lanes`, or the number is a lie.
+  const server = readFileSync(new URL('../server.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const block = server.slice(
+    server.indexOf("app.get('/api/osint/dump-status'"),
+    server.indexOf('allowDirect:', server.indexOf("app.get('/api/osint/dump-status'")),
+  );
+
+  it('every keyed lane is in the lanes list, including the GPS cell-site lane', () => {
+    for (const service of ['LeakCheck Pro v2 (keyed)', 'DeHashed', 'Snusbase', 'OpenCellID (GPS towers)']) {
+      expect(block, `lane missing from dump-status: ${service}`).toContain(service);
+    }
+  });
+
+  it('the opencellid lane is in `lanes` and is not only reachable via `gps`', () => {
+    expect(block).toMatch(/key:\s*'opencellid'/);
+    // The counter is computed from `lanes`; if opencellid were absent from that
+    // array the panel under-reports. `gps` is derived from the same entry.
+    expect(block).toContain('lanes: enriched');
+  });
+
+  it('the stat card is not hardcoded to a fixed lane count', () => {
+    const page = readFileSync(new URL('../../docs/osint.html', import.meta.url), 'utf8');
+    expect(page).toContain('id="statKeyedLanes"');
+    expect(page).not.toMatch(/id="statKeyedLanes">\s*0\/\d/);
   });
 });

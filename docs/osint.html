@@ -601,7 +601,7 @@
                 <div class="stats-grid">
                     <div class="stat-card"><div class="stat-value" id="statSites">—</div><div class="stat-label">Social Sites In Catalog</div></div>
                     <div class="stat-card lanes"><div class="stat-value" id="statFreeLanes">3</div><div class="stat-label">Free Breach Lanes Live</div></div>
-                    <div class="stat-card dumped"><div class="stat-value" id="statKeyedLanes">0/3</div><div class="stat-label">Deep Dump Lanes Armed</div></div>
+                    <div class="stat-card dumped"><div class="stat-value" id="statKeyedLanes">…/…</div><div class="stat-label">Keyed Lanes Armed <span class="count" style="background:var(--bg-tertiary);">dumps + GPS</span></div></div>
                     <div class="stat-card"><div class="stat-value" id="statTools">6</div><div class="stat-label">Agent-Runnable OSINT Tools</div></div>
                 </div>
 
@@ -2671,12 +2671,16 @@
                     // Name the env var that ACTUALLY supplied the key, not just the
                     // first one we look for — with aliases in play, guessing sends
                     // the operator hunting for a setting they already have.
+                    const vars = (l.envVars || [l.envVar]).join(' / ');
                     const from = l.armed
                         ? ' <span style="color:var(--success);">ARMED</span>'
                           + (l.setIn && l.setIn.length
                             ? ' <span style="color:var(--text-muted);font-size:10px;">· from ' + escapeHtml(l.setIn.join(' / ')) + '</span>'
                             : ' <span style="color:var(--text-muted);font-size:10px;">· pasted at runtime</span>')
-                        : ' — ARM DUMP LANES below (or ' + escapeHtml((l.envVars || [l.envVar]).join(' / ')) + ')';
+                        // The OpenCellID lane is keyed from Settings, not from the
+                        // panel below — point the operator at the right place.
+                        : ' — arm in ' + (l.key === 'opencellid' ? 'Settings → OSINT' : 'ARM DUMP LANES below')
+                          + ' (or ' + escapeHtml(vars) + ')';
                     return '<div class="dork-item" style="margin-bottom:4px;"><span class="label">' + (l.armed ? '🟢' : '🔒') + ' ' + escapeHtml(l.service) + '</span><span style="color:var(--text-muted);font-size:10.5px;">' + escapeHtml(l.unlocks) + from + '</span></div>';
                 }).join('');
                 // Mirror the armed state onto the LeakCheck block, so the lane the

@@ -7775,6 +7775,14 @@ app.get('/api/osint/dump-status', (_req: Request, res: Response) => {
   // name that arms the lane — a key present under an alias must not be reported
   // as "runtime", which would send the operator hunting for a setting they
   // already have in their .env.
+  //
+  // EVERY keyed lane belongs in this list, including the OpenCellID cell-site
+  // lane: it is armed the same way, from the same place, and gating it into a
+  // separate `gps` object made it invisible to the counter — so the panel
+  // reported "1/3 armed" while two lanes were in fact live. The `gps` object is
+  // kept below for the Settings page, but it is derived from the same lane entry
+  // so the two can never disagree again.
+  const ocArmed = Boolean(getOpencellidKey());
   const lanes = [
     {
       service: 'LeakCheck Pro v2 (keyed)',
@@ -7784,30 +7792,41 @@ app.get('/api/osint/dump-status', (_req: Request, res: Response) => {
     },
     { service: 'DeHashed', key: 'dehashed' as const, envVars: ['T3MP3ST_DEHASHED_KEY'], unlocks: 'deep-web breach search, 40B+ records (email/username)' },
     { service: 'Snusbase', key: 'snusbase' as const, envVars: ['T3MP3ST_SNUSBASE_KEY'], unlocks: 'dump database search incl. phone lookups' },
+    {
+      service: 'OpenCellID (GPS towers)',
+      key: 'opencellid' as const,
+      envVars: ['T3MP3ST_OPENCELLID_KEY'],
+      unlocks: 'GPS Map 📱 TOWERS layer (cell-site registry, opencellid.org free non-commercial token)',
+    },
   ];
   const armed = dumpKeyStatus();
-  const ocArmed = Boolean(getOpencellidKey());
+  const isArmed = (k: 'leakcheck' | 'dehashed' | 'snusbase' | 'opencellid') => (k === 'opencellid' ? ocArmed : armed[k]);
+  const enriched = lanes.map((l) => {
+    const armedNow = isArmed(l.key);
+    // Which env var (if any) supplied the key — reported so the operator can see
+    // which name is actually set instead of guessing between the aliases.
+    const setIn = l.envVars.filter((v) => (process.env[v] || '').trim());
+    return {
+      service: l.service,
+      key: l.key,
+      envVar: l.envVars[0],
+      envVars: l.envVars,
+      setIn,
+      unlocks: l.unlocks,
+      armed: armedNow,
+      source: armedNow ? (setIn.length ? 'env-or-runtime' : 'runtime') : 'none',
+    };
+  });
   res.json({
     free: ['LeakCheck public', 'XposedOrNot', 'HIBP Pwned Passwords (k-anonymity)'],
-    lanes: lanes.map((l) => {
-      const isArmed = armed[l.key];
-      // Which env var (if any) supplied the key — reported so the operator can see
-      // which name is actually set instead of guessing between the aliases.
-      const setIn = l.envVars.filter((v) => (process.env[v] || '').trim());
-      return {
-        service: l.service,
-        envVar: l.envVars[0],
-        envVars: l.envVars,
-        setIn,
-        unlocks: l.unlocks,
-        armed: isArmed,
-        source: isArmed ? (setIn.length ? 'env-or-runtime' : 'runtime') : 'none',
-      };
-    }),
+    lanes: enriched,
+    // Settings page view of the same lane — derived, never independently computed.
     gps: {
       opencellid: {
         armed: ocArmed,
         envVar: 'T3MP3ST_OPENCELLID_KEY',
+        envVars: ['T3MP3ST_OPENCELLID_KEY'],
+        setIn: enriched.find((l) => l.key === 'opencellid')?.setIn ?? [],
         source: ocArmed ? (process.env.T3MP3ST_OPENCELLID_KEY ? 'env-or-runtime' : 'runtime') : 'none',
         unlocks: 'GPS Map 📱 TOWERS layer (cell-site registry, opencellid.org free non-commercial token)',
       },
