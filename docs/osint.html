@@ -601,7 +601,7 @@
                 <div class="stats-grid">
                     <div class="stat-card"><div class="stat-value" id="statSites">—</div><div class="stat-label">Social Sites In Catalog</div></div>
                     <div class="stat-card lanes"><div class="stat-value" id="statFreeLanes">3</div><div class="stat-label">Free Breach Lanes Live</div></div>
-                    <div class="stat-card dumped"><div class="stat-value" id="statKeyedLanes">…/…</div><div class="stat-label">Keyed Lanes Armed <span class="count" style="background:var(--bg-tertiary);">dumps + GPS</span></div></div>
+                    <div class="stat-card dumped"><div class="stat-value" id="statKeyedLanes">…/…</div><div class="stat-label">Deep Dump Lanes Armed</div></div>
                     <div class="stat-card"><div class="stat-value" id="statTools">6</div><div class="stat-label">Agent-Runnable OSINT Tools</div></div>
                 </div>
 
@@ -758,9 +758,9 @@
                                 </div>
                             </div>
                             <div class="hint-line">Free lanes always run (LeakCheck public, XposedOrNot, HIBP Pwned Passwords). Deep dump lanes (LeakCheck Pro v2, DeHashed, Snusbase) fire automatically when the operator configures keys — status below.</div>
-                            <div class="dossier-section-title" style="margin-top:16px;">🔎 LEAKCHECK.IO <span class="count">public free · Pro v2 armed lane</span></div>
+                            <div class="dossier-section-title" style="margin-top:16px;">🔎 LEAKCHECK PRO V2 <span class="count">deep dump lane</span></div>
                             <div class="hint-line" id="leakcheckArmed" style="margin:4px 0;font-size:11px;">checking lane state…</div>
-                            <div class="hint-line" style="margin:4px 0 8px;">10B+ leaked records. The <b>public</b> lane returns which breach sources list the identifier and which data classes were exposed (never the values) — it needs no key. <b>Pro v2</b> is an <a href="#" onclick="document.getElementById('keyLeakcheck').closest('details').open=true;return false;" style="color:var(--info);">ARM DUMP LANE</a>: it returns full records with per-breach attribution whenever a key is present, from <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">T3MP3ST_LEAKCHECK_KEY</code>, <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECKIO</code> or <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECK_APIKEY</code> in the env, or pasted into ARM DUMP LANES. A hit means a breach lists this identifier — it does not prove the account is still active.</div>
+                            <div class="hint-line" style="margin:4px 0 8px;">A deep dump lane, same as DeHashed and Snusbase — <b>CHECK EXPOSURE</b> above already runs it automatically and files its records to the Evidence Vault. This box is the same lane opened on its own. The free <b>public</b> lane (no key) returns which breach sources list the identifier and which data classes were exposed, never the values; <b>Pro v2</b> adds full records with per-breach attribution whenever the lane is ARMED. Arm it with <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">T3MP3ST_LEAKCHECK_KEY</code>, <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECKIO_API_KEY</code> or <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECK_APIKEY</code>, or paste one into ARM DUMP LANES. A hit means a breach lists this identifier — it does not prove the account is still active.</div>
                             <div class="locator-form">
                                 <div class="search-box">
                                     <span>🔍</span>
@@ -1817,10 +1817,10 @@
                 limits: ['This is the catalogue of breaches, not your exposure in them. Per-account HIBP checks stay behind the keyed lanes.', 'Domain mode answers "was this domain ever breached", not "were its users".'],
                 fix: [],
             },
-            'LEAKCHECK.IO': {
-                what: 'Queries leakcheck.io — 10B+ leaked records. The free PUBLIC lane returns which breach sources list an identifier and which data classes were exposed (never the values). The Pro v2 lane, when a key is configured, returns full records with per-breach attribution, exposure flags and your remaining query quota.',
-                needs: ['An email, username, phone number, domain, or SHA-256 hash of an email.', 'Pro v2 records need a key: T3MP3ST_LEAKCHECK_KEY / LEAKCHECKIO / LEAKCHECK_APIKEY, or paste one into ARM DUMP LANES.'],
-                steps: ['Type the identifier and pick the type (auto works for email, username, phone and hash).', 'Press CHECK LEAKCHECK.'],
+            'LEAKCHECK PRO V2': {
+                what: 'A deep dump lane into leakcheck.io — 10B+ leaked records, the same class of lane as DeHashed and Snusbase (CHECK EXPOSURE runs it automatically). The free PUBLIC lane returns which breach sources list an identifier and which data classes were exposed (never the values). The Pro v2 lane, when this lane is ARMED, returns full records with per-breach attribution, exposure flags and your remaining query quota.',
+                needs: ['An email, username, phone number, domain, or SHA-256 hash of an email.', 'Pro v2 records need this lane ARMED: T3MP3ST_LEAKCHECK_KEY / LEAKCHECKIO_API_KEY / LEAKCHECK_APIKEY, or a key pasted into ARM DUMP LANES. (LEAKCHECKIO and LEAKCHECK_PUBLIC_API are endpoint URLs, not keys — they override the base URL.)'],
+                steps: ['Type the identifier and pick the type (auto works for email, username, phone and hash).', 'Press CHECK LEAKCHECK. To run it as part of the standard deep-lane pass instead, use CHECK EXPOSURE above.'],
                 out: ['Public: breach source names + dates, and the list of exposed field names.', 'Pro v2: per-source row counts, unverified/compilation flags, and the records themselves (passwords are redacted on screen; credential material goes to the Evidence Vault).'],
                 limits: ['A hit means a breach LISTS this identifier — it does not prove the account is still active, nor that the data is accurate. Unverified breach sources are flagged as such, because they are frequently wrong.', 'The public lane is rate limited to 1 request/second. Pro v2 to 3/second. The live API ignores limit= and returns 0 rows for offset=, so paging is not available here.', 'Some search types (domain, password, phash, origin) are Enterprise-plan only — the lane reports "Active plan required" rather than pretending it searched.'],
                 fix: ['"Active plan required" → the key is on a plan without Pro record access; the public lane still works.', '429 → wait a second; the free lane allows one query per second.', 'AUTO cannot determine the type → pick email / username / phone / domain / hash explicitly.'],

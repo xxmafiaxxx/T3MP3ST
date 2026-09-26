@@ -327,4 +327,26 @@ describe('dump-lane arming is complete', () => {
     expect(page).toContain('id="statKeyedLanes"');
     expect(page).not.toMatch(/id="statKeyedLanes">\s*0\/\d/);
   });
+
+  // LeakCheck is a DEEP DUMP LANE, the same class of thing as DeHashed and
+  // Snusbase — not a bespoke tool. It was renamed "Keyed Lanes Armed" once and
+  // relabelled "LEAKCHECK.IO", which is how it started reading as a separate
+  // thing bolted onto the panel. Terminology is part of the contract here.
+  it('LeakCheck is presented as a deep dump lane, not a separate tool', () => {
+    const page = readFileSync(new URL('../../docs/osint.html', import.meta.url), 'utf8');
+    expect(page).toContain('Deep Dump Lanes Armed');
+    expect(page).not.toMatch(/Keyed Lanes Armed/);
+    expect(page).toContain('LEAKCHECK PRO V2 <span class="count">deep dump lane</span>');
+  });
+
+  // The panel must never tell an operator to set a URL as if it were a key.
+  it('no UI text names LEAKCHECKIO or LEAKCHECK_PUBLIC_API as a key variable', () => {
+    const page = readFileSync(new URL('../../docs/osint.html', import.meta.url), 'utf8');
+    expect(page).not.toMatch(/LEAKCHECKIO\s*\/|LEAKCHECKIO_APIKEY(?!.*not keys)/);
+    // wherever the two URL variables appear, they must be labelled as URLs
+    for (const m of page.matchAll(/LEAKCHECKIO\b|LEAKCHECK_PUBLIC_API/g)) {
+      const window = page.slice(Math.max(0, m.index! - 260), m.index! + 260);
+      expect(window, `LEAKCHECKIO presented without URL framing near index ${m.index}`).toMatch(/URL|not a key|not keys|endpoint/i);
+    }
+  });
 });

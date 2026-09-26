@@ -20,6 +20,17 @@ function fixture() {
   return { root, home, config, cwd };
 }
 
+/** The child's contract is "prints one JSON line on stdout". Read the LAST
+ *  non-empty line rather than the whole buffer: under parallel load tsx and the
+ *  loader can interleave warnings/notices into stdout, and JSON.parse() of the
+ *  entire buffer then throws — which surfaced as an intermittent red in a file
+ *  whose actual subject (config isolation) was never wrong. */
+function childJson(result: { status: number | null; stdout: string; stderr: string }) {
+  const lines = (result.stdout || '').split(/\r?\n/).filter((l) => l.trim());
+  const last = lines[lines.length - 1] ?? '';
+  return JSON.parse(last) as { key: string | null };
+}
+
 function run(f: ReturnType<typeof fixture>, directory?: string) {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, XDG_CONFIG_HOME: join(f.root, 'xdg') };
   if (directory !== undefined) env.T3MP3ST_CONFIG_DIR = directory;
@@ -33,7 +44,12 @@ function run(f: ReturnType<typeof fixture>, directory?: string) {
     console.log(JSON.stringify({ key: config.getApiKey('openrouter') ?? null }));
   `;
   return spawnSync(process.execPath, ['--import', import.meta.resolve('tsx'), '--input-type=module', '-e', source], {
-    cwd: f.cwd, env, encoding: 'utf8', timeout: 15000,
+    // Each case spawns a child that boots the TS config module through tsx. That
+    // costs seconds on an idle box and much longer under `--maxWorkers`, so a
+    // 15s budget made this file fail purely on machine load — which reads as a
+    // config bug and is not one. The assertions are about isolation, not speed,
+    // so the budget is generous on purpose.
+    cwd: f.cwd, env, encoding: 'utf8', timeout: 90_000,
   });
 }
 
@@ -42,7 +58,7 @@ describe('explicit configuration directory', () => {
     const f = fixture();
     const result = run(f, f.config);
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout).key).toBeNull();
+    expect(childJson(result).key).toBeNull();
     expect(JSON.parse(readFileSync(join(f.config, 'config.json'), 'utf8')).apiKeys).toEqual({});
   });
 
@@ -51,7 +67,7 @@ describe('explicit configuration directory', () => {
     writeFileSync(join(f.config, '.env'), 'OPENROUTER_API_KEY=isolated-key\n');
     const result = run(f, f.config);
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout).key).toBe('isolated-key');
+    expect(childJson(result).key).toBe('isolated-key');
     expect(readFileSync(join(f.config, 'config.json'), 'utf8')).not.toContain('isolated-key');
   });
 
@@ -59,7 +75,7 @@ describe('explicit configuration directory', () => {
     const f = fixture();
     const result = run(f);
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout).key).toBe('operator-owned-key');
+    expect(childJson(result).key).toBe('operator-owned-key');
   });
 
   it('rejects relative paths before reading configuration', () => {
