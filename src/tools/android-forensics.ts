@@ -5,10 +5,20 @@
 // same workflows as safe, allowlisted Node wrappers + agent-runnable tools.
 //
 // Doctrine: physical device + USB debugging + explicit owner/operator
-// authorization. No remote exploitation, no bypass of lock-screen protections.
-// Every function that touches a device documents the consent boundary and
-// returns honest "no device / no adb / permission denied" results instead of
-// pretending.
+// authorization. No remote exploitation. Every function that touches a device
+// documents the consent boundary and returns honest "no device / no adb /
+// permission denied" results instead of pretending.
+//
+// LOCK-SCREEN EXCEPTION (deliberate — see probeLockPin): the ADB lock PIN probe
+// is the one capability here that touches the lock screen. It is gated three
+// ways: `riskTier: 'intrusive'` so the arsenal refuses to run it until an
+// operator approves it, an explicit authorization acknowledgement parameter, and
+// a hard cap of ONE attempt per call. It is reachable only after the device
+// owner has already enabled USB debugging AND granted this host ADB
+// authorization — the device has already surrendered debug authority. It is a
+// lab/repair instrument for a device in hand; unlocking a handset you do not own
+// or are not authorized to test is a criminal offence in most jurisdictions
+// (CFAA / UK CMA equivalents).
 //
 // All shell work goes through execFile('adb', [...]) — no shell injection
 // surface. Only the allowlisted `adb shell <verb>` families from the four
@@ -284,6 +294,165 @@ export async function listDevices(): Promise<AdbExecResult> {
 }
 
 // ---------------------------------------------------------------------------
+// LOCK-SCREEN PIN PROBE — technique from
+// https://github.com/DouglasFreshHabian/UnlockAndroid (no license declared).
+//
+// WHAT UPSTREAM ACTUALLY SHIPS, verified against the repo: one script,
+// `unlock.sh` (2371 bytes), which wakes the handset, swipes up, sends the
+// HARDCODED keycode sequence for PIN 1234, then reads `dumpsys trust` and greps
+// `deviceLocked=0|1`. The README also describes a second script, `adbBrute.sh`,
+// for repeated attempts — THAT FILE IS NOT IN THE REPOSITORY (404), so no
+// brute-force capability exists upstream and none is implemented here.
+//
+// The technique is reimplemented natively in a dozen lines of allowlisted adb
+// rather than vendored, because upstream declares no license. ONE attempt per
+// call, operator-supplied PIN, no candidate enumeration of any kind.
+// ---------------------------------------------------------------------------
+
+export const ANDROID_UNLOCK_SOURCE = 'https://github.com/DouglasFreshHabian/UnlockAndroid';
+export const ANDROID_UNLOCK_VERSION = 'UnlockAndroid/main @ DouglasFreshHabian (license: none declared — technique reimplemented, not vendored)';
+
+/** One attempt per call, always. There is no code path that iterates PINs. */
+export const MAX_PIN_ATTEMPTS = 1;
+
+export interface LockState {
+  locked: boolean | null;
+  raw: string;
+  detail: string;
+}
+
+/** Read the lock state from `dumpsys trust` — the same oracle upstream uses. */
+export async function getLockState(serial?: string): Promise<LockState> {
+  const r = await execAdbCommand('adb shell dumpsys trust', { serial, timeoutMs: 10_000 });
+  const raw = `${r.stdout}\n${r.stderr}`.trim();
+  const m = raw.match(/deviceLocked=(\d)/);
+  if (!m) {
+    return { locked: null, raw, detail: r.exitCode !== 0 ? `adb failed: ${r.stderr.slice(0, 120) || r.exitCode}` : 'no deviceLocked= field in dumpsys trust output' };
+  }
+  const locked = m[1] === '1';
+  // Android also prints failed-attempt counters; surface them, they are the whole
+  // point of watching this before and after a probe.
+  const failed = raw.match(/failed[^\n]*?(\d+)/i)?.[1];
+  return {
+    locked,
+    raw,
+    detail: locked
+      ? `deviceLocked=1 (locked)${failed ? ` · failed attempts on record: ${failed}` : ''}`
+      : `deviceLocked=0 (unlocked)${failed ? ` · failed attempts on record: ${failed}` : ''}`,
+  };
+}
+
+/** Map a PIN to the adb keycode sequence that types it. Pure + testable. */
+export function planPinKeyevents(pin: string): { keyevents: string[]; error?: string } {
+  const p = String(pin || '').trim();
+  if (!/^\d{4,12}$/.test(p)) return { keyevents: [], error: 'PIN must be 4-12 digits' };
+  return { keyevents: p.split('').map((d) => `KEYCODE_${d}`) };
+}
+
+export interface LockProbeStep {
+  command: string;
+  exitCode: number;
+  stderr?: string;
+}
+
+export interface LockProbeResult {
+  ok: boolean;
+  before: LockState;
+  after: LockState;
+  /** True when the device was already unlocked — nothing was injected. */
+  alreadyUnlocked: boolean;
+  attempts: number;
+  steps: LockProbeStep[];
+  verdict: string;
+  error?: string;
+  upstream: string;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Send ONE operator-supplied PIN to an attached, ADB-authorized device and read
+ * back whether the lock screen opened. Refuses without an explicit authorization
+ * acknowledgement, and never loops.
+ */
+export async function probeLockPin(opts: {
+  serial?: string;
+  pin?: string;
+  confirmAuthorized?: boolean;
+  /** Wake + swipe coordinates; upstream uses a 1080×2340-class portrait screen. */
+  swipe?: { x: number; y1: number; y2: number; ms?: number };
+  settleMs?: number;
+}): Promise<LockProbeResult> {
+  const steps: LockProbeStep[] = [];
+  const upstream = ANDROID_UNLOCK_SOURCE;
+  const run = async (cmd: string) => {
+    const r = await execAdbCommand(cmd, { serial: opts.serial, timeoutMs: 15_000 });
+    steps.push({ command: r.command, exitCode: r.exitCode, stderr: r.exitCode !== 0 ? r.stderr.slice(0, 200) : undefined });
+    return r;
+  };
+
+  if (opts.confirmAuthorized !== true) {
+    return {
+      ok: false, before: { locked: null, raw: '', detail: 'not probed' }, after: { locked: null, raw: '', detail: 'not probed' },
+      alreadyUnlocked: false, attempts: 0, steps, upstream,
+      verdict: 'Refused: the operator has not acknowledged authorization for this device.',
+      error: 'authorization acknowledgement required — set confirmAuthorized=true for a device you own or are authorized to test',
+    };
+  }
+
+  const plan = planPinKeyevents(opts.pin ?? '');
+  if (plan.error) {
+    return {
+      ok: false, before: { locked: null, raw: '', detail: 'not probed' }, after: { locked: null, raw: '', detail: 'not probed' },
+      alreadyUnlocked: false, attempts: 0, steps, upstream,
+      verdict: `Refused: ${plan.error}.`, error: plan.error,
+    };
+  }
+
+  const before = await getLockState(opts.serial);
+  if (before.locked === null) {
+    return {
+      ok: false, before, after: before, alreadyUnlocked: false, attempts: 0, steps, upstream,
+      verdict: `Cannot read lock state: ${before.detail}. Connect an ADB-authorized device first.`,
+      error: before.detail,
+    };
+  }
+  if (before.locked === false) {
+    return {
+      ok: true, before, after: before, alreadyUnlocked: true, attempts: 0, steps, upstream,
+      verdict: 'Device was already unlocked — nothing was injected.',
+    };
+  }
+
+  const sw = opts.swipe || { x: 540, y1: 1800, y2: 600, ms: 1000 };
+  await run('adb shell input keyevent KEYCODE_WAKEUP');
+  await sleep(400);
+  await run(`adb shell input swipe ${sw.x} ${sw.y1} ${sw.x} ${sw.y2} ${sw.ms ?? 1000}`);
+  await sleep(500);
+  for (const key of plan.keyevents) {
+    await run(`adb shell input keyevent ${key}`);
+    await sleep(120);
+  }
+  await run('adb shell input keyevent KEYCODE_ENTER');
+  await sleep(opts.settleMs ?? 2000);
+
+  const after = await getLockState(opts.serial);
+  const unlocked = after.locked === false;
+  return {
+    ok: true,
+    before,
+    after,
+    alreadyUnlocked: false,
+    attempts: MAX_PIN_ATTEMPTS,
+    steps,
+    upstream,
+    verdict: unlocked
+      ? `Lock screen opened after 1 attempt — the device accepted the supplied PIN.`
+      : `Still locked after 1 attempt (deviceLocked=1). Either the PIN is wrong or the lock screen rejected the injected key events.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Typed wrappers mirroring the upstream scripts (each is a thin allowlisted
 // adb shell call; the UI composes them into a report)
 // ---------------------------------------------------------------------------
@@ -383,6 +552,64 @@ export function parseSecretCodes(pmDump: string): string[] {
 // ---------------------------------------------------------------------------
 
 export const ANDROID_TOOLS: CustomTool[] = [
+  {
+    name: 'android_adb_lock_state',
+    description:
+      'Read an attached ADB device\'s lock state (locked/unlocked) from "dumpsys trust", with the failed-attempt counter. Read-only — sends nothing to the handset. Requires a connected, ADB-AUTHORIZED device (the owner must already have granted this host debug access).',
+    category: 'android',
+    riskTier: 'local_read',
+    parameters: [{ name: 'serial', type: 'string', description: 'Device serial (optional — uses primary if omitted)', required: false }],
+    handler: async (context) => {
+      const serial = typeof context.parameters.serial === 'string' ? context.parameters.serial : undefined;
+      try {
+        const s = await getLockState(serial);
+        return {
+          success: s.locked !== null,
+          output: s.detail + (s.raw ? `\n\n--- dumpsys trust (truncated) ---\n${s.raw.slice(0, 1200)}` : ''),
+          error: s.locked === null ? s.detail : undefined,
+        };
+      } catch (error) {
+        return { success: false, error: `lock state failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  },
+  {
+    name: 'android_adb_lock_probe',
+    description:
+      'AUTHORIZED-DEVICE ONLY. Send ONE operator-supplied PIN to an attached ADB-authorized handset via input keyevents and report whether the lock screen opened (technique from DouglasFreshHabian/UnlockAndroid). Exactly one attempt per call — no PIN enumeration, no brute force. Only for a device you own or are authorized to test; unlocking someone else\'s handset is a criminal offence in most jurisdictions.',
+    category: 'android',
+    // Intrusive: gated by the arsenal approval layer, and fires the loud audited
+    // warning. An unattended run cannot fire it without a human in the loop.
+    riskTier: 'intrusive',
+    parameters: [
+      { name: 'pin', type: 'string', description: 'The PIN to enter (4-12 digits). One attempt only.', required: true },
+      { name: 'serial', type: 'string', description: 'Device serial (optional)', required: false },
+      { name: 'confirmAuthorized', type: 'boolean', description: 'Must be true — asserts you own or are authorized to test this device', required: true },
+    ],
+    handler: async (context) => {
+      const pin = typeof context.parameters.pin === 'string' ? context.parameters.pin : '';
+      const serial = typeof context.parameters.serial === 'string' ? context.parameters.serial : undefined;
+      const confirmAuthorized = context.parameters.confirmAuthorized === true;
+      try {
+        const r = await probeLockPin({ pin, serial, confirmAuthorized });
+        const trace = r.steps.map((s) => `  $ adb ${s.command.replace(/^adb\s+-s\s+\S+\s+shell\s+/, 'shell ')}  → exit ${s.exitCode}`).join('\n');
+        return {
+          success: r.ok,
+          output: [
+            `Lock probe: ${r.verdict}`,
+            `before: ${r.before.detail}`,
+            `after:  ${r.after.detail}`,
+            `attempts: ${r.attempts} (hard cap ${MAX_PIN_ATTEMPTS})`,
+            trace ? `commands sent:\n${trace}` : '',
+            `technique: ${ANDROID_UNLOCK_SOURCE}`,
+          ].filter(Boolean).join('\n'),
+          error: r.error,
+        };
+      } catch (error) {
+        return { success: false, error: `lock probe failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  },
   {
     name: 'android_adb_status',
     description: 'Check ADB installation + connected devices + vendored AndroidForensics scripts. No device access — local host check only.',

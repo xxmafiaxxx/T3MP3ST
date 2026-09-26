@@ -64,6 +64,17 @@ export interface ChatOptions {
   tools?: LLMToolDefinition[];
   /** External cancellation — honored by adapters whose backend supports mid-flight abort (currently LocalAdapter). */
   signal?: AbortSignal;
+  /**
+   * Ollama-native only, opt-in: ask a reasoning model to answer directly instead of
+   * spending its token budget on a <think> block. gemma4/qwen3-class models burn the
+   * ENTIRE num_predict budget thinking and then return an empty message — measured on
+   * this box: a 400-token budget produced completionTokens=400 and zero-length content,
+   * which reads downstream as "the model failed". Callers that need a short factual
+   * answer (a summary, a classification, a fixed-format reply) set this; reasoning-
+   * dependent callers leave it unset. Ignored on the OpenAI-compatible wire, and
+   * automatically retried without the field on servers that reject an unknown `think` key.
+   */
+  noThink?: boolean;
 }
 
 /**
@@ -1069,6 +1080,10 @@ class LocalAdapter implements LLMProviderAdapter {
     if (!openaiWire) {
       const keepAlive = (process.env.T3MP3ST_LOCAL_KEEP_ALIVE || '30m').trim();
       if (keepAlive) requestBody.keep_alive = keepAlive;
+      // Opt-in: suppress the <think> block on reasoning models. Without it a
+      // gemma4-class model can spend the whole num_predict budget thinking and
+      // return an empty message (measured: completionTokens == maxTokens, content "").
+      if (options?.noThink) requestBody.think = false;
     }
 
     if (tryNative && options?.tools) {
@@ -1111,6 +1126,19 @@ class LocalAdapter implements LLMProviderAdapter {
       if (!response.ok && tryNative && this.config.nativeTools !== true) {
         delete requestBody.tools;
         this.cacheProbeResult(false);
+        response = await fetchBypassingProxy(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+      }
+
+      // Older Ollama builds don't know the `think` key and answer 400. The
+      // suppression is an optimization, not a requirement — drop it and re-send
+      // rather than failing the call over a hint the server didn't understand.
+      if (!response.ok && requestBody.think !== undefined) {
+        delete requestBody.think;
         response = await fetchBypassingProxy(url, {
           method: 'POST',
           headers,

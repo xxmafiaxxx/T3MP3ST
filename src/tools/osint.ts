@@ -681,20 +681,34 @@ export interface BreachSummary {
   note?: string;
 }
 
-interface LeakcheckPublicResponse { success?: boolean; found?: number; fields?: string[]; sources?: { name: string; date: string }[] }
+interface LeakcheckPublicResponse { success?: boolean; found?: number; fields?: string[]; sources?: { name: string; date: string }[]; error?: string; message?: string }
 interface XposedornotResponse { exposed?: string; breaches?: string[][]; breach?: string[] }
 
+/** LeakCheck PUBLIC API — free, no key. Returns WHICH breaches an identifier is in
+ *  and WHAT data classes were exposed, never the values. Live-verified: it also
+ *  answers phone numbers (the docs only list email/hash/username), so we do not
+ *  refuse those — the response shape is identical. Rate limit is 1 req/sec.
+ *
+ *  This deliberately runs the egress → Tor → direct fallback chain rather than a
+ *  bare osintFetch: the bare path rides the armed SOCKS dispatcher and dies with
+ *  "TypeError: fetch failed" whenever that proxy is unreachable, which silently
+ *  turned this (and every other bare-fetch free lane) into a false "unknown".
+ *  Live-verified on :3333 with the proxy down — the fallback answered with real
+ *  data while the bare fetch failed. */
 export async function leakcheckPublic(query: string): Promise<BreachSummary> {
-  const r = await osintFetch(`https://leakcheck.io/api/public?check=${encodeURIComponent(query)}`);
-  if (r.status === 429) return { service: 'LeakCheck', found: 'unknown', note: 'rate-limited — free lane allows ~1 query/10s' };
-  const j = (await r.json().catch(() => ({}))) as LeakcheckPublicResponse;
-  if (!j.success || !j.found) return { service: 'LeakCheck', found: 0 };
+  let r: { status: number; body: LeakcheckPublicResponse | null } | null = null;
+  try { r = await osintJsonWithFallbackStatus(`https://leakcheck.io/api/public?check=${encodeURIComponent(query)}`); } catch { r = null; }
+  if (!r || !r.body) return { service: 'LeakCheck public', found: 'unknown', note: 'public API unreachable via egress, Tor and direct' };
+  if (r.status === 429) return { service: 'LeakCheck public', found: 'unknown', note: 'rate-limited — the public lane allows 1 request/second' };
+  const j = r.body;
+  if (j.success === false) return { service: 'LeakCheck public', found: 'unknown', note: `public API rejected the query${j.error ? `: ${j.error}` : ''}` };
+  if (!j.found) return { service: 'LeakCheck public', found: 0, note: 'no breach source lists this identifier' };
   return {
-    service: 'LeakCheck',
+    service: 'LeakCheck public',
     found: j.found,
     fields: j.fields || [],
-    sources: (j.sources || []).slice(0, 10).map((s) => `${s.name} (${s.date})`),
-    note: 'public API: counts + sources only — full dump records need a LeakCheck key',
+    sources: (j.sources || []).slice(0, 25).map((s) => `${s.name} (${s.date})`),
+    note: 'public API: breach sources + exposed field names only — full records need a LeakCheck Pro key (Pro v2 lane)',
   };
 }
 
@@ -840,7 +854,7 @@ export async function emailIntel(emailRaw: string): Promise<EmailIntelResult> {
 
   const [gravatar, lc, xo, hr, mx, a] = await Promise.all([
     gravatarProfile(email),
-    leakcheckPublic(email).catch((e): BreachSummary => ({ service: 'LeakCheck', found: 'unknown', note: String(e).slice(0, 100) })),
+    leakcheckPublic(email).catch((e): BreachSummary => ({ service: 'LeakCheck public', found: 'unknown', note: String(e).slice(0, 100) })),
     xposedOrNot(email).catch((e): BreachSummary => ({ service: 'XposedOrNot', found: 'unknown', note: String(e).slice(0, 100) })),
     hudsonRockEmail(email).catch((e): HudsonRockResult => ({ service: 'Hudson Rock', infected: false, infections: [], corporateServices: 0, userServices: 0, note: String(e).slice(0, 100) })),
     dns.resolveMx(domain).catch(() => [] as { exchange: string; priority: number }[]),
@@ -880,6 +894,7 @@ interface DumpRecord {
     email?: string; username?: string; password?: string; hash?: string; source?: string; date?: string;
     /** Identity fields the licensed dump services return when the source dump had them. */
     dob?: string; age?: string; address?: string; city?: string; state?: string; country?: string; phone?: string;
+    zip?: string; name?: string;
   }[];
   note?: string;
 }
@@ -897,6 +912,11 @@ const DUMP_ENV: Record<DumpKeyService, string> = {
   dehashed: 'T3MP3ST_DEHASHED_KEY',
   snusbase: 'T3MP3ST_SNUSBASE_KEY',
 };
+// LeakCheck's own docs/tools name the variable LEAKCHECK_APIKEY, and operators
+// also carry LEAKCHECKIO. All three are read; the runtime-pasted key wins.
+const DUMP_ENV_ALIASES: Partial<Record<DumpKeyService, string[]>> = {
+  leakcheck: ['LEAKCHECK_APIKEY', 'LEAKCHECKIO', 'LEAKCHECK_KEY'],
+};
 
 export function setDumpKey(service: DumpKeyService, key: string | undefined): void {
   if (key && key.trim()) dumpKeys[service] = key.trim();
@@ -904,7 +924,15 @@ export function setDumpKey(service: DumpKeyService, key: string | undefined): vo
 }
 
 export function getDumpKey(service: DumpKeyService): string | undefined {
-  return dumpKeys[service] || process.env[DUMP_ENV[service]] || undefined;
+  const fromEnv = (v?: string) => (v || '').trim() || undefined;
+  const primary = fromEnv(process.env[DUMP_ENV[service]]);
+  if (dumpKeys[service]) return dumpKeys[service];
+  if (primary) return primary;
+  for (const alias of DUMP_ENV_ALIASES[service] || []) {
+    const v = fromEnv(process.env[alias]);
+    if (v) return v;
+  }
+  return undefined;
 }
 
 export function dumpKeyStatus(): Record<DumpKeyService, boolean> {
@@ -925,6 +953,13 @@ export function isDumpKeyService(v: string): v is DumpKeyService {
  *  Any transport whose response parses as JSON wins (API-level errors like
  *  "invalid key" arrive as JSON too — callers interpret the payload). */
 async function osintJsonWithFallback<T>(url: string, init: RequestInit = {}, headers: Record<string, string> = {}): Promise<T | null> {
+  return (await osintJsonWithFallbackStatus<T>(url, init, headers))?.body ?? null;
+}
+
+/** Same chain, but the HTTP status is preserved. The public LeakCheck lane needs
+ *  it to tell a 429 rate-limit apart from a 200 with zero findings — a lane that
+ *  reports "clean" because it was throttled is worse than no lane at all. */
+async function osintJsonWithFallbackStatus<T>(url: string, init: RequestInit = {}, headers: Record<string, string> = {}): Promise<{ status: number; body: T | null } | null> {
   const tryParse = (raw: string): T | null => {
     const t = raw.trim();
     if (!t.startsWith('{') && !t.startsWith('[')) return null;
@@ -933,14 +968,14 @@ async function osintJsonWithFallback<T>(url: string, init: RequestInit = {}, hea
   try {
     const res = await osintFetch(url, { ...init, headers });
     const j = tryParse(await res.text().catch(() => ''));
-    if (j) return j;
+    if (j) return { status: res.status, body: j };
   } catch { /* fall through */ }
   const tor = await torStatus();
   if (tor.available) {
     try {
       const page = await torFetchAny(url);
       const j = tryParse(page.body);
-      if (j) return j;
+      if (j) return { status: page.status || 200, body: j };
     } catch { /* fall through */ }
   }
   if (directAllowed()) {
@@ -950,33 +985,122 @@ async function osintJsonWithFallback<T>(url: string, init: RequestInit = {}, hea
         signal: AbortSignal.timeout(15_000),
       } as never);
       const j = tryParse(await res.text().catch(() => ''));
-      if (j) return j;
+      if (j) return { status: res.status, body: j };
     } catch { /* all paths failed */ }
   }
   return null;
+}
+
+/** The `source` object every Pro v2 row carries. Field names are snake_case and
+ *  were verified live against api.leakcheck.io — the previous implementation read
+ *  a `sources` STRING that the API never sends, so every record silently lost its
+ *  breach attribution. */
+export interface LeakcheckProSource {
+  name: string;
+  breach_date: string | null;
+  unverified?: number;
+  passwordless?: number;
+  compilation?: number;
+}
+export interface LeakcheckProRow {
+  email?: string; username?: string; password?: string;
+  first_name?: string; last_name?: string; name?: string;
+  dob?: string; phone?: string;
+  address?: string; city?: string; state?: string; zip?: string; country?: string;
+  ip?: string; origin?: string; collected?: string;
+  source?: LeakcheckProSource;
+  fields?: string[];
+}
+export interface LeakcheckProResult {
+  found: number;
+  /** Queries left on the account — the API returns this on every success. */
+  quota?: number;
+  rows: LeakcheckProRow[];
+  /** Distinct breach sources, most-hit first, with their per-source row counts. */
+  sources: { name: string; count: number; date?: string; unverified?: boolean; compilation?: boolean }[];
+  fields: string[];
+  note?: string;
+}
+
+/** LeakCheck Pro API v2 — full records. Key-gated.
+ *  Docs: https://docs.leakcheck.io/pro-api/lookup — GET /api/v2/query/{query}
+ *  with the X-API-Key header. Note: the live API IGNORES `limit` (returns the whole
+ *  match set) and returns 0 rows for any `offset` on the current plan, so this
+ *  deliberately sends neither and caps client-side. */
+export async function leakcheckPro(
+  queryRaw: string,
+  kind: 'auto' | 'email' | 'username' | 'phone' | 'domain' | 'hash' | 'keyword' = 'auto',
+  opts: { maxRows?: number } = {}
+): Promise<LeakcheckProResult> {
+  const query = queryRaw.trim();
+  const key = getDumpKey('leakcheck');
+  const empty: LeakcheckProResult = { found: 0, rows: [], sources: [], fields: [] };
+  if (!key) return { ...empty, note: 'not configured — set T3MP3ST_LEAKCHECK_KEY (or LEAKCHECKIO / LEAKCHECK_APIKEY), or paste a key into ARM DUMP LANES' };
+  if (query.length < 3) return { ...empty, note: 'query must be at least 3 characters' };
+
+  // `auto` only works for email/username/phone/hash; anything else must be explicit.
+  const type = kind === 'auto' ? '' : `?type=${encodeURIComponent(kind)}`;
+  const r = await osintJsonWithFallbackStatus<{
+    success?: boolean; found?: number; quota?: number; error?: string; message?: string;
+    result?: LeakcheckProRow[];
+  }>(`https://leakcheck.io/api/v2/query/${encodeURIComponent(query)}${type}`, {}, { 'X-API-Key': key, accept: 'application/json' });
+  if (!r || !r.body) return { ...empty, note: 'LeakCheck Pro API unreachable via egress, Tor and direct' };
+  const j = r.body;
+  // 401/403/429 carry no useful body on some edges — name the status instead of
+  // reporting "0 records" for what is really an auth, plan or throttle refusal.
+  if (r.status === 429) return { ...empty, note: 'rate-limited — the Pro v2 lane allows 3 requests/second' };
+  if (r.status === 401) return { ...empty, note: 'HTTP 401 — the configured LeakCheck key was rejected (check T3MP3ST_LEAKCHECK_KEY / LEAKCHECKIO)' };
+  if (j.success === false || j.error) {
+    const err = String(j.error || j.message || 'request rejected');
+    // 403 "Active plan required" is the free-tier case — say so rather than
+    // letting it read like a broken lane. 422 means auto-detection failed.
+    const note = /^active plan/i.test(err)
+      ? `${err} — this key is on a plan without Pro v2 record access; the PUBLIC lane still returns sources + exposed field names`
+      : /could not determine/i.test(err)
+        ? `${err} — pass an explicit type (email / username / phone / domain / hash)`
+        : err;
+    return { ...empty, note };
+  }
+
+  const all = Array.isArray(j.result) ? j.result : [];
+  const max = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 100;
+  const rows = all.slice(0, max);
+  const bySource = new Map<string, { name: string; count: number; date?: string; unverified?: boolean; compilation?: boolean }>();
+  const fieldSet = new Set<string>();
+  for (const r of all) {
+    for (const f of r.fields || []) fieldSet.add(f);
+    const s = r.source;
+    if (!s?.name) continue;
+    const cur = bySource.get(s.name) || { name: s.name, count: 0, date: s.breach_date || undefined, unverified: !!s.unverified, compilation: !!s.compilation };
+    cur.count += 1;
+    bySource.set(s.name, cur);
+  }
+  return {
+    found: j.found ?? all.length,
+    quota: typeof j.quota === 'number' ? j.quota : undefined,
+    rows,
+    sources: [...bySource.values()].sort((a, b) => b.count - a.count),
+    fields: [...fieldSet].sort(),
+  };
 }
 
 /** LeakCheck v2 — full records (incl. password fields when the dump has them). Key-gated. */
 async function leakcheckDeep(query: string, kind: 'email' | 'username' | 'phone' | 'domain'): Promise<DumpRecord | null> {
   const key = getDumpKey('leakcheck');
   if (!key) return null;
-  const j = await osintJsonWithFallback<{ success?: boolean; found?: number; result?: Record<string, string>[]; error?: string }>(
-    `https://leakcheck.io/api/v2/query/${encodeURIComponent(query)}?type=${kind}`,
-    {},
-    { 'X-API-Key': key }
-  );
-  if (!j) return { service: 'LeakCheck v2 (keyed)', found: 0, note: 'API unreachable via egress, Tor and direct' };
-  if (j.success === false || j.error) {
-    return { service: 'LeakCheck v2 (keyed)', found: 0, note: `LeakCheck API: ${j.error || 'request rejected'}` };
-  }
+  const pro = await leakcheckPro(query, kind, { maxRows: 50 });
+  if (pro.note) return { service: 'LeakCheck Pro v2 (keyed)', found: 0, note: pro.note };
   return {
-    service: 'LeakCheck v2 (keyed)',
-    found: j.found ?? 0,
-    records: (j.result || []).slice(0, 50).map((rec) => ({
-      email: rec.email, username: rec.username, password: rec.password, hash: rec.hashed_password,
-      dob: rec.date_of_birth || rec.dob, address: rec.address, city: rec.city, state: rec.state,
-      country: rec.country, phone: rec.phone,
-      source: rec.sources?.replace(/;/g, ', '),
+    service: 'LeakCheck Pro v2 (keyed)',
+    found: pro.found,
+    records: pro.rows.map((rec) => ({
+      email: rec.email, username: rec.username, password: rec.password, hash: undefined,
+      name: [rec.first_name, rec.last_name].filter(Boolean).join(' ') || rec.name || undefined,
+      dob: rec.dob, address: rec.address, city: rec.city, state: rec.state,
+      zip: rec.zip, country: rec.country, phone: rec.phone,
+      // source is an OBJECT upstream — take its name, with the date for context.
+      source: rec.source?.name + (rec.source?.breach_date ? ` (${rec.source.breach_date})` : ''),
+      date: rec.collected || rec.source?.breach_date || undefined,
     })),
   };
 }
@@ -1060,7 +1184,7 @@ export async function dumpDatabaseLookup(
         : 'Password not present in the Pwned Passwords corpus',
     });
   } else {
-    free.push(await leakcheckPublic(query).catch((e): BreachSummary => ({ service: 'LeakCheck', found: 'unknown', note: String(e).slice(0, 100) })));
+    free.push(await leakcheckPublic(query).catch((e): BreachSummary => ({ service: 'LeakCheck public', found: 'unknown', note: String(e).slice(0, 100) })));
     if (kind === 'email') {
       free.push(await xposedOrNot(query).catch((e): BreachSummary => ({ service: 'XposedOrNot', found: 'unknown', note: String(e).slice(0, 100) })));
     }
@@ -1075,7 +1199,7 @@ export async function dumpDatabaseLookup(
     }
     const settled = await Promise.all(lanes.map((p) => p.catch(() => null)));
     const gate: Record<string, string> = {
-      'LeakCheck v2 (keyed)': 'T3MP3ST_LEAKCHECK_KEY',
+      'LeakCheck Pro v2 (keyed)': 'T3MP3ST_LEAKCHECK_KEY / LEAKCHECKIO / LEAKCHECK_APIKEY',
       'DeHashed (keyed)': 'T3MP3ST_DEHASHED_KEY',
       'Snusbase (keyed)': 'T3MP3ST_SNUSBASE_KEY',
     };
@@ -4483,6 +4607,62 @@ export const OSINT_TOOLS: CustomTool[] = [
         return { success: true, output: lines.join(String.fromCharCode(10)), findings };
       } catch (error) {
         return { success: false, error: 'Historical recovery failed: ' + (error instanceof Error ? error.message : String(error)) };
+      }
+    },
+  },
+  {
+    name: 'osint_leakcheck',
+    description: 'LeakCheck.io breach lookup (leakcheck.io, docs.leakcheck.io): the free PUBLIC lane returns which breach sources list an identifier and which data classes were exposed; the Pro v2 lane (key-gated via T3MP3ST_LEAKCHECK_KEY / LEAKCHECKIO) returns full records plus per-breach attribution, exposure flags and the remaining query quota. Searches by email, username, phone, domain or hash. A hit means a breach lists this identifier — it does not prove the account is still active.',
+    category: 'osint',
+    parameters: [
+      { name: 'query', type: 'string', description: 'Email, username, phone (E.164 digits), domain, or SHA-256 hash', required: true },
+      { name: 'type', type: 'string', description: 'Search type: auto (default), email, username, phone, domain, hash, keyword', required: false, enum: ['auto', 'email', 'username', 'phone', 'domain', 'hash', 'keyword'], default: 'auto' },
+      { name: 'pro', type: 'boolean', description: 'Run the Pro v2 lane too (needs a configured key). Default true when a key is present.', required: false },
+    ],
+    handler: async (context) => {
+      const query = String(context.parameters.query || '').trim();
+      const typeRaw = String(context.parameters.type || 'auto').toLowerCase();
+      const type = (['auto', 'email', 'username', 'phone', 'domain', 'hash', 'keyword'] as const).includes(typeRaw as any)
+        ? typeRaw as 'auto' | 'email' | 'username' | 'phone' | 'domain' | 'hash' | 'keyword'
+        : 'auto';
+      if (!query) return { success: false, error: 'query required' };
+      try {
+        const pub = await leakcheckPublic(query);
+        const wantPro = context.parameters.pro === undefined ? Boolean(getDumpKey('leakcheck')) : context.parameters.pro === true;
+        const pro = wantPro ? await leakcheckPro(query, type, { maxRows: 50 }) : null;
+        const lines = [`LeakCheck lookup for ${query} (type=${type}):`];
+        if (pub.found === 'unknown') lines.push(`  public: ${pub.note}`);
+        else if (!pub.found) lines.push('  public: no breach source lists this identifier');
+        else {
+          lines.push(`  public: ${pub.found} breach source(s); exposed fields: ${(pub.fields || []).join(', ') || '?'}`);
+          for (const s of pub.sources || []) lines.push(`    · ${s}`);
+        }
+        if (pro) {
+          lines.push(pro.note ? `  Pro v2: ${pro.note}`
+            : `  Pro v2: ${pro.found} record(s)${pro.quota !== undefined ? `, ${pro.quota} queries left on the account` : ''}`);
+          if (!pro.note && pro.found) {
+            for (const s of pro.sources.slice(0, 15)) lines.push(`    · ${s.name} × ${s.count}${s.date ? ` (${s.date})` : ''}${s.unverified ? ' [UNVERIFIED]' : ''}${s.compilation ? ' [compilation]' : ''}`);
+          }
+        }
+        const findings: Array<{ title: string; severity: 'info' | 'low' | 'medium' | 'high' | 'critical'; details: string }> = [];
+        if (pub.found !== 'unknown' && pub.found > 0) {
+          findings.push({
+            title: `Breach Exposure — ${query} (LeakCheck public)`,
+            severity: (pub.fields || []).some((f) => /password|passwd/.test(f)) ? 'medium' : 'low',
+            details: `${pub.found} breach source(s); exposed data classes: ${(pub.fields || []).join(', ') || 'unspecified'}. Sources: ${(pub.sources || []).slice(0, 10).join('; ')}`,
+          });
+        }
+        if (pro && !pro.note && pro.found > 0) {
+          const withPw = pro.rows.filter((r) => r.password).length;
+          findings.push({
+            title: `LeakCheck Pro Records — ${query}`,
+            severity: withPw > 0 ? 'high' : 'medium',
+            details: `${pro.found} record(s) across ${pro.sources.length} breach source(s); ${withPw} row(s) carry password material. Top sources: ${pro.sources.slice(0, 6).map((s) => `${s.name}×${s.count}`).join('; ')}`,
+          });
+        }
+        return { success: true, output: lines.join('\n'), findings };
+      } catch (error) {
+        return { success: false, error: `LeakCheck lookup failed: ${error instanceof Error ? error.message : String(error)}` };
       }
     },
   },

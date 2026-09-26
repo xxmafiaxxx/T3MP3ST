@@ -51,6 +51,8 @@ import {
   emailIntel,
   hudsonRockEmail,
   hibpBreachCatalog,
+  leakcheckPublic,
+  leakcheckPro,
   phoneIntel,
   phoneInfogaDorks,
   phoneInfogaOvhCheck,
@@ -98,6 +100,11 @@ import {
   parseSecretCodes,
   dumpsysService,
   wifiScan,
+  getLockState,
+  probeLockPin,
+  ANDROID_UNLOCK_SOURCE,
+  ANDROID_UNLOCK_VERSION,
+  MAX_PIN_ATTEMPTS,
 } from './tools/android-forensics.js';
 import {
   buildBbox,
@@ -8063,6 +8070,49 @@ app.post('/api/osint/phoneinfoga/remote/scan', async (req: Request, res: Respons
   }
 });
 
+// ── LeakCheck.io — public lane (free, no key) + Pro v2 lane (key-gated) ──
+// https://docs.leakcheck.io/overview. Public returns breach SOURCES + exposed
+// field names only; Pro v2 returns full records. The API key is read from
+// T3MP3ST_LEAKCHECK_KEY / LEAKCHECKIO / LEAKCHECK_APIKEY or the ARM DUMP LANES panel.
+app.post('/api/osint/leakcheck', async (req: Request, res: Response): Promise<void> => {
+  const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+  if (!query) { res.status(400).json({ error: 'query required' }); return; }
+  const typeRaw = typeof req.body?.type === 'string' ? req.body.type.toLowerCase() : 'auto';
+  const type = (['auto', 'email', 'username', 'phone', 'domain', 'hash', 'keyword'] as const).includes(typeRaw as any)
+    ? typeRaw as 'auto' | 'email' | 'username' | 'phone' | 'domain' | 'hash' | 'keyword'
+    : 'auto';
+  const wantPro = req.body?.pro === undefined ? true : req.body.pro === true;
+  try {
+    console.log(`[T3MP3ST][OSINT] leakcheck lookup (${type}${wantPro ? ' + pro' : ''}): ${query}`);
+    const publicSummary = await leakcheckPublic(query);
+    const pro = wantPro ? await leakcheckPro(query, type, { maxRows: 100 }) : null;
+    if (publicSummary.found !== 'unknown' && publicSummary.found > 0) {
+      upsertMissionFindingToLedger({
+        title: `Breach Exposure — ${query} (LeakCheck)`,
+        description: `${publicSummary.found} breach source(s); exposed data classes: ${(publicSummary.fields || []).join(', ') || 'unspecified'}`,
+        severity: (publicSummary.fields || []).some((f) => /password/i.test(f)) ? 'medium' : 'low',
+        targetId: query,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `LeakCheck public: ${(publicSummary.sources || []).slice(0, 10).join('; ')}`, timestamp: Date.now(), metadata: { tool: 'osint_leakcheck' } }],
+      });
+    }
+    if (pro && !pro.note && pro.found > 0) {
+      const withPw = pro.rows.filter((r) => r.password).length;
+      upsertMissionFindingToLedger({
+        title: `LeakCheck Pro Records — ${query}`,
+        description: `${pro.found} record(s) across ${pro.sources.length} breach source(s); ${withPw} carry password material`,
+        severity: withPw > 0 ? 'high' : 'medium',
+        targetId: query,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `Top sources: ${pro.sources.slice(0, 8).map((s) => `${s.name}x${s.count}`).join('; ')}`, timestamp: Date.now(), metadata: { tool: 'osint_leakcheck' } }],
+      });
+    }
+    res.json({ success: true, query, type, public: publicSummary, pro });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
 app.post('/api/osint/breach', async (req: Request, res: Response): Promise<void> => {
   const query = typeof req.body?.query === 'string' ? req.body.query : '';
   const kindRaw = typeof req.body?.kind === 'string' ? req.body.kind : '';
@@ -8374,14 +8424,16 @@ app.get('/api/gps/quakes', async (req: Request, res: Response): Promise<void> =>
   const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
   const feed = await fetchEarthquakes({ refresh });
   const bbox = buildBbox(req.query.lamin, req.query.lomin, req.query.lamax, req.query.lomax);
-  res.json({ success: true, ...(bbox ? { ...feed, points: feed.points.filter((p) => bboxOverlaps(bbox, p.lat, p.lon)) } : feed) });
+  // `total` = the unfiltered 24h count, so an in-view 0 reads as "none near you,
+  // N worldwide — zoom out" instead of an indistinguishable dead layer.
+  res.json({ success: true, total: feed.points.length, ...(bbox ? { ...feed, points: feed.points.filter((p) => bboxOverlaps(bbox, p.lat, p.lon)) } : feed) });
 });
 
 app.get('/api/gps/alerts', async (req: Request, res: Response): Promise<void> => {
   const refresh = /^(1|true|yes)$/i.test(String(req.query.refresh || ''));
   const feed = await fetchWeatherAlerts({ refresh });
   const bbox = buildBbox(req.query.lamin, req.query.lomin, req.query.lamax, req.query.lomax);
-  res.json({ success: true, ...(bbox ? { ...feed, points: feed.points.filter((p) => bboxOverlaps(bbox, p.lat, p.lon)) } : feed) });
+  res.json({ success: true, total: feed.points.length, ...(bbox ? { ...feed, points: feed.points.filter((p) => bboxOverlaps(bbox, p.lat, p.lon)) } : feed) });
 });
 
 app.get('/api/gps/iss', async (req: Request, res: Response): Promise<void> => {
@@ -8449,6 +8501,288 @@ app.get('/api/gps/satellites', async (req: Request, res: Response): Promise<void
   const feed = await fetchSatellites({ group, limit, refresh });
   const points = bbox ? feed.points.filter((p) => bboxOverlaps(bbox, p.lat, p.lon)) : feed.points;
   res.json({ success: true, group, limit, bbox: bbox || undefined, ...feed, points });
+});
+
+// --- GPS copilot — the local model narrates the map, the server owns the math ---
+// POST /api/gps/copilot { prompt, mode?, view?, model?, baseUrl?, apiKey? }
+// The browser's Settings → Local Model values are honored (same trust rules as
+// /api/llm/local: a client-chosen baseUrl never receives the server's key).
+// All distances, bearings and counts are computed server-side from the same
+// cached feeds the map renders; the model only picks whitelisted map actions and
+// writes the prose. Unparseable replies degrade to prose, never to a bad action.
+
+app.get('/api/gps/copilot', (_req: Request, res: Response): void => {
+  let model = '';
+  let configured = true;
+  try {
+    const cfg = config.getLLMConfig('local');
+    model = cfg.model || '';
+    configured = Boolean(cfg.baseUrl);
+  } catch {
+    configured = false;
+  }
+  res.json({ success: true, provider: 'local', model, configured, localOnly: true, fallback: 'none — a down local model reports down, it never escalates to a cloud provider', actions: COPILOT_ACTIONS });
+});
+
+app.post('/api/gps/copilot', async (req: Request, res: Response): Promise<void> => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, 2000) : '';
+  if (!prompt) { res.status(400).json({ error: 'prompt required — tell the copilot what you need' }); return; }
+  const modeRaw = String(body.mode || 'auto');
+  const mode: CopilotMode = modeRaw === 'brief' || modeRaw === 'command' || modeRaw === 'ask' ? modeRaw : 'auto';
+
+  const bu = sanitizeLocalBaseUrl(body.baseUrl);
+  if (!bu.ok) { res.status(400).json({ error: bu.error }); return; }
+
+  const v = (body.view || {}) as Record<string, unknown>;
+  const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+  const view = {
+    bbox: buildBbox(v.lamin, v.lomin, v.lamax, v.lomax),
+    center: num(v.centerLat) !== null && num(v.centerLon) !== null ? { lat: num(v.centerLat)!, lon: num(v.centerLon)! } : null,
+    zoom: num(v.zoom),
+    pin: num(v.pinLat) !== null && num(v.pinLon) !== null ? { lat: num(v.pinLat)!, lon: num(v.pinLon)! } : null,
+    pinLabel: typeof v.pinLabel === 'string' ? v.pinLabel.slice(0, 200) : null,
+    layers: Array.isArray(v.layers) ? v.layers.filter((x): x is string => typeof x === 'string').slice(0, 12) : null,
+    satellites: v.satellites && typeof v.satellites === 'object' ? v.satellites as { group?: string; count?: number } : null,
+    pois: v.pois && typeof v.pois === 'object' ? v.pois as { kind?: string; count?: number } : null,
+    towers: num(v.towers),
+  };
+
+  try {
+    // Reuse the live feed caches (45s aircraft / 120s quakes+alerts / 15s ISS);
+    // the copilot narrates the SAME data the map is showing, not a second pull.
+    const [aircraft, quakes, alerts, iss] = await Promise.all([
+      view.bbox ? fetchAircraft(view.bbox) : Promise.resolve(null),
+      fetchEarthquakes(),
+      fetchWeatherAlerts(),
+      fetchIss(),
+    ]);
+    const ctx = buildCopilotContext(view, { aircraft, quakes, alerts, iss });
+
+    const base = config.getLLMConfig('local', typeof body.model === 'string' && body.model ? body.model : undefined);
+    const clientApiKey = typeof body.apiKey === 'string' && body.apiKey.trim() ? body.apiKey.trim() : '';
+    const effectiveApiKey = bu.value ? (clientApiKey || undefined) : (clientApiKey || base.apiKey);
+    const timeoutMs = Math.max(30_000, Math.min(600_000, Number(body.timeout) > 0 ? Number(body.timeout) : 180_000));
+    const llmConfig = {
+      ...base,
+      provider: 'local' as const,
+      model: typeof body.model === 'string' && body.model ? body.model : base.model,
+      baseUrl: bu.value || base.baseUrl,
+      apiKey: effectiveApiKey,
+      maxTokens: 900,
+      temperature: 0.2,
+      timeout: timeoutMs,
+      // LOCAL ONLY. LLMBackbone's ladder appends config.fallbackChain, and
+      // TEMPEST_MODEL_FALLBACK=1 puts OpenRouter on it — so a copilot run with
+      // the local backend down would silently answer from a paid cloud model
+      // and ship the map context off-box. The panel promises "nothing leaves the
+      // box"; an empty chain is what makes that promise true.
+      fallbackChain: [] as never[],
+    };
+
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', onClose);
+    let reply: string;
+    let usage: unknown;
+    let modelUsed = llmConfig.model;
+    try {
+      console.log(`[T3MP3ST][GPS] copilot ${mode}: ${prompt.slice(0, 80)} (${ctx.facts.length} facts)`);
+      const backbone = new LLMBackbone(llmConfig as any);
+      const result = await backbone.chat([
+        { role: 'system', content: buildCopilotSystemPrompt(ctx, mode) },
+        { role: 'user', content: buildCopilotUserPrompt(prompt) },
+      ] as any, { maxTokens: llmConfig.maxTokens, temperature: llmConfig.temperature, signal: controller.signal });
+      reply = result.content || '';
+      usage = result.usage;
+      modelUsed = result.model || modelUsed;
+    } finally {
+      res.off('close', onClose);
+    }
+
+    const plan = resolveCopilotPlan(parseCopilotReply(reply), {
+      pin: ctx.pins,
+      iss: ctx.issFix,
+      center: ctx.view.center,
+      pinLabel: ctx.view.pinLabel || undefined,
+    });
+    res.json({
+      success: true,
+      mode,
+      model: modelUsed,
+      say: plan.say,
+      actions: plan.actions,
+      parseFailed: plan.parseFailed,
+      raw: plan.parseFailed ? reply.slice(0, 2000) : undefined,
+      usage,
+      facts: ctx.facts,
+      notes: ctx.notes,
+    });
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    console.error('[T3MP3ST][GPS] copilot failed:', message);
+    if (res.headersSent) return;
+    // A local model that is down is an ordinary operator state, not a server bug:
+    // 502 with the reason so the panel can show it and keep the map working.
+    res.status(502).json({ error: `local model unavailable — ${message}`.slice(0, 400), actions: [] });
+  }
+});
+
+// --- AREA WATCH — "what's the news where the pin landed" (keyless RSS + local LLM) ---
+// POST /api/gps/area-brief { lat, lon, place, address?, model?, baseUrl?, apiKey?, timeout? }
+// The server fetches real indexed coverage for the pin's PLACE (Google News RSS
+// primary, Bing News RSS secondary), folds in the seismic/weather events already
+// near that point, and lets the LOCAL model summarize — grounded only on those
+// headlines. No headlines means no model call at all: a local CPU model must not
+// burn 90s to be told there is nothing.
+
+app.post('/api/gps/area-brief', async (req: Request, res: Response): Promise<void> => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const lat = typeof body.lat === 'number' ? body.lat : parseFloat(String(body.lat ?? ''));
+  const lon = typeof body.lon === 'number' ? body.lon : parseFloat(String(body.lon ?? ''));
+  const place = typeof body.place === 'string' ? body.place.trim().slice(0, 160) : '';
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    res.status(400).json({ error: 'lat and lon required (numeric, in range)' });
+    return;
+  }
+  if (!place) {
+    res.status(400).json({ error: 'place required — the news search runs on a named place, not a bare coordinate' });
+    return;
+  }
+  const address = (body.address && typeof body.address === 'object' ? body.address : null) as Record<string, string> | null;
+
+  try {
+    const news = await fetchAreaNews(place, address, { refresh: /^(1|true|yes)$/i.test(String(body.refresh || '')) });
+
+    // Seismic/weather context for the same point, from the feeds the map already
+    // caches — "nearest quake to this pin" is part of "what's happening here".
+    const [quakes, alerts] = await Promise.all([fetchEarthquakes(), fetchWeatherAlerts()]);
+    const nearQuake = quakes.points
+      .map((p) => ({ p, km: haversineKm({ lat, lon }, { lat: p.lat, lon: p.lon }) }))
+      .filter((x) => x.km <= 200)
+      .sort((a, b) => (b.p.mag ?? -99) - (a.p.mag ?? -99))[0];
+    const nearAlert = alerts.points
+      .map((p) => ({ p, km: haversineKm({ lat, lon }, { lat: p.lat, lon: p.lon }) }))
+      .filter((x) => x.km <= 200)
+      .sort((a, b) => a.km - b.km)[0];
+
+    const facts: string[] = [
+      `Place: ${place} (${lat.toFixed(4)}, ${lon.toFixed(4)}).`,
+      `News search query used: ${news.query || '(none)'}. Sources queried: ${news.sourcesTried.join(', ') || 'none'}.`,
+      `Indexed articles in the last 24h mentioning this place: ${news.articles.length}.`,
+    ];
+    // NOTE: push, never `...(cond ? 'a' : 'b')` — spreading a STRING yields one
+    // array element per character (the first live run sent the model a fact list
+    // shredded into 600+ single-character lines).
+    facts.push(nearQuake
+      ? `Nearest/strongest quake within 200 km: M${(nearQuake.p.mag ?? 0).toFixed(1)} "${nearQuake.p.label}", ${Math.round(nearQuake.km)} km away.`
+      : 'No earthquake epicentres within 200 km of this point in the past 24h.');
+    facts.push(nearAlert
+      ? `Nearest active weather alert polygon centroid: ${Math.round(nearAlert.km)} km — "${nearAlert.p.label}".`
+      : 'No active weather alerts with a centroid within 200 km of this point.');
+
+    // Nothing indexed and nothing seismic nearby → answer without the model.
+    if (!news.articles.length) {
+      res.json({
+        success: true,
+        place,
+        query: news.query,
+        articles: [],
+        brief: null,
+        skipped: true,
+        reason: news.note || 'no indexed coverage for this place in the last 24h',
+        facts,
+        notes: news.note ? [news.note] : [],
+      });
+      return;
+    }
+
+    const bu = sanitizeLocalBaseUrl(body.baseUrl);
+    if (!bu.ok) { res.status(400).json({ error: bu.error }); return; }
+    const base = config.getLLMConfig('local', typeof body.model === 'string' && body.model ? body.model : undefined);
+    const clientApiKey = typeof body.apiKey === 'string' && body.apiKey.trim() ? body.apiKey.trim() : '';
+    const effectiveApiKey = bu.value ? (clientApiKey || undefined) : (clientApiKey || base.apiKey);
+    const timeoutMs = Math.max(30_000, Math.min(600_000, Number(body.timeout) > 0 ? Number(body.timeout) : 240_000));
+
+    const system = [
+      'You are the AREA WATCH analyst for a public-data map. The operator dropped a pin and wants to know what is going on there right now.',
+      '',
+      'ABSOLUTE RULES:',
+      '- Every claim must come from the ARTICLE LIST or the LOCAL EVENTS below. They are fetched from live news indexes; you did not browse and you cannot browse.',
+      '- Headlines are headlines, not verified reports of fact. Attribute claims to the outlet and never assert that something definitely happened.',
+      '- If the headlines are thin, thin local sports, or mostly national news that merely mentions the place, say that plainly — that is a useful answer.',
+      '- Do not infer anything about individuals. No tracking, no profiling, no "who lives there" reasoning.',
+      '- Output ONLY the brief text: 2-4 short sentences, plain text, no markdown headers, no bullet characters, no preamble.',
+    ].join('\n');
+    const user = [
+      `PLACE: ${place} (${lat.toFixed(4)}, ${lon.toFixed(4)})`,
+      '',
+      'ARTICLE LIST (newest first, title | outlet | age):',
+      ...newsFactLines(news, 18),
+      '',
+      'LOCAL EVENTS (computed from live seismic/weather feeds):',
+      ...facts.slice(3),
+      '',
+      'Write the 2-4 sentence area brief now.',
+    ].join('\n');
+
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', onClose);
+    let reply = '';
+    let modelUsed = base.model;
+    let usage: unknown;
+    let briefError: string | null = null;
+    try {
+      console.log(`[T3MP3ST][GPS] area brief: ${place} (${news.articles.length} articles)`);
+      const backbone = new LLMBackbone({
+        ...base,
+        provider: 'local' as const,
+        model: typeof body.model === 'string' && body.model ? body.model : base.model,
+        baseUrl: bu.value || base.baseUrl,
+        apiKey: effectiveApiKey,
+        maxTokens: 500,
+        temperature: 0.3,
+        timeout: timeoutMs,
+        fallbackChain: [] as never[], // local only — never escalate a pin drop to a paid cloud model
+      } as any);
+      const result = await backbone.chat(
+        [{ role: 'system', content: system }, { role: 'user', content: user }] as any,
+        // noThink: a short grounded summary must not be eaten by a <think> block
+        // (measured: gemma4 spent the whole budget thinking and returned nothing).
+        { maxTokens: 500, temperature: 0.3, signal: controller.signal, noThink: true }
+      );
+      reply = result.content || '';
+      usage = result.usage;
+      modelUsed = result.model || modelUsed;
+    } catch (e: any) {
+      // The headlines are the deliverable; the summary is a bonus. A down local
+      // model must not take the news with it.
+      briefError = (e?.message || String(e)).slice(0, 200);
+      console.error('[T3MP3ST][GPS] area brief: model failed, returning headlines only —', briefError);
+    } finally {
+      res.off('close', onClose);
+    }
+
+    res.json({
+      success: true,
+      place,
+      query: news.query,
+      articles: news.articles,
+      brief: reply.trim() || null,
+      briefError: reply.trim() ? null : briefError,
+      skipped: false,
+      model: modelUsed,
+      usage,
+      facts,
+      notes: news.note && news.note !== 'cached' ? [news.note] : [],
+    });
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    console.error('[T3MP3ST][GPS] area brief failed:', message);
+    if (res.headersSent) return;
+    res.status(502).json({ error: `area brief failed — ${message}`.slice(0, 400) });
+  }
 });
 
 // --- Dark web direct — leak-site monitor + onion search/fetch (keyless lanes) ---
@@ -8620,6 +8954,49 @@ app.post('/api/android/secret-codes', async (req: Request, res: Response): Promi
       } catch { /* per-package best-effort */ }
     }
     res.json({ success: true, scanned: batch.length, totalSystemPackages: pkgs.length, hits, truncated: pkgs.length > limit });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// Lock-screen PIN probe — the one device capability here that touches the lock
+// screen. Gated on an explicit operator authorization acknowledgement, capped at
+// ONE attempt per call (no PIN enumeration, no brute force), and only reachable
+// once the device owner has already granted this host ADB authorization.
+// Technique from DouglasFreshHabian/UnlockAndroid — reimplemented natively
+// (upstream declares no license, so nothing is vendored).
+app.post('/api/android/lock-probe', async (req: Request, res: Response): Promise<void> => {
+  const pin = typeof req.body?.pin === 'string' ? req.body.pin : '';
+  const serial = typeof req.body?.serial === 'string' ? req.body.serial : undefined;
+  if (req.body?.confirmAuthorized !== true) {
+    res.status(403).json({
+      error: 'Authorization acknowledgement required — confirm you own or are authorized to test this device. Unlocking a handset you have no right to is a criminal offence in most jurisdictions.',
+      upstream: ANDROID_UNLOCK_SOURCE,
+    });
+    return;
+  }
+  try {
+    const result = await probeLockPin({ pin, serial, confirmAuthorized: true });
+    console.log(`[T3MP3ST][ANDROID] lock probe: ${result.verdict}`);
+    if (result.ok && !result.alreadyUnlocked) {
+      upsertMissionFindingToLedger({
+        title: 'Android Lock-Screen PIN Probe (authorized device)',
+        description: `${result.verdict} Before: ${result.before.detail}. After: ${result.after.detail}. Attempts: ${result.attempts}/${MAX_PIN_ATTEMPTS}. Technique: ${result.upstream}`,
+        severity: 'info',
+        operatorId: 'android-panel',
+        evidence: [{ type: 'adb-command-trace', content: result.steps.map((s) => s.command).join(' | ').slice(0, 2000), metadata: { tool: 'android_adb_lock_probe' } }],
+      });
+    }
+    res.json({ success: result.ok, ...result, maxAttempts: MAX_PIN_ATTEMPTS, version: ANDROID_UNLOCK_VERSION });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.get('/api/android/lock-state', async (req: Request, res: Response): Promise<void> => {
+  const serial = typeof req.query.serial === 'string' ? req.query.serial : undefined;
+  try {
+    res.json({ success: true, state: await getLockState(serial), upstream: ANDROID_UNLOCK_SOURCE });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || String(err) });
   }

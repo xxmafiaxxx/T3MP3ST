@@ -41,8 +41,8 @@ describe('osint site catalog', () => {
 });
 
 describe('osint agent tools', () => {
-  it('registers 15 tools in the osint category with required parameters', () => {
-    expect(OSINT_TOOLS.length).toBe(15);
+  it('registers 16 tools in the osint category with required parameters', () => {
+    expect(OSINT_TOOLS.length).toBe(16);
     // Catalog generators are legitimately invocable bare (they emit a query
     // library, they don't search one subject) — documented exception to the
     // "every tool has a required input" rule.

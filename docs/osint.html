@@ -189,6 +189,62 @@
 
         .page-content { padding: 24px; max-width: 1400px; }
 
+        /* ── INLINE HELP ──────────────────────────────────────────────
+           Every section header gets a "?" that opens this modal. The content
+           lives in one OSINT_HELP registry keyed by the section's own title,
+           so a new section without help is a failing test, not a silent gap. */
+        .help-btn {
+            width: 17px; height: 17px; flex: none; border-radius: 50%;
+            border: 1px solid var(--border-color); background: var(--bg-tertiary);
+            color: var(--text-muted); font-size: 10px; line-height: 1; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center; padding: 0;
+            font-family: 'JetBrains Mono', monospace; transition: all 0.15s ease;
+        }
+        .help-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); box-shadow: 0 0 9px var(--border-glow); }
+        .help-modal {
+            position: fixed; inset: 0; z-index: 9000; display: none;
+            align-items: center; justify-content: center; padding: 24px;
+            background: rgba(3, 8, 12, 0.82); backdrop-filter: blur(3px);
+        }
+        .help-modal.show { display: flex; }
+        .help-card {
+            background: var(--bg-card); border: 1px solid var(--border-glow); border-radius: 10px;
+            max-width: 640px; width: 100%; max-height: 84vh; overflow-y: auto;
+            box-shadow: 0 18px 60px rgba(0, 0, 0, 0.65), 0 0 30px rgba(47, 255, 210, 0.10);
+        }
+        .help-head {
+            display: flex; align-items: center; gap: 10px; padding: 14px 16px;
+            border-bottom: 1px solid var(--border-color); position: sticky; top: 0;
+            background: var(--bg-card); z-index: 2;
+        }
+        .help-head h3 {
+            font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700;
+            color: var(--accent); letter-spacing: 0.6px; margin: 0; flex: 1;
+        }
+        .help-x {
+            background: none; border: 1px solid var(--border-color); color: var(--text-secondary);
+            border-radius: 5px; cursor: pointer; font-size: 13px; padding: 3px 9px; line-height: 1.3;
+        }
+        .help-x:hover { border-color: var(--danger); color: var(--danger); }
+        .help-body { padding: 14px 16px 18px; font-size: 12.5px; line-height: 1.65; color: var(--text-secondary); }
+        .help-body h4 {
+            font-family: 'JetBrains Mono', monospace; font-size: 10.5px; text-transform: uppercase;
+            letter-spacing: 1px; color: var(--text-muted); margin: 15px 0 6px; font-weight: 700;
+        }
+        .help-body h4:first-child { margin-top: 0; }
+        .help-body ul, .help-body ol { margin: 0; padding-left: 19px; }
+        .help-body li { margin-bottom: 5px; }
+        .help-body code {
+            font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--info);
+            background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 3px; padding: 0 4px;
+        }
+        .help-body .help-what { color: var(--text-primary); }
+        .help-body .help-limits li { color: var(--warning); }
+        .help-foot {
+            padding: 10px 16px; border-top: 1px solid var(--border-color);
+            font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-muted);
+            display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+        }
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 22px; }
         .stat-card {
             background: var(--card-bg); border: 1px solid var(--border-color);
@@ -370,6 +426,18 @@
         .ident-table td:last-child { color: var(--text-secondary); word-break: break-all; }
 
         .tool-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+        /* The tool nav lives at the TOP of the page and stays there. The page
+           header is sticky at top:0 (z 50), so the nav parks directly beneath it
+           — without this, a long scroll down to a tool pane leaves no way back. */
+        .tool-tabs.tool-nav {
+            position: sticky; top: 53px; z-index: 45; margin: 0 0 18px;
+            padding: 10px 0; background: var(--bg-primary);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .tool-tabs.tool-nav::before {
+            content: 'TOOLS'; font-family: 'JetBrains Mono', monospace; font-size: 10px;
+            letter-spacing: 1.2px; color: var(--text-muted); align-self: center; margin-right: 4px;
+        }
         .tool-tab {
             padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border-color);
             background: var(--card-bg); color: var(--text-secondary); font-size: 12px;
@@ -378,6 +446,9 @@
         .tool-tab.active { background: var(--accent-dim); color: var(--accent); border-color: var(--border-glow); }
         .tool-pane { display: none; }
         .tool-pane.active { display: block; }
+        /* Leaves room for the sticky header + sticky tool nav, so a tab click
+           scrolls the pane's title into view instead of under the nav. */
+        .tool-pane { scroll-margin-top: 118px; }
 
         .sites-catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
         .site-pill {
@@ -534,6 +605,23 @@
                     <div class="stat-card"><div class="stat-value" id="statTools">6</div><div class="stat-label">Agent-Runnable OSINT Tools</div></div>
                 </div>
 
+                <!-- ══════════════════ TOOL NAV — top of page, sticky ══════════════════
+                     The tools are the page; the locator is one of them. Keeping the
+                     nav above the locator means no tool is ever more than a click
+                     away, and sticky means it stays reachable after a long scroll. -->
+                <div class="tool-tabs tool-nav" id="toolNav">
+                    <button class="tool-tab active" data-pane="paneSweep" onclick="switchTool('paneSweep')">📡 USERNAME SWEEP</button>
+                    <button class="tool-tab" data-pane="paneBreach" onclick="switchTool('paneBreach')">🕳️ BREACH &amp; DUMPS</button>
+                    <button class="tool-tab" data-pane="paneDarkweb" onclick="switchTool('paneDarkweb')">🕸️ DARK WEB</button>
+                    <button class="tool-tab" data-pane="paneDorks" onclick="switchTool('paneDorks')">🎯 GOOGLE DORKS</button>
+                    <button class="tool-tab" data-pane="paneEmail" onclick="switchTool('paneEmail')">✉️ EMAIL INTEL</button>
+                    <button class="tool-tab" data-pane="panePhone" onclick="switchTool('panePhone')">📞 PHONE LOOKUP</button>
+                    <button class="tool-tab" data-pane="paneGeo" onclick="switchTool('paneGeo')">🗺️ GEO INTEL</button>
+                    <button class="tool-tab" data-pane="paneAndroid" onclick="switchTool('paneAndroid')">📱 ANDROID</button>
+                    <button class="tool-tab" data-pane="panePerms" onclick="switchTool('panePerms')">🔤 PERMUTATIONS</button>
+                    <button class="tool-tab" data-pane="paneSites" onclick="switchTool('paneSites')">🗂️ SITE CATALOG</button>
+                </div>
+
                 <!-- ══════════════════ LOCATOR ══════════════════ -->
                 <div class="panel" id="locatorPanel">
                     <div class="panel-header">
@@ -616,19 +704,6 @@
                 </div>
 
                 <!-- ══════════════════ TOOL PANELS ══════════════════ -->
-                <div class="tool-tabs">
-                    <button class="tool-tab active" data-pane="paneSweep" onclick="switchTool('paneSweep')">📡 USERNAME SWEEP</button>
-                    <button class="tool-tab" data-pane="paneBreach" onclick="switchTool('paneBreach')">🕳️ BREACH &amp; DUMPS</button>
-                    <button class="tool-tab" data-pane="paneDarkweb" onclick="switchTool('paneDarkweb')">🕸️ DARK WEB</button>
-                    <button class="tool-tab" data-pane="paneDorks" onclick="switchTool('paneDorks')">🎯 GOOGLE DORKS</button>
-                    <button class="tool-tab" data-pane="paneEmail" onclick="switchTool('paneEmail')">✉️ EMAIL INTEL</button>
-                    <button class="tool-tab" data-pane="panePhone" onclick="switchTool('panePhone')">📞 PHONE LOOKUP</button>
-                    <button class="tool-tab" data-pane="paneGeo" onclick="switchTool('paneGeo')">🗺️ GEO INTEL</button>
-                    <button class="tool-tab" data-pane="paneAndroid" onclick="switchTool('paneAndroid')">📱 ANDROID</button>
-                    <button class="tool-tab" data-pane="panePerms" onclick="switchTool('panePerms')">🔤 PERMUTATIONS</button>
-                    <button class="tool-tab" data-pane="paneSites" onclick="switchTool('paneSites')">🗂️ SITE CATALOG</button>
-                </div>
-
                 <div class="tool-pane active" id="paneSweep">
                     <div class="panel">
                         <div class="panel-header">
@@ -682,9 +757,30 @@
                                     </select>
                                 </div>
                             </div>
-                            <div class="hint-line">Free lanes always run (LeakCheck public, XposedOrNot, HIBP Pwned Passwords). Deep dump lanes (LeakCheck v2, DeHashed, Snusbase) fire automatically when the operator configures keys — status below.</div>
+                            <div class="hint-line">Free lanes always run (LeakCheck public, XposedOrNot, HIBP Pwned Passwords). Deep dump lanes (LeakCheck Pro v2, DeHashed, Snusbase) fire automatically when the operator configures keys — status below.</div>
+                            <div class="dossier-section-title" style="margin-top:16px;">🔎 LEAKCHECK.IO <span class="count">public free · Pro v2 keyed</span></div>
+                            <div class="hint-line" style="margin:4px 0 8px;">10B+ leaked records. The <b>public</b> lane returns which breach sources list the identifier and which data classes were exposed (never the values). <b>Pro v2</b> returns full records with per-breach attribution — key read from <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">T3MP3ST_LEAKCHECK_KEY</code> / <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">LEAKCHECKIO</code> or the ARM DUMP LANES panel. A hit means a breach lists this identifier — it does not prove the account is still active.</div>
+                            <div class="locator-form">
+                                <div class="search-box">
+                                    <span>🔍</span>
+                                    <input type="text" id="leakQuery" placeholder="email / username / phone / domain / SHA-256 hash" onkeydown="if(event.key==='Enter')runLeakcheckIo()">
+                                </div>
+                                <div class="search-box" style="max-width:150px;min-width:130px;">
+                                    <span>⌨</span>
+                                    <select id="leakType" style="color:var(--text-primary);font-family:'JetBrains Mono',monospace;">
+                                        <option value="auto">auto</option>
+                                        <option value="email">email</option>
+                                        <option value="username">username</option>
+                                        <option value="phone">phone</option>
+                                        <option value="domain">domain</option>
+                                        <option value="hash">hash</option>
+                                    </select>
+                                </div>
+                                <button class="btn primary" onclick="runLeakcheckIo()">🔎 CHECK LEAKCHECK</button>
+                            </div>
+                            <div id="leakcheckOut" style="margin-top:10px;"></div>
                             <div id="dumpLaneStatus" style="margin-top:10px;"></div>
-                            <div class="dossier-section-title" style="margin-top:16px;">🦠 LIVE INFOSTEALER CHECK — HUDSON ROCK (keyless)</div>
+                            <div class="dossier-section-title" style="margin-top:16px;">🦠 LIVE INFOSTEALER CHECK — HUDSON ROCK <span class="count">keyless</span></div>
                             <div class="hint-line" style="margin:4px 0 8px;">Real infostealer infection records (family, date, computer name, IP, OS, installed software) — live compromise signals static dump lanes can't see. No key needed.</div>
                             <div class="locator-form">
                                 <div class="search-box">
@@ -694,7 +790,7 @@
                                 <button class="btn danger" onclick="runInfostealerCheck()">🦠 CHECK INFECTION</button>
                             </div>
                             <div id="stealerOut" style="margin-top:10px;"></div>
-                            <div class="dossier-section-title" style="margin-top:22px;">📚 BREACH CATALOGUE — HIBP (keyless, all known breaches)</div>
+                            <div class="dossier-section-title" style="margin-top:22px;">📚 BREACH CATALOGUE — HIBP <span class="count">keyless, all known breaches</span></div>
                             <div class="hint-line" style="margin:4px 0 8px;">The full HIBP breach universe with dates, account counts and leaked data classes. Filter by breached domain. No key needed (per-account HIBP stays behind the keyed lanes).</div>
                             <div class="locator-form">
                                 <div class="search-box">
@@ -835,7 +931,7 @@
                 <div class="tool-pane" id="panePhone">
                     <div class="panel">
                         <div class="panel-header">
-                            <div class="panel-title"><span class="accent">📞</span> PHONE INTELLIGENCE <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px;">PhoneInfoga · sundowndev/phoneinfoga (GPL-3.0)</span></div>
+                            <div class="panel-title"><span class="accent">📞</span> PHONE INTELLIGENCE <span class="count" style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px;">PhoneInfoga · sundowndev/phoneinfoga (GPL-3.0)</span></div>
                             <div style="display:flex;gap:6px;">
                                 <button class="btn" onclick="runPhone()">▶ LOCAL</button>
                                 <button class="btn btn-primary" onclick="runPhoneScan()" title="Full PhoneInfoga scan: OVH VoIP + Numverify (if configured) + 50 dorks">◈ FULL SCAN</button>
@@ -1012,6 +1108,33 @@
                             </div>
 
                             <pre class="raw-output" id="androidTriageOut" style="display:none;margin-top:14px;max-height:520px;"></pre>
+
+                            <!-- Lock-screen probe (UnlockAndroid technique) -->
+                            <div class="dossier-section-title" style="margin-top:18px;">🔓 LOCK-SCREEN PROBE <span class="count">authorized device · 1 attempt · intrusive-gated</span></div>
+                            <div class="panel" style="margin:0;border-color:rgba(255,177,66,.35);">
+                                <div class="panel-body">
+                                    <div class="hint-line" style="margin:0 0 10px;">
+                                        Technique from <a href="https://github.com/DouglasFreshHabian/UnlockAndroid" target="_blank" rel="noopener noreferrer" style="color:var(--info);">DouglasFreshHabian/UnlockAndroid</a>.
+                                        Sends <b>one</b> operator-supplied PIN to an attached, ADB-<b>authorized</b> handset via <code>input keyevent</code>, then reads the verdict from <code>dumpsys trust</code>.
+                                        Upstream ships one script (<code>unlock.sh</code>, hardcoded PIN <code>1234</code>); the <code>adbBrute.sh</code> its README describes is <b>not in the repository</b> — and no brute force is implemented here.
+                                        Reachable only after the owner already enabled USB debugging and authorized this host.
+                                    </div>
+                                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                                        <div class="search-box" style="max-width:170px;min-width:140px;"><span>pin</span><input type="text" id="lockProbePin" placeholder="4–12 digits" maxlength="12" style="max-width:95px;"></div>
+                                        <div class="search-box" style="max-width:190px;min-width:150px;"><span>serial</span><input type="text" id="lockProbeSerial" placeholder="(optional)"></div>
+                                        <button class="btn" onclick="readAndroidLockState()">🔎 READ LOCK STATE</button>
+                                        <button class="btn" id="lockProbeBtn" onclick="runLockProbe()" style="border-color:rgba(255,177,66,.5);color:var(--warning);background:rgba(255,177,66,.10);">⚡ PROBE (1 ATTEMPT)</button>
+                                    </div>
+                                    <label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:11.5px;color:var(--text-secondary);line-height:1.5;cursor:pointer;">
+                                        <input type="checkbox" id="lockProbeAuth" style="margin-top:2px;">
+                                        <span><b style="color:var(--warning);">I own this device or am authorized to test it.</b> Unlocking a handset you have no right to is a criminal offence in most jurisdictions (CFAA / UK CMA equivalents). The probe is recorded to the findings ledger.</span>
+                                    </label>
+                                    <div class="hint-line" style="margin:10px 0 0;color:var(--text-muted);">
+                                        Not a brute forcer: <b>one attempt per probe</b>, no PIN enumeration, no lockout hammering. A wrong PIN trips Android's own attempt counter — the panel reads it before and after so you can see the cost.
+                                    </div>
+                                    <div id="lockProbeOut" style="margin-top:10px;"><div class="dossier-empty" style="padding:12px;">No probe yet — read the lock state first.</div></div>
+                                </div>
+                            </div>
 
                             <!-- Bundled scripts -->
                             <div class="dossier-section-title" style="margin-top:18px;">📦 BUNDLED SCRIPTS <span class="count">vendored MIT — run on your analyst box</span></div>
@@ -1627,6 +1750,334 @@
             document.querySelectorAll('.tool-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.pane === paneId); });
             document.querySelectorAll('.tool-pane').forEach(function (p) { p.classList.toggle('active', p.id === paneId); });
             if (paneId === 'paneGeo') ensureGeoMap();
+            // The nav now lives above the locator, so the panes are far below it:
+            // follow the click, or the tab appears to do nothing.
+            var pane = document.getElementById(paneId);
+            if (pane && typeof pane.scrollIntoView === 'function') {
+                pane.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // INLINE HELP — one "?" per section, content from a single registry.
+        //
+        // The registry is keyed by the section's own visible title, normalized
+        // (emoji stripped, whitespace collapsed, the trailing .count hint
+        // removed). injectHelpButtons() walks every section header and tab and
+        // attaches a "?" that opens the modal, so no section can silently ship
+        // without instructions — a missing key is a FAILING TEST, not a gap.
+        // ═══════════════════════════════════════════════════════════════
+        var OSINT_HELP = {
+            'LOCATOR — FULL HUMAN LOOKUP': {
+                what: 'The big one. Give it a subject — an email, a handle, a phone number, a domain, a URL, or just a name — and it runs every lane in parallel and assembles a single dossier: contact core, breach exposure, social footprint, identity signals, location signals, a source-by-source audit, and a written report you can copy or export as JSON.',
+                needs: ['A subject. A name alone works but is slower and noisier — a name permutes into a username sweep across dozens of sites, so expect 30–90s instead of ~20s.', 'For the sharpest result: an email or handle you already know is theirs.'],
+                steps: ['Type the subject in the top field. Optionally add a real name so handle hits can be corroborated against a profile name.', 'Press RUN FULL LOCATE.', 'Watch the module rail: each chip lights up while its lane runs, then settles to ✓ found / ✗ failed / ⤼ skipped with the reason.', 'Scroll the dossier. CONTACT INFORMATION comes first by design — that is the payload.'],
+                out: ['DATA FOUND — every recovered record as a row: type, value, detail, source, confidence.', 'A DETAILED REPORT in markdown with an export button.', 'SOURCES CONSULTED — every platform probed, with found / absent / unknown status.'],
+                limits: ['Common-name subjects match strangers. Accounts whose profile name does not corroborate are shown as ≠ EXCLUDED rather than counted.', 'A 200 from a platform only proves the HANDLE exists, not that it is the same person.'],
+                fix: ['Too many unknowns? Sites that need a login (X, Instagram, Facebook) WAF-block datacenter exits — a local run through the Tor/egress proxy gets more.'],
+            },
+            'SOCIAL ENGINEERING — PRETEXT LAB': {
+                what: 'Generates scenario pretexts (calls, SMS, in-person) for a target you are authorized to test, with the objectives, the script, the pressure points, and the tells that would expose the pretext as fake.',
+                needs: ['An authorized target, and an engagement scope that covers social engineering. This is not a research tool.'],
+                steps: ['Set the target and the scenario type.', 'Generate, then read the failure modes before using anything live.'],
+                out: ['A draft pretext plus its detection surface.'],
+                limits: ['Social engineering against a real person without documented authorization is a crime in most jurisdictions — wiretap, fraud, impersonation.', 'Every pretext is also a fingerprint: the same phrasing repeated across channels links the attempts together.'],
+                fix: ['Nothing here helps you get better at it. Read the "tells" section.'],
+            },
+            'USERNAME SWEEP — SOCIAL FOOTPRINT': {
+                what: 'Checks one username against the merged platform catalog — 67 hand-curated sites plus 426 more from the Sherlock database, 493 total — and classifies each result as found / absent / unknown using each platform’s real soft-404 behaviour.',
+                needs: ['A handle.', 'Optionally pick the catalog: full (493 sites, ~3 min), sherlock, or curated (67, seconds).'],
+                steps: ['Enter the handle.', 'Leave CATALOG on full unless you want speed.', 'Optionally tick 18+ to include adult platforms — they are catalogued but excluded by default.'],
+                out: ['Per-site status with the reason, plus a skipped list for usernames that violate a platform’s format rules.'],
+                limits: ['unknown means the site blocked or throttled us, NOT that the account is absent. unknown ≠ negative.', 'Social platforms that WAF-block the shared proxy exit will be unknown far more often than they should.'],
+                fix: ['Lots of unknowns → the proxy egress is degraded. Check the egress badge at the top of the page.'],
+            },
+            'BREACH & DUMP DATABASES — DARK-WEB EXPOSURE': {
+                what: 'Runs the free breach lanes on an email or username, and arms the keyed deep lanes if you have pasted a key into the ARM DUMP LANES panel.',
+                needs: ['An email address or a username.', 'For the keyed lanes: a LeakCheck v2 / DeHashed / Snusbase key pasted into the panel.'],
+                steps: ['Enter the email (or a username for the username lane).', 'Press CHECK.', 'For deep records: paste a key in the 🔑 panel first, then re-run.'],
+                out: ['Breach sources, exposed data classes, dates, and account counts.', 'Credential material is routed to the vault, not printed into the report.'],
+                limits: ['The free LeakCheck lane is public counts only — a record-level answer needs a key.', 'A paid tier can be rejected mid-run (e.g. "Active plan required"); that is an account limit, not a bug, and it is shown per lane.'],
+                fix: ['Lanes say key-required → arm it in the 🔑 panel, no restart needed.'],
+            },
+            'LIVE INFOSTEALER CHECK — HUDSON ROCK': {
+                what: 'Queries Hudson Rock’s free cyber-intelligence feed for a live infostealer infection on that email: malware family, infection date, computer name, external IP, OS, and installed software.',
+                needs: ['An email address. No key.'],
+                steps: ['Enter the email.', 'Press CHECK INFECTION.'],
+                out: ['A table of infection indicators, and a high-severity finding when a hit exists.'],
+                limits: ['A hit means a stealer ran on a machine that had the address saved — it does not mean the current mailbox is compromised.', 'A miss is not proof of safety; coverage depends on when the stealer last reported.'],
+                fix: [],
+            },
+            'BREACH CATALOGUE — HIBP': {
+                what: 'Lists every publicly known breach from haveibeenpwned — dates, account counts, and the data classes leaked — filtered to a domain if you give one.',
+                needs: ['A domain, or the word all.'],
+                steps: ['Enter a domain like adobe.com (or "all").', 'Press FETCH CATALOGUE.'],
+                out: ['Breach name, date, accounts, and data classes.'],
+                limits: ['This is the catalogue of breaches, not your exposure in them. Per-account HIBP checks stay behind the keyed lanes.', 'Domain mode answers "was this domain ever breached", not "were its users".'],
+                fix: [],
+            },
+            'LEAKCHECK.IO': {
+                what: 'Queries leakcheck.io — 10B+ leaked records. The free PUBLIC lane returns which breach sources list an identifier and which data classes were exposed (never the values). The Pro v2 lane, when a key is configured, returns full records with per-breach attribution, exposure flags and your remaining query quota.',
+                needs: ['An email, username, phone number, domain, or SHA-256 hash of an email.', 'Pro v2 records need a key: T3MP3ST_LEAKCHECK_KEY / LEAKCHECKIO / LEAKCHECK_APIKEY, or paste one into ARM DUMP LANES.'],
+                steps: ['Type the identifier and pick the type (auto works for email, username, phone and hash).', 'Press CHECK LEAKCHECK.'],
+                out: ['Public: breach source names + dates, and the list of exposed field names.', 'Pro v2: per-source row counts, unverified/compilation flags, and the records themselves (passwords are redacted on screen; credential material goes to the Evidence Vault).'],
+                limits: ['A hit means a breach LISTS this identifier — it does not prove the account is still active, nor that the data is accurate. Unverified breach sources are flagged as such, because they are frequently wrong.', 'The public lane is rate limited to 1 request/second. Pro v2 to 3/second. The live API ignores limit= and returns 0 rows for offset=, so paging is not available here.', 'Some search types (domain, password, phash, origin) are Enterprise-plan only — the lane reports "Active plan required" rather than pretending it searched.'],
+                fix: ['"Active plan required" → the key is on a plan without Pro record access; the public lane still works.', '429 → wait a second; the free lane allows one query per second.', 'AUTO cannot determine the type → pick email / username / phone / domain / hash explicitly.'],
+            },
+            'DARK WEB DIRECT — ONION SEARCH & LEAK SITES': {
+                what: 'The keyless dark-web lane: checks whether your target domain or company appears in the ransomware groups’ own victim posts, and gives you direct .onion access through a local Tor circuit.',
+                needs: ['A keyword (domain or company).', 'For the .onion fetch: Tor running — the daemon on 9050 or Tor Browser on 9150.'],
+                steps: ['LEAK-SITE MONITOR: type the domain, press CHECK.', 'ONION SEARCH: query Ahmia. Expect it to be unreliable — see limits.', 'ONION PAGE FETCH: paste an .onion URL; it is fetched over the local Tor circuit with remote DNS.'],
+                out: ['Victim posts with the group, description and link.', 'Raw .onion page text.'],
+                limits: ['This monitors what attackers PUBLISH about a victim. It is not a dump-site harvester and does not touch stolen-credential infrastructure.', 'Ahmia currently redirects search requests to its homepage for everyone; treat an empty result there as their anti-abuse, not as "no results".'],
+                fix: ['.onion fetch fails → start Tor, or set T3MP3ST_TOR_PORT if it is not on 9050/9150.'],
+            },
+            'LEAK-SITE MONITOR — IS THE TARGET ON A RANSOMWARE BLOG?': {
+                what: 'Searches ransomware.live for victim posts naming your target.',
+                needs: ['A domain or company name.'],
+                steps: ['Type the domain, press CHECK.'],
+                out: ['Matching posts: group, country, sector, description, and the post URL.'],
+                limits: ['Absence of a post is not evidence of absence — groups are inconsistent about publishing.', 'Several groups now leak less publicly and steal more quietly.'],
+                fix: [],
+            },
+            'ONION SEARCH (AHMIA)': {
+                what: 'Queries the Ahmia public onion search engine.',
+                needs: ['A query.', 'Direct connection, or a working egress.'],
+                steps: ['Type the query, press SEARCH.'],
+                out: ['Indexed .onion results.'],
+                limits: ['Ahmia currently 302s every /search/ request to its homepage for all users. This lane will often come back empty — that is their anti-abuse, not a fault here.', 'No dark-web credential marketplaces are searched from here, by policy.'],
+                fix: ['Empty result → try again later, or use ONION PAGE FETCH with a URL you already have.'],
+            },
+            'ONION PAGE FETCH': {
+                what: 'Fetches a single .onion URL over your local Tor circuit with remote DNS, so the hostname never resolves outside Tor.',
+                needs: ['Tor running (9050 daemon or 9150 Tor Browser).', 'A full .onion URL.'],
+                steps: ['Paste the .onion URL.', 'Press FETCH.'],
+                out: ['The page title and extracted text.'],
+                limits: ['Only .onion hosts are accepted — a clearnet URL is refused before Tor is even touched.', 'The Tor circuit is shared: slow pages time out at 60s.'],
+                fix: ['No circuit → the chip next to the section goes red; start Tor and re-check.'],
+            },
+            'GOOGLE DORKS — ADVANCED SEARCH OPERATORS': {
+                what: 'Generates ready-to-run Google dorks from an identifier: exposed backups, config files, directory listings, credential patterns, pastebins, and the per-engine equivalents for Bing and DuckDuckGo.',
+                needs: ['One of: a domain, an email, a username, a phone number, or a name.'],
+                steps: ['Fill any field — more fields means a tighter dork set.', 'Press GENERATE.', 'Click a dork to copy it, then run it in a browser.'],
+                out: ['Categorised, copyable search strings per engine.'],
+                limits: ['A dork is a search string, not a result. You still have to run it and read the page.', 'A dork that returns hits in a controlled sense may also return hits against third parties — that is why the identifiers are yours, not ours.'],
+                fix: [],
+            },
+            'EMAIL INTELLIGENCE': {
+                what: 'Full email lane: Gravatar profile and linked accounts, breach history, live infostealer check, the public dump lanes, and MX/DNS verification of the domain.',
+                needs: ['An email address.'],
+                steps: ['Enter the address, press CHECK.'],
+                out: ['Gravatar identity + linked usernames, breach rows, infostealer record, and whether the domain accepts mail at all.'],
+                limits: ['A Gravatar hit is a hash match on the address, not proof the person uses that name publicly.', 'MX lookup answers "can this domain receive mail", not "is this inbox real".'],
+                fix: ['No MX record → the domain is misconfigured or parked; treat the address as suspect.'],
+            },
+            'PHONE INTELLIGENCE': {
+                what: 'Number intelligence in two layers. LOCAL: parses any format into E.164 / international / national forms, validates NANP area codes, and gives deep links to public reverse-lookup services. FULL SCAN: adds PhoneInfoga’s 45 dorks across all five categories, the free OVH VoIP check for FR/BE/GB/ES/CH, key-gated Numverify, and an optional self-hosted PhoneInfoga remote instance.',
+                needs: ['A phone number in any format.', 'Towers: the OpenCelliD free key (Settings → OSINT).', 'Numverify: an apilayer key, if you want carrier/line data.'],
+                steps: ['Enter the number.', 'LOCAL for instant format + metadata; ◈ FULL SCAN for the whole battery (~30s).', '⟲ CHECK INSTANCE probes a configured remote PhoneInfoga, if you run one.'],
+                out: ['All number forms, validity, carrier/line when a key or remote instance supplies it, VoIP verdict, and categorised dork groups.'],
+                limits: ['This is ISSUED-NUMBER metadata. It does not track a phone in real time, does not give a precise location, and does not hack the phone.', 'A toll-free or VoIP number often resolves to the original carrier only, never to a person.'],
+                fix: ['OVH says unsupported → your country is not one of the five it covers. Numverify says unconfigured → no key armed.'],
+            },
+            'GEO INTEL — LIVE INFRASTRUCTURE MAP': {
+                what: 'Maps infrastructure geography: your proxy egress point, engagement targets from the findings ledger, DFIR incident IOCs, and OSINT signals — on a dark Leaflet map with per-layer chips.',
+                needs: ['Nothing to type. It reads your own state.', 'An egress proxy makes the egress layer meaningful.'],
+                steps: ['Toggle layers with the chips. Hover a marker for detail; click for the full popup.', 'LIVE refreshes on a timer.'],
+                out: ['City-level positions for IP geolocation, with the org and the caveat attached.'],
+                limits: ['City-level only. It does NOT position devices or people, and it is not a tracking tool.', 'Private, loopback and IETF documentation IP ranges are deliberately not geolocated — a fake IP must never plot on a map.'],
+                fix: ['Egress layer red → the proxy is not changing your exit IP; traffic is not anonymized.'],
+            },
+            'USERNAME PERMUTATION ENGINE': {
+                what: 'Builds candidate handles from a person’s name — firstlast, f.last, initials, year suffixes, handle-style variants — capped so a common name cannot generate thousands of useless probes.',
+                needs: ['A first and last name. Middle names and keywords tighten it.'],
+                steps: ['Fill the name fields.', 'Press GENERATE, then feed the best candidates into USERNAME SWEEP.'],
+                out: ['An ordered candidate list, most plausible first.'],
+                limits: ['Permutations of common names belong to many real people. Treat hits as leads, never as identification.', 'The cap is deliberate: raise it and you probe strangers at scale.'],
+                fix: [],
+            },
+            'ANDROID FORENSICS — ADB DEVICE TRIAGE': {
+                what: 'Triage an Android handset you have in hand and are authorized to examine, over ADB. Every function is an allowlisted `adb shell` call — no shell injection surface — and returns an honest "no device / no adb / unauthorized" result instead of pretending.',
+                needs: ['ADB on PATH, or set T3MP3ST_ADB_BIN.', 'The device connected over USB with Developer options → USB debugging ON and this host AUTHORIZED on the handset itself.', 'Owner authorization. The device must already have surrendered debug authority.'],
+                steps: ['Connect the device and accept the debugging prompt on the handset.', 'Check the status chip at the top of the section.', 'Run DEVICE INFO, DUMPSYS, AIRSCOPE or SECRET CODES as needed.'],
+                out: ['Device identity, 21 diagnostic services, Wi-Fi radar, hidden dialer codes.'],
+                limits: ['The console refuses any adb verb outside the allowlist. That is the security boundary, not a limitation.', 'A device you are not authorized to examine must not be connected — that is a criminal offence in most jurisdictions.'],
+                fix: ['Chip is red → run adb devices; a device in "unauthorized" state means the prompt was not accepted on the handset.'],
+            },
+            'ADB CONSOLE': {
+                what: 'A direct `adb` console for the allowlisted verbs. Handy for the one-off command the panels do not cover.',
+                needs: ['A connected, authorized device.'],
+                steps: ['Type a command starting with "adb " — e.g. "devices", "shell getprop ro.product.model", "shell dumpsys battery".', 'Optional serial to target a specific device.', 'Press RUN.'],
+                out: ['Raw stdout/stderr with the exit code and duration.'],
+                limits: ['Only the allowlisted verbs execute. Anything else is refused before a process spawns.', 'There is no confirmation for a command that changes device state — `svc power reboot` is allowlisted and WILL reboot the handset.'],
+                fix: ['"not allowlisted" → that verb is deliberately outside the boundary.'],
+            },
+            'TRIAGE': {
+                what: 'Device identity and state in one call: model, manufacturer, Android release, serial, uptime, and battery.',
+                needs: ['A connected, authorized device.'],
+                steps: ['Press DEVICE INFO (or a specific sub-triage button).'],
+                out: ['The identity block, as raw adb output.'],
+                limits: ['Read-only. It changes nothing on the device.', 'Some OEMs gate getprop fields behind engineering builds; missing fields are a vendor choice, not a failure.'],
+                fix: [],
+            },
+            'DUMPSYS': {
+                what: 'Dumps any of 21 Android system services — battery, meminfo, sensors, network, alarms, window, and the rest.',
+                needs: ['A connected, authorized device.'],
+                steps: ['Pick a service from the dropdown.', 'Press RUN.'],
+                out: ['The full service dump (truncated server-side for size).'],
+                limits: ['dumps output is long and can contain identifiers — it lands in the vault, so treat the vault accordingly.', 'Some services are restricted on production builds; that is Android, not the tool.'],
+                fix: ['Empty result → try a different service, or check the service name list.'],
+            },
+            'AIRSCOPE — WI-FI RADAR': {
+                what: 'Scans the visible Wi-Fi environment around the handset and reports SSIDs, signal strength, frequencies and security.',
+                needs: ['A connected, authorized device.', 'Location permission granted on the handset, or recent scan data cached.'],
+                steps: ['Press SCAN.'],
+                out: ['A ranked list of nearby networks.'],
+                limits: ['Android 9+ requires location permission for scan results; without it Android hands back an empty list.', 'This is environment reconnaissance of RF in range, not location tracking of a person or device.'],
+                fix: ['No results → grant location permission on the device, then re-scan.'],
+            },
+            'SECRET CODES': {
+                what: 'Enumerates hidden dialer codes — `*#*#` entries declared by packages as android_secret_code.',
+                needs: ['A connected, authorized device.'],
+                steps: ['Set the package limit (5–100).', 'Press ENUMERATE.'],
+                out: ['Package + code + label for every secret code found.'],
+                limits: ['Enumeration only — nothing is dialled and no code is executed.', 'Dialing a secret code can wipe data or change security settings on some devices; the tool deliberately stops short of that.'],
+                fix: [],
+            },
+            'LOCK-SCREEN PROBE': {
+                what: 'Sends ONE operator-supplied PIN to an attached, ADB-authorized handset via `input keyevent`, then reads the verdict from `dumpsys trust`. Technique from DouglasFreshHabian/UnlockAndroid, reimplemented natively (upstream declares no license, so nothing is vendored).',
+                needs: ['A connected device that has ALREADY granted this host ADB authorization — the owner turned on USB debugging and accepted the prompt.', 'A PIN you are authorized to test.', 'The authorization checkbox ticked. The server refuses without it, and the agent tool is riskTier intrusive so the arsenal demands approval first.'],
+                steps: ['Press READ LOCK STATE first — it is free, read-only, and shows the failed-attempt counter.', 'Type the PIN and tick the authorization box.', 'Press PROBE. One attempt. Then read the before/after state and the exact commands sent.'],
+                out: ['Before and after lock state, attempts used against the cap of 1, and the full adb command trace.'],
+                limits: ['This is NOT a brute forcer. One attempt per probe, no PIN enumeration, no lockout hammering — a code path that loops over PINs does not exist.', 'Upstream’s README describes a second script, adbBrute.sh, for repeated attempts. That file is NOT in the repository, and it is not implemented here.', 'Unlocking a handset you do not own or are not authorized to test is a criminal offence in most jurisdictions (CFAA / UK CMA equivalents). Each probe is written to the findings ledger.'],
+                fix: ['"Connect an ADB-authorized device first" → the handset is in unauthorized state, or none attached. Accept the debugging prompt on the device.', 'Still locked after the probe → either the PIN is wrong or the lock screen rejected the injected key events (some OEMs ignore `input` on the keyguard).'],
+            },
+            'BUNDLED SCRIPTS': {
+                what: 'The four upstream AndroidForensics shell scripts, vendored under tools/android-forensics/ so you can run the full triage on the analyst box instead of through the panel.',
+                needs: ['A Linux/macOS shell. Git Bash on Windows mostly works; WSL is cleaner.', 'The same ADB authorization as every other function here.'],
+                steps: ['chmod +x extract.sh dumpsys.sh AirScope.sh secretCodes.sh', './extract.sh — writes a timestamped ADB_Report_* folder.'],
+                out: ['A full on-disk report folder per device.'],
+                limits: ['These run UNGATED — no approval prompt, no risk tier. Read them before running: they are as powerful as adb itself.', 'The report contains real personal data. It lands in the vault, so handle the vault accordingly.'],
+                fix: ['Permission denied → the chmod step above. Device not found → adb devices.'],
+            },
+            'SITE CATALOG & AGENT TOOLS': {
+                what: 'The full list of platforms the sweep knows about, with provenance (hand-curated vs Sherlock-derived), plus every OSINT tool the agents can call.',
+                needs: ['Nothing.'],
+                steps: ['Use CATALOG to filter: full, sherlock, or curated.', 'Tick 18+ to include adult platforms in a sweep.'],
+                out: ['Platform inventory with error-type counts, and the agent tool table.'],
+                limits: ['Catalogued does not mean reachable — plenty of these block us from a datacenter IP.', 'Adult platforms are excluded from sweeps unless you opt in, on purpose.'],
+                fix: [],
+            },
+        };
+
+        // Normalize a header label to its registry key: drop emoji, collapse
+        // whitespace, uppercase. `.count` hints ("keyless", "requires Tor", the
+        // PhoneInfoga licence line) are REMOVED first — they are annotations on
+        // the title, not part of it, and textContent would otherwise fold them in.
+        function helpKeyFor(text) {
+            return String(text || '')
+                .replace(/[←-⯿\u{1F000}-\u{1FAFF}\u{FE0F}]/gu, '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toUpperCase();
+        }
+
+        function helpKeyForNode(node) {
+            var clone = node.cloneNode(true);
+            var hints = clone.querySelectorAll ? clone.querySelectorAll('.count') : [];
+            for (var i = 0; i < hints.length; i++) {
+                if (hints[i].parentNode) hints[i].parentNode.removeChild(hints[i]);
+            }
+            return helpKeyFor(clone.textContent);
+        }
+
+        function helpEntry(key) {
+            return OSINT_HELP[key] || null;
+        }
+
+        function renderHelp(key) {
+            var e = helpEntry(key);
+            var body = document.getElementById('helpBody');
+            var title = document.getElementById('helpTitle');
+            if (!body || !title) return;
+            title.textContent = key;
+            if (!e) {
+                body.innerHTML = '<p class="help-what">No help entry registered for this section yet. That is a bug — every section must have one.</p>';
+                return;
+            }
+            var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+            var list = function (items) { return items && items.length ? '<ul>' + items.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join('') + '</ul>' : ''; };
+            var ol = function (items) { return items && items.length ? '<ol>' + items.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join('') + '</ol>' : ''; };
+            body.innerHTML =
+                '<h4>What it does</h4><p class="help-what">' + esc(e.what) + '</p>' +
+                (e.needs && e.needs.length ? '<h4>Before you start</h4>' + list(e.needs) : '') +
+                (e.steps && e.steps.length ? '<h4>How to use it</h4>' + ol(e.steps) : '') +
+                (e.out && e.out.length ? '<h4>What you get back</h4>' + list(e.out) : '') +
+                (e.limits && e.limits.length ? '<h4>Limits &amp; read this first</h4><ul class="help-limits">' + e.limits.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join('') + '</ul>' : '') +
+                (e.fix && e.fix.length ? '<h4>If something looks wrong</h4>' + list(e.fix) : '');
+        }
+
+        function toggleHelp(key) {
+            var modal = document.getElementById('helpModal');
+            if (!modal) return;
+            var isOpen = modal.classList.contains('show');
+            renderHelp(key);
+            modal.classList.toggle('show', !isOpen);
+            if (!isOpen) {
+                var x = document.getElementById('helpX');
+                if (x) x.focus();
+            }
+        }
+
+        function closeHelp() {
+            var modal = document.getElementById('helpModal');
+            if (modal) modal.classList.remove('show');
+        }
+
+        // Attach a "?" to every TOOL section header. Deliberately NOT attached to:
+        //   - the tool TABS (they are navigation; they get a native tooltip below),
+        //   - the geo layer chips (a filter row, not a section),
+        //   - the LOCATOR's rendered dossier sub-titles (#dossierOut) — those are
+        //     result blocks inside one report, not tools you operate.
+        // Idempotent, so it is safe to re-run after a dynamic section is added.
+        function injectHelpButtons() {
+            var sel = '.panel-title, .dossier-section-title';
+            document.querySelectorAll(sel).forEach(function (node) {
+                if (node.querySelector('.help-btn')) return;
+                if (node.closest && node.closest('#dossierOut')) return;
+                if (node.classList.contains('tool-tab')) return;
+                var key = helpKeyForNode(node);
+                if (!key) return;
+                var btn = document.createElement('button');
+                btn.className = 'help-btn';
+                btn.textContent = '?';
+                btn.setAttribute('data-help', key);
+                btn.setAttribute('aria-label', 'How to use: ' + key);
+                btn.title = 'How to use ' + key.toLowerCase();
+                btn.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    ev.preventDefault();
+                    toggleHelp(key);
+                });
+                node.appendChild(btn);
+            });
+            // Tabs get a one-line native tooltip instead of a modal.
+            var tabHelp = {
+                paneSweep: 'Probe one handle across 493 platforms (curated + Sherlock), with real soft-404 detection.',
+                paneBreach: 'Breach exposure for an email or username — free lanes always, keyed deep lanes if armed.',
+                paneDarkweb: 'Ransomware victim-post monitor + direct .onion access over your local Tor circuit.',
+                paneDorks: 'Generate ready-to-run Google/Bing/DDG dorks from an identifier, email, phone or domain.',
+                paneEmail: 'Gravatar identity + linked accounts, breach history, infostealer check, MX verification.',
+                panePhone: 'PhoneInfoga: number formats, validity, 45 dorks, OVH VoIP check, optional remote instance.',
+                paneGeo: 'Infrastructure geography: your egress, engagement targets, DFIR IOCs — city-level only.',
+                paneAndroid: 'ADB device triage, dumpsys, Wi-Fi radar, secret codes and the gated lock probe.',
+                panePerms: 'Build candidate handles from a name — the input for a username sweep.',
+                paneSites: 'The full platform inventory with provenance, plus every OSINT tool the agents can call.',
+            };
+            document.querySelectorAll('.tool-tab[data-pane]').forEach(function (t) {
+                var tip = tabHelp[t.dataset.pane];
+                if (tip) t.title = tip;
+            });
         }
 
         // ── Module-in-use glow ──
@@ -1653,7 +2104,7 @@
         [['paneSweep', 'runSweep'], ['paneBreach', 'runBreach'], ['paneEmail', 'runEmail'],
          ['panePhone', 'runPhone'], ['paneDorks', 'runDorks'], ['paneDarkweb', 'runLeakCheck'],
          ['paneDarkweb', 'runOnionSearch'], ['paneDarkweb', 'runOnionFetch'],
-         ['paneBreach', 'runInfostealerCheck'], ['paneBreach', 'runBreachCatalog'],
+         ['paneBreach', 'runLeakcheckIo'], ['paneBreach', 'runInfostealerCheck'], ['paneBreach', 'runBreachCatalog'],
          ['panePerms', 'runPermutations'], ['paneSites', 'loadSites'], ['paneAndroid', 'runAndroidForensics']].forEach(function (pair) {
             const name = pair[1];
             if (typeof window[name] === 'function') window[name] = withBusy(pair[0], window[name]);
@@ -1708,6 +2159,78 @@
                 if (blocked.length) html += '<div class="hint-line" style="margin-top:8px;">unknown (blocked/rate-limited): ' + escapeHtml(blocked.map(function (u) { return u.site; }).join(', ')) + '</div>';
                 out.innerHTML = html;
                 toast(s.found.length + ' accounts found', s.found.length ? 'success' : '');
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        function leakSourceRow(s) {
+            const flags = (s.unverified ? ' <span class="count" style="background:var(--warning);color:#000;">UNVERIFIED</span>' : '')
+                + (s.compilation ? ' <span class="count">compilation</span>' : '');
+            return '<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 9px;border-bottom:1px solid var(--border-color);font-size:12px;">'
+                + '<span style="color:var(--text-primary);">' + escapeHtml(s.name) + (s.date ? ' <span style="color:var(--text-muted);">(' + escapeHtml(s.date) + ')</span>' : '') + flags + '</span>'
+                + '<span style="color:var(--accent);white-space:nowrap;">' + s.count + '×</span></div>';
+        }
+
+        async function runLeakcheckIo() {
+            const query = document.getElementById('leakQuery').value.trim();
+            const type = document.getElementById('leakType').value;
+            const out = document.getElementById('leakcheckOut');
+            if (!query) { toast('Enter an email, username, phone, domain or hash', 'error'); return; }
+            out.innerHTML = '<div class="dossier-empty">◈ Querying leakcheck.io…</div>';
+            try {
+                const d = await api('/api/osint/leakcheck', { query, type });
+                const pub = d.public, pro = d.pro;
+                let html = '<div class="dossier-section-title">🔎 leakcheck.io — ' + escapeHtml(d.query) + ' <span class="count">type=' + escapeHtml(d.type) + '</span></div>';
+                // Public lane
+                if (pub.found === 'unknown') {
+                    html += '<div class="hint-line" style="color:var(--warning);">public lane: ' + escapeHtml(pub.note || 'unknown') + '</div>';
+                } else if (!pub.found) {
+                    html += '<div class="hint-line">public lane: no breach source lists this identifier.</div>';
+                } else {
+                    html += '<div class="id-row" style="margin:8px 0;">'
+                        + '<span class="id-chip" style="border-color:var(--danger);color:var(--danger);"><b>' + pub.found + ' breach source(s)</b></span>'
+                        + '<span class="id-chip"><b>exposed fields:</b> ' + escapeHtml((pub.fields || []).join(', ') || 'unspecified') + '</span>'
+                        + '</div>';
+                    html += '<div class="hint-line" style="margin-bottom:4px;">PUBLIC SOURCES (names + dates only — values are never returned by this lane)</div>';
+                    html += '<div style="border:1px solid var(--border-color);border-radius:6px;overflow:hidden;margin-bottom:10px;">'
+                        + (pub.sources || []).map(function (s) {
+                            return '<div style="padding:5px 9px;border-bottom:1px solid var(--border-color);font-size:12px;color:var(--text-secondary);">' + escapeHtml(s) + '</div>';
+                        }).join('') + '</div>';
+                }
+                // Pro v2 lane
+                if (pro) {
+                    if (pro.note) {
+                        html += '<div class="hint-line" style="color:var(--warning);border:1px solid var(--warning);border-radius:4px;padding:6px 9px;">Pro v2: ' + escapeHtml(pro.note) + '</div>';
+                    } else if (!pro.found) {
+                        html += '<div class="hint-line">Pro v2: no records for this identifier.</div>';
+                    } else {
+                        const withPw = (pro.rows || []).filter(function (r) { return r.password; }).length;
+                        html += '<div class="dossier-section-title" style="margin-top:12px;">📦 PRO v2 RECORDS <span class="count">' + pro.found + ' rows</span>'
+                            + (pro.quota !== undefined && pro.quota !== null ? ' <span class="count">' + pro.quota + ' queries left</span>' : '') + '</div>';
+                        html += '<div class="id-row" style="margin:6px 0;">'
+                            + '<span class="id-chip"><b>sources:</b> ' + (pro.sources || []).length + '</span>'
+                            + '<span class="id-chip" style="' + (withPw ? 'border-color:var(--danger);color:var(--danger);' : '') + '"><b>rows with password material:</b> ' + withPw + '</span>'
+                            + '<span class="id-chip"><b>fields seen:</b> ' + escapeHtml((pro.fields || []).join(', ')) + '</span>'
+                            + '</div>';
+                        html += '<div class="hint-line" style="margin-bottom:4px;">BREACH ATTRIBUTION (per-source row counts — what the old lane silently dropped)</div>';
+                        html += '<div style="border:1px solid var(--border-color);border-radius:6px;overflow:hidden;max-height:340px;overflow-y:auto;margin-bottom:10px;">'
+                            + (pro.sources || []).map(leakSourceRow).join('') + '</div>';
+                        // Record rows (passwords redacted in the UI; the vault holds the real material)
+                        html += '<div class="hint-line" style="margin-bottom:4px;">RECORDS <span style="color:var(--text-muted);">(passwords redacted here — credential material goes to the Evidence Vault)</span></div>';
+                        html += '<div style="max-height:340px;overflow-y:auto;">' + (pro.rows || []).slice(0, 60).map(function (r) {
+                            const ident = r.email || r.username || r.phone || r.name || r.dob || '(no identifier)';
+                            return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 9px;border:1px solid var(--border-color);border-left:3px solid ' + (r.password ? 'var(--danger)' : 'var(--border-color)') + ';border-radius:4px;margin-bottom:4px;font-size:12px;">'
+                                + '<span style="color:var(--text-primary);font-family:JetBrains Mono,monospace;">' + escapeHtml(ident) + '</span>'
+                                + (r.password ? '<span style="color:var(--danger);">🔑 PASSWORD</span>' : '')
+                                + (r.source && r.source.name ? '<span style="color:var(--text-muted);">← ' + escapeHtml(r.source.name) + (r.source.breach_date ? ' (' + escapeHtml(r.source.breach_date) + ')' : '') + '</span>' : '')
+                                + '</div>';
+                        }).join('') + '</div>';
+                    }
+                }
+                html += '<div class="hint-line" style="margin-top:8px;">Source: <a href="https://docs.leakcheck.io/overview" target="_blank" rel="noopener noreferrer">docs.leakcheck.io</a> — a hit means a breach lists this identifier; it does not prove the account is still active.</div>';
+                out.innerHTML = html;
+                toast('leakcheck: ' + (pub.found === 'unknown' ? 'public lane error' : pub.found + ' public source(s)') + (pro && !pro.note ? ', ' + pro.found + ' Pro record(s)' : ''), 'success');
             } catch (e) {
                 out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
             }
@@ -2432,6 +2955,75 @@
             return s || undefined;
         }
 
+        // ── LOCK-SCREEN PROBE (UnlockAndroid technique) ───────────────
+        // Sends ONE PIN to an ADB-authorized device and reads the verdict.
+        // The authorization checkbox is the human gate; the server refuses
+        // without it, the arsenal tool is riskTier 'intrusive', and there is
+        // deliberately no code path that iterates candidate PINs.
+        function lockProbeOut(html) {
+            var el = document.getElementById('lockProbeOut');
+            if (el) el.innerHTML = html;
+        }
+
+        async function readAndroidLockState() {
+            lockProbeOut('<div class="dossier-empty" style="padding:12px;">reading dumpsys trust…</div>');
+            try {
+                var qs = androidSerialVal() ? '?serial=' + encodeURIComponent(androidSerialVal()) : '';
+                var d = await api('/api/android/lock-state' + qs);
+                var s = d.state || {};
+                var tone = s.locked === true ? 'var(--warning)' : s.locked === false ? 'var(--success)' : 'var(--text-muted)';
+                lockProbeOut(
+                    '<div style="font-family:var(--mono);font-size:12px;line-height:1.6;">' +
+                    '<div><b style="color:' + tone + '">' + esc(s.detail || 'unknown') + '</b></div>' +
+                    '<div style="color:var(--text-muted);margin-top:6px;">technique: ' + esc(d.upstream || '') + '</div>' +
+                    (s.raw ? '<details style="margin-top:8px;"><summary style="cursor:pointer;color:var(--text-muted);font-size:11px;">dumpsys trust (raw)</summary><pre class="raw-output" style="margin-top:6px;max-height:220px;">' + esc(s.raw.slice(0, 2000)) + '</pre></details>' : '') +
+                    '</div>'
+                );
+            } catch (e) {
+                lockProbeOut('<div class="dossier-empty" style="padding:12px;color:var(--danger);">' + esc(e.message || e) + '</div>');
+            }
+        }
+
+        async function runLockProbe() {
+            var auth = document.getElementById('lockProbeAuth');
+            var pinEl = document.getElementById('lockProbePin');
+            var pin = pinEl ? pinEl.value.trim() : '';
+            if (!auth || !auth.checked) {
+                lockProbeOut('<div class="dossier-empty" style="padding:12px;color:var(--warning);">Tick the authorization box first — this sends a PIN to a real device and is recorded to the ledger.</div>');
+                return;
+            }
+            if (!/^\d{4,12}$/.test(pin)) {
+                lockProbeOut('<div class="dossier-empty" style="padding:12px;color:var(--warning);">PIN must be 4–12 digits.</div>');
+                return;
+            }
+            var btn = document.getElementById('lockProbeBtn');
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ PROBING…'; }
+            lockProbeOut('<div class="dossier-empty" style="padding:12px;">waking device, injecting 1 PIN attempt, reading back dumpsys trust…</div>');
+            try {
+                var d = await api('/api/android/lock-probe', {
+                    method: 'POST', headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ pin: pin, serial: androidSerialVal(), confirmAuthorized: true })
+                });
+                var trace = (d.steps || []).map(function (s) {
+                    return '<div style="color:var(--text-muted);font-size:10.5px;">$ ' + esc(s.command) + ' → exit ' + esc(String(s.exitCode)) + '</div>';
+                }).join('');
+                lockProbeOut(
+                    '<div style="font-family:var(--mono);font-size:12px;line-height:1.6;">' +
+                    '<div><b style="color:' + (d.after && d.after.locked === false ? 'var(--success)' : 'var(--warning)') + '">' + esc(d.verdict || '') + '</b></div>' +
+                    '<div style="margin-top:6px;">before: ' + esc(d.before ? d.before.detail : '') + '</div>' +
+                    '<div>after:  ' + esc(d.after ? d.after.detail : '') + '</div>' +
+                    '<div style="color:var(--text-muted);margin-top:4px;">attempts: ' + esc(String(d.attempts)) + ' / cap ' + esc(String(d.maxAttempts)) + '</div>' +
+                    (trace ? '<div style="margin-top:8px;padding-top:6px;border-top:1px dashed var(--border-color);">commands sent:</div>' + trace : '') +
+                    '</div>'
+                );
+                if (auth) auth.checked = false; // one acknowledgement per action
+            } catch (e) {
+                lockProbeOut('<div class="dossier-empty" style="padding:12px;color:var(--danger);">' + esc(e.message || e) + '</div>');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '⚡ PROBE (1 ATTEMPT)'; }
+            }
+        }
+
         function showAndroidExec(res, commandLabel) {
             var out = document.getElementById('androidExecOut');
             out.style.display = 'block';
@@ -2634,8 +3226,28 @@
             loadDumpStatus();
             loadTorStatus();
             refreshAndroidStatus();
+            injectHelpButtons();
+            // Esc closes the help modal from anywhere on the page.
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Escape') closeHelp();
+            });
         });
     </script>
+    <!-- INLINE HELP — one "?" per section; content from the OSINT_HELP registry -->
+    <div class="help-modal" id="helpModal" onclick="if(event.target===this)closeHelp()" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+        <div class="help-card">
+            <div class="help-head">
+                <h3 id="helpTitle">HELP</h3>
+                <button class="help-x" id="helpX" onclick="closeHelp()" title="Close (Esc)">✕</button>
+            </div>
+            <div class="help-body" id="helpBody"></div>
+            <div class="help-foot">
+                <span>T3MP3ST OSINT · public &amp; licensed sources</span>
+                <span>Esc to close</span>
+            </div>
+        </div>
+    </div>
+
     <script src="embed.js"></script>
 </body>
 </html>

@@ -274,7 +274,12 @@ export async function fetchWeatherAlerts(opts: { fetcher?: FetchLike; refresh?: 
   if (alertsCache.feed && !opts.refresh && Date.now() - alertsCache.at < 120_000) return alertsCache.feed;
   try {
     const j = await fetchJson<{ features?: NoaaFeature[] }>(
-      'https://api.weather.gov/alerts/active?status=actual&message_type=alert&limit=500',
+      // NOTE: no `limit` parameter. api.weather.gov rejects the whole request with
+      // HTTP 400 ("Query parameter \"limit\" is not recognized") when it is present,
+      // which is what silently killed the weather-alerts layer: the route reported
+      // an honest note but the map had been showing ZERO alerts for every operator.
+      // Volume is bounded by the parser cap instead (below), not by the API.
+      'https://api.weather.gov/alerts/active?status=actual&message_type=alert',
       { fetcher: opts.fetcher, timeoutMs: 15_000, headers: { 'user-agent': 'T3MP3ST-PublicGPS/1.0 (security testing platform)' } }
     );
     const feed: GpsFeed = { source: 'NOAA/NWS active alerts (US)', fetchedAt: Date.now(), points: parseNoaaAlerts(j) };
