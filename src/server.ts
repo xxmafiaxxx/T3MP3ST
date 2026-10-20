@@ -55,6 +55,8 @@ import {
   googleWifiLocate,
   googleGeoKeyConfigured,
 } from './tools/osint-google.js';
+import { runCairnSearch, type CairnSearchResult } from './search/cairn-engine.js';
+import type { CairnBoard } from './search/cairn-board.js';
 import {
   getMergedSiteCatalog,
   OSINT_TOOLS,
@@ -13403,6 +13405,149 @@ app.post('/api/strix/ingest', async (req: Request, res: Response) => {
     }
     res.json({ ok: true, ingested, total: vulns.length });
   } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }
+});
+
+// =============================================================================
+// Cairn search — state-space search over a blackboard fact-intent graph.
+//
+// Techniques reimplemented from oritera/Cairn (AGPL-3.0); no upstream code is
+// vendored. A search runs DETACHED: start returns an id immediately, status
+// polls the live graph as it grows, and a hint injected mid-search is a new
+// situation — the reasoner absorbs it on its next round (the Hint primitive).
+// =============================================================================
+
+interface CairnRunState {
+  id: string;
+  board: CairnBoard;
+  startedAt: number;
+  result: CairnSearchResult | null;
+  error: string | null;
+}
+const cairnRuns = new Map<string, CairnRunState>();
+
+function cairnRunView(st: CairnRunState) {
+  const b = st.board;
+  return {
+    id: st.id,
+    state: st.error ? 'failed' : (st.result ? st.result.state : 'running'),
+    origin: b.origin,
+    goal: b.goal,
+    startedAt: st.startedAt,
+    ms: Date.now() - st.startedAt,
+    completion: b.completion,
+    facts: [...b.facts.values()],
+    intents: [...b.intents.values()],
+    hints: b.hints.map((h) => h.text),
+    journal: st.result?.journal ?? [],
+    error: st.error,
+  };
+}
+
+app.post('/api/search/start', async (req: Request, res: Response): Promise<void> => {
+  const origin = String(req.body?.origin ?? '').trim();
+  const goal = String(req.body?.goal ?? '').trim();
+  if (!origin || !goal) {
+    res.status(400).json({ error: 'origin and goal are required — the search needs both to have a path' });
+    return;
+  }
+  const hints = Array.isArray(req.body?.hints) ? req.body.hints.map((h: unknown) => String(h)).filter((h: string) => h.trim()) : [];
+  const clamp = (v: unknown, lo: number, hi: number, dflt: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+  };
+  try {
+    // resolveGeneralLLMConfig THROWS on a missing key — same contract as the
+    // mission route: refuse before any mutation, message straight to 400.
+    const cfg = resolveGeneralLLMConfig(req.body?.provider, req.body?.model, req.body?.apiKey, req.body?.baseUrl);
+    const backbone = new LLMBackbone(cfg);
+    const chat = (system: string, user: string) => backbone.prompt(user, system);
+    const id = `cairn_${Date.now().toString(36)}`;
+    const startedAt = Date.now();
+    const searchConfig = {
+      budgetMs: clamp(req.body?.budgetMs, 20_000, 30 * 60_000, 6 * 60_000),
+      taskTimeoutMs: clamp(req.body?.taskTimeoutMs, 10_000, 10 * 60_000, 120_000),
+      maxIntents: clamp(req.body?.maxIntents, 1, 8, 4),
+      maxProjectWorkers: clamp(req.body?.maxProjectWorkers, 1, 6, 3),
+      bootstrapEnabled: req.body?.bootstrapEnabled !== false,
+    };
+    const state: CairnRunState = {
+      id,
+      // The board is built by the engine; onBoardReady hands it back so status
+      // can render the graph LIVE and hints can land mid-search.
+      board: null as unknown as CairnBoard,
+      startedAt,
+      result: null,
+      error: null,
+    };
+    cairnRuns.set(id, state);
+    while (cairnRuns.size > 20) {
+      const oldest = cairnRuns.keys().next().value as string | undefined;
+      if (!oldest) break;
+      cairnRuns.delete(oldest);
+    }
+    console.log(`[T3MP3ST][CAIRN] search ${id} started: ${origin} → ${goal} (budget ${(searchConfig.budgetMs / 1000) | 0}s)`);
+    void runCairnSearch({
+      origin,
+      goal,
+      hints,
+      chat,
+      searchId: id,
+      config: searchConfig,
+      onBoardReady: (board) => { state.board = board; },
+    }).then((result) => {
+      state.result = result;
+      console.log(`[T3MP3ST][CAIRN] search ${id} → ${result.state} in ${(result.ms / 1000).toFixed(1)}s (${result.facts.length} facts, ${result.intents.length} intents)`);
+    }).catch((e: unknown) => {
+      state.error = e instanceof Error ? e.message : String(e);
+      console.warn(`[T3MP3ST][CAIRN] search ${id} failed: ${state.error}`);
+    });
+    res.json({ ok: true, searchId: id, note: 'search running — poll /api/search/status?id=… and inject hints with /api/search/hint' });
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message || 'search could not start' });
+  }
+});
+
+app.get('/api/search/status', (req: Request, res: Response): void => {
+  const id = String(req.query.id ?? '');
+  const st = (id && cairnRuns.get(id)) || [...cairnRuns.values()].pop();
+  if (!st) {
+    res.status(404).json({ error: 'no such search — start one with POST /api/search/start' });
+    return;
+  }
+  res.json(cairnRunView(st));
+});
+
+app.get('/api/search/list', (_req: Request, res: Response): void => {
+  res.json({
+    searches: [...cairnRuns.values()].map((st) => ({
+      id: st.id,
+      state: st.error ? 'failed' : (st.result ? st.result.state : 'running'),
+      origin: st.board?.origin ?? '',
+      goal: st.board?.goal ?? '',
+      startedAt: st.startedAt,
+    })),
+  });
+});
+
+app.post('/api/search/hint', (req: Request, res: Response): void => {
+  const id = String(req.body?.id ?? '');
+  const text = String(req.body?.text ?? '').trim();
+  const st = (id && cairnRuns.get(id)) || [...cairnRuns.values()].pop();
+  if (!st || !st.board) {
+    res.status(404).json({ error: 'no such running search' });
+    return;
+  }
+  if (!text) {
+    res.status(400).json({ error: 'text required' });
+    return;
+  }
+  if (st.board.completion) {
+    res.status(409).json({ error: 'search already complete — hints apply to live searches' });
+    return;
+  }
+  st.board.addHint(text);
+  console.log(`[T3MP3ST][CAIRN] hint injected into ${st.id}: ${text.slice(0, 80)}`);
+  res.json({ ok: true, hints: st.board.hints.map((h) => h.text), note: 'the reasoner absorbs this on its next round — a new hint is a new situation' });
 });
 
 // =============================================================================

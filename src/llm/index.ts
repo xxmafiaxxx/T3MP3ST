@@ -339,7 +339,10 @@ class OpenRouterAdapter implements LLMProviderAdapter {
     const tools = this.formatTools(options?.tools);
     if (tools) requestBody.tools = tools;
 
-    const response = await fetch(url, {
+    // Provider API calls are NOT attack traffic — the outbound SOCKS proxy is for
+    // test/attack egress (see directFetch). Routing provider calls through it made
+    // every cloud LLM die whenever the configured proxy was unreachable.
+    const response = await fetchBypassingProxy(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -421,7 +424,7 @@ class OpenRouterAdapter implements LLMProviderAdapter {
     // is aborted (after config.timeout, default 60s of no data).
     const controller = new AbortController();
     const idleMs = this.config.timeout || 60000;
-    const response = await fetch(url, {
+    const response = await fetchBypassingProxy(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -609,7 +612,8 @@ class AnthropicAdapter implements LLMProviderAdapter {
       }));
     }
 
-    const response = await fetch(url, {
+    // Provider API calls are not attack traffic — bypass the SOCKS egress (see OpenRouterAdapter).
+    const response = await fetchBypassingProxy(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -736,7 +740,8 @@ class OpenAIAdapter implements LLMProviderAdapter {
       }));
     }
 
-    const response = await fetch(url, {
+    // Provider API calls are not attack traffic — bypass the SOCKS egress (see OpenRouterAdapter).
+    const response = await fetchBypassingProxy(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

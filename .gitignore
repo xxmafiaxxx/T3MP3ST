@@ -116,3 +116,6 @@ drills/
 trinidad_*.json
 trinidad_index.csv
 trinidad.json
+
+# Cairn upstream reference material (AGPL — local only, techniques reimplemented in src/search/)
+.cairn-ref/
