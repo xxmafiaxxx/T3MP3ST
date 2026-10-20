@@ -276,7 +276,7 @@ function severityOf(p: GpsPoint): number {
 }
 
 function stripLabel(label: string): string {
-  return String(label || '').replace(/^[^\w(\[]+/, '').trim();
+  return String(label || '').replace(/^[^\w([]+/, '').trim();
 }
 
 // --- prompt ---------------------------------------------------------------------

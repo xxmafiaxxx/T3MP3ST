@@ -12892,7 +12892,7 @@ app.get('/:page', (req: Request, res: Response, next: NextFunction) => {
 // Strix leaf page can render the cross-run history and ingest vulns to the vault.
 // =============================================================================
 import * as pathFs from 'path';
-import { readdirSync, existsSync as _existsSync } from 'fs';
+import { readdirSync, existsSync as _existsSync, statSync } from 'fs';
 function strixBaseDirs(): string[] {
   const env = process.env.STRIX_RUNS_DIR ? [process.env.STRIX_RUNS_DIR] : [];
   const cwd = pathFs.join(process.cwd(), 'strix_runs');
@@ -12906,7 +12906,7 @@ function strixBaseDirs(): string[] {
   return out;
 }
 function strixFirstBase(): string | null {
-  for (const d of strixBaseDirs()) try { if (_existsSync(d)) return d; } catch {}
+  for (const d of strixBaseDirs()) try { if (_existsSync(d)) return d; } catch { /* unreadable candidate — fall through to the next base */ }
   // no dir exists yet — advertise the preferred base so the UI can show it
   return strixBaseDirs()[0] ?? null;
 }
@@ -12917,8 +12917,8 @@ function strixIterRunDirs(base: string): string[] {
       .filter(d => _existsSync(pathFs.join(d, 'run.json')));
     dirs.sort((a, b) => {
       try {
-        const at = _existsSync(pathFs.join(a, 'run.json')) ? require('fs').statSync(pathFs.join(a, 'run.json')).mtimeMs : 0;
-        const bt = _existsSync(pathFs.join(b, 'run.json')) ? require('fs').statSync(pathFs.join(b, 'run.json')).mtimeMs : 0;
+        const at = _existsSync(pathFs.join(a, 'run.json')) ? statSync(pathFs.join(a, 'run.json')).mtimeMs : 0;
+        const bt = _existsSync(pathFs.join(b, 'run.json')) ? statSync(pathFs.join(b, 'run.json')).mtimeMs : 0;
         return bt - at;
       } catch { return 0; }
     });
@@ -13013,7 +13013,7 @@ app.get('/api/strix/run', (req: Request, res: Response) => {
     const rec = strixReadJson<any>(pathFs.join(resolved, 'run.json'), {});
     const vulns: any[] = (() => { try { const j = strixReadJson<any>(pathFs.join(resolved, 'vulnerabilities.json'), []); return Array.isArray(j) ? j : []; } catch { return []; } })();
     let markdown = '';
-    try { const p = pathFs.join(resolved, 'penetration_test_report.md'); if (_existsSync(p)) markdown = readFileSync(p, 'utf-8'); } catch {}
+    try { const p = pathFs.join(resolved, 'penetration_test_report.md'); if (_existsSync(p)) markdown = readFileSync(p, 'utf-8'); } catch { /* report is optional */ }
     res.json({ name, dir: resolved, record: rec, vulnerabilities: vulns, markdown: markdown || null });
   } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }
 });
@@ -13083,7 +13083,7 @@ app.post('/api/strix/ingest', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'unknown run' }); return;
     }
     let vulns: any[] = [];
-    try { const j = strixReadJson<any>(pathFs.join(resolved, 'vulnerabilities.json'), []); vulns = Array.isArray(j) ? j : []; } catch {}
+    try { const j = strixReadJson<any>(pathFs.join(resolved, 'vulnerabilities.json'), []); vulns = Array.isArray(j) ? j : []; } catch { /* no vulnerabilities file yet */ }
     if (!vulns.length) { res.json({ ok: true, ingested: 0, message: 'No vulnerabilities in this run yet.' }); return; }
     // Map Strix vulns → T3MP3ST findings (best-effort; keep the shape loose so future
     // Strix fields do not break ingestion). Persist via the same path live-scan uses.
@@ -13102,7 +13102,7 @@ app.post('/api/strix/ingest', async (req: Request, res: Response) => {
             raw: v,
           } as any);
         ingested++;
-      } catch {}
+      } catch { /* skip a malformed vulnerability row */ }
     }
     res.json({ ok: true, ingested, total: vulns.length });
   } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }

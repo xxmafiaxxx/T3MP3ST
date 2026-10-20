@@ -3421,7 +3421,7 @@ const EMAIL_RE_GLOBAL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
 const PHONE_RE_GLOBAL = /(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/g;
 const SOCIAL_URL_RE = /https?:\/\/(?:www\.)?(github\.com|t\.me|twitter\.com|x\.com|instagram\.com|facebook\.com|linkedin\.com|tiktok\.com|youtube\.com|reddit\.com|soundcloud\.com|keybase\.io)\/[A-Za-z0-9_.\-/@]+/g;
 // US-style street addresses, optionally with city/state/ZIP tail on the same line.
-const ADDRESS_RE_GLOBAL = /\b(?:P\.?\s?O\.?\s?Box\s+\d+|\d{1,6}\s+(?:[A-Z0-9][A-Za-z0-9'.\-]*\s+){0,6}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|Lane|Ln|Court|Ct|Circle|Cir|Way|Place|Pl|Terrace|Ter|Parkway|Pkwy|Highway|Hwy|Square|Sq|Trail|Trl))\b(?:[^<\n]{0,60}?\b[A-Z][A-Za-z.\- ]{1,24},\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\s+\d{5}(?:-\d{4})?)?/g;
+const ADDRESS_RE_GLOBAL = /\b(?:P\.?\s?O\.?\s?Box\s+\d+|\d{1,6}\s+(?:[A-Z0-9][A-Za-z0-9'.-]*\s+){0,6}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|Lane|Ln|Court|Ct|Circle|Cir|Way|Place|Pl|Terrace|Ter|Parkway|Pkwy|Highway|Hwy|Square|Sq|Trail|Trl))\b(?:[^<\n]{0,60}?\b[A-Z][A-Za-z.\- ]{1,24},\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\s+\d{5}(?:-\d{4})?)?/g;
 
 const ADDRESS_JUNK = /(?:v?\d+\.\d+\.\d+|\b(?:lorem|ipsum|example|placeholder|your\s+company|n\/a)\b|copyright|all rights reserved|privacy policy)/i;
 
@@ -3873,8 +3873,9 @@ export async function aggressivePeopleSearch(
       ran: runs,
     });
     const raw = await chat(DIRECTOR_SYSTEM, brief).catch(() => '');
-    let { picks, gaps: g } = parseDirectorPicks(raw);
-    gaps = g;
+    const plan = parseDirectorPicks(raw);
+    let picks = plan.picks;
+    gaps = plan.gaps;
     if (picks.length === 0) {
       // Model flakiness must never idle an aggressive search: fall back to the
       // first playbook methods that have not produced a run yet.
@@ -3902,7 +3903,7 @@ export async function aggressivePeopleSearch(
         if (bad) { runs.push({ method: pick.method, round, status: 'skip', found: 0, note: 'refused — query contains unverified identifier (' + bad + ')' }); continue; }
       }
       if (pick.url) {
-        let host = ''; try { host = new URL(pick.url).hostname.toLowerCase(); } catch (_) {}
+        let host = ''; try { host = new URL(pick.url).hostname.toLowerCase(); } catch (_) { /* not a URL — leave host empty */ }
         const hostKnown = knownAll.urls.some((u) => { try { return new URL(u).hostname.toLowerCase() === host; } catch (_) { return false; } });
         if (!hostKnown) { runs.push({ method: pick.method, round, status: 'skip', found: 0, note: 'refused — url host not previously surfaced' }); continue; }
       }
@@ -4193,7 +4194,7 @@ export interface PersonRecord {
   sourceUrl: string;
 }
 
-let peopleLaunchLock: Promise<void> | null = null;
+const peopleLaunchLock: Promise<void> | null = null;
 
 function resolveChromiumExe(): string | null {
   const base = pathPs.join(process.env.LOCALAPPDATA || '', 'ms-playwright');

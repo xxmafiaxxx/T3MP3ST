@@ -14,7 +14,10 @@ const staticHtml = html.replace(/<script\b[\s\S]*?<\/script>/gi, '');
 /** Mirror of the page's helpKeyFor(): strip emoji, collapse whitespace, upper-case. */
 function helpKeyFor(text: string): string {
   return text
-    .replace(/[←-⯿\u{1F000}-\u{1FAFF}\u{FE0F}]/gu, '')
+    // The trailing \u{FE0F} is deliberate — this mirrors the page's own helpKeyFor
+    // (docs/osint.html), which strips variation selectors so keys are stable.
+    // eslint-disable-next-line no-misleading-character-class
+    .replace(/[\u2190-\u2BFF\u{1F000}-\u{1FAFF}\u{FE0F}]/gu, '')
     .replace(/\s+/g, ' ')
     .trim()
     .toUpperCase();
@@ -42,7 +45,7 @@ function sectionKeys(): string[] {
 
 /** Keys declared in the page's OSINT_HELP registry. */
 function registryKeys(): string[] {
-  const block = html.match(/var OSINT_HELP = \{([\s\S]*?)\n        \};/);
+  const block = html.match(/var OSINT_HELP = \{([\s\S]*?)\n {8}\};/);
   expect(block, 'OSINT_HELP registry not found in docs/osint.html').toBeTruthy();
   const keys: string[] = [];
   const re = /^\s{12}'([^']+)':\s*\{/gm;

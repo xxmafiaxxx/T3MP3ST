@@ -207,7 +207,7 @@ export async function getAdbStatus(): Promise<AdbStatus> {
 
   let version: string | undefined;
   let installed = false;
-  let devices: Array<{ serial: string; state: string }> = [];
+  const devices: Array<{ serial: string; state: string }> = [];
 
   try {
     const v = await runAdb(['version'], 5000);
