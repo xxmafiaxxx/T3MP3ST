@@ -144,7 +144,15 @@ async function main() {
   try {
     const health = await apiGet('/health');
     apiReachable = health.ok;
-    check('API health endpoint', health.ok && health.data.status === 'operational', `${health.status} ${health.data.status || 'unknown'}`);
+    // apiGet never throws — a connection failure arrives as { ok:false, status:0 }.
+    // Offline is a warning (CI has no server); a server that answered unhealthy blocks.
+    const offline = !health.ok && health.status === 0;
+    check(
+      'API health endpoint',
+      health.ok && health.data.status === 'operational',
+      offline ? `offline - run npm run server for live API checks (${health.error?.name || 'error'})` : `${health.status} ${health.data.status || 'unknown'}`,
+      offline ? 'warn' : 'block',
+    );
     if (health.ok) {
       check('API exposes mission dispatch', health.data.missionDispatch === true, String(health.data.missionDispatch));
       check('API exposes resources', Number(health.data.resources?.packs || 0) >= 10, `${health.data.resources?.packs || 0} packs`);
