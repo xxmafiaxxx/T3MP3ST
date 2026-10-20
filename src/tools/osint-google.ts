@@ -116,7 +116,11 @@ async function googleJson<T = unknown>(
     }
   };
   const first = await attempt(false);
-  if (first && !EGRESS_REJECTED.has(first.status)) return first;
+  // A 200 whose body will not parse is not an answer — measured live (2026-10-19):
+  // a corrupted response pipeline hands back raw gzip with the content-encoding
+  // header stripped. Retry on the direct leg before reporting it upward.
+  const unreadable200 = (r: { status: number; body: unknown } | null) => r !== null && r.status === 200 && r.body === null;
+  if (first && !unreadable200(first) && !EGRESS_REJECTED.has(first.status)) return first;
   const second = await attempt(true);
   return second ?? first;
 }
@@ -419,7 +423,8 @@ export async function googleAppLinkage(rawTarget: string, opts: DalLookupOptions
     dalNote = 'this domain publishes no Digital Asset Links statements';
   } else if (res.status !== 200 || !res.body) {
     failed.push('digitalassetlinks');
-    dalNote = `Digital Asset Links API answered HTTP ${res.status}`;
+    dalNote = `Digital Asset Links API answered HTTP ${res.status}` +
+      (res.status === 200 ? ' with an unreadable body — transport corruption, not an empty answer' : '');
   } else {
     statements = Array.isArray(res.body.statements) ? res.body.statements : [];
     if (!statements.length) dalNote = 'this domain publishes no Digital Asset Links statements';
