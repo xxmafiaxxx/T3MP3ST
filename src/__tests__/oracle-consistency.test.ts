@@ -86,7 +86,7 @@ describe('no phantom pass (scored = oracle-backed)', () => {
     // Guard against the vacuous-green failure mode: if the artifacts moved and we scan
     // nothing, the "0 phantom" assertions below would pass while checking nothing.
     expect(committedSolves().length).toBeGreaterThanOrEqual(100);
-  });
+  }, 120_000); // the sweep reads every committed bench artifact — seconds of real disk I/O, not a hang
 
   it('every committed scored solve is oracle-grounded (self-report ≡ oracle, or auto-detected)', () => {
     const phantoms = committedSolves().filter(isPhantomPass);
@@ -96,7 +96,7 @@ describe('no phantom pass (scored = oracle-backed)', () => {
         .map((v) => `reported=${JSON.stringify(v.reported)} expected=${JSON.stringify(v.expected)}`)
         .join('; ')}`,
     ).toEqual([]);
-  });
+  }, 120_000);
 
   it('no fabricated placeholder flag is credited as a self-reported solve', () => {
     const fabricated = committedSolves().filter(isFabricatedCredit);

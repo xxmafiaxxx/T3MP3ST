@@ -60,7 +60,7 @@ describe('explicit configuration directory', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(childJson(result).key).toBeNull();
     expect(JSON.parse(readFileSync(join(f.config, 'config.json'), 'utf8')).apiKeys).toEqual({});
-  });
+  }, 120_000); // the spawned child's own budget is 90s — the vitest cap must exceed it, not fight it
 
   it('loads only the explicitly selected env file', () => {
     const f = fixture();
@@ -69,19 +69,19 @@ describe('explicit configuration directory', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(childJson(result).key).toBe('isolated-key');
     expect(readFileSync(join(f.config, 'config.json'), 'utf8')).not.toContain('isolated-key');
-  });
+  }, 120_000);
 
   it('preserves default home loading and ignores a target cwd env file', () => {
     const f = fixture();
     const result = run(f);
     expect(result.status, result.stderr).toBe(0);
     expect(childJson(result).key).toBe('operator-owned-key');
-  });
+  }, 120_000);
 
   it('rejects relative paths before reading configuration', () => {
     const f = fixture();
     const result = run(f, 'relative-config');
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('T3MP3ST_CONFIG_DIR must be an absolute path');
-  });
+  }, 120_000);
 });
