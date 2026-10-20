@@ -174,7 +174,9 @@ const indexSrc = fs.existsSync(R('src/arsenal/index.ts')) ? fs.readFileSync(R('s
 const osintSrc = fs.existsSync(R('src/tools/osint.ts')) ? fs.readFileSync(R('src/tools/osint.ts'), 'utf8') : '';
 const adapters = (catalogSrc.match(/^\s{4}id: '/gm) || []).length;
 const builtinTools = (indexSrc.match(/^    name: '/gm) || []).length;
-const osintTools = (osintSrc.match(/^    name: '/gm) || []).length;
+const osintInfraSrc = fs.existsSync(R('src/tools/osint-infra.ts')) ? fs.readFileSync(R('src/tools/osint-infra.ts'), 'utf8') : '';
+const osintGoogleSrc = fs.existsSync(R('src/tools/osint-google.ts')) ? fs.readFileSync(R('src/tools/osint-google.ts'), 'utf8') : '';
+const osintTools = (osintSrc.match(/^    name: '/gm) || []).length + (osintInfraSrc.match(/^    name: '/gm) || []).length + (osintGoogleSrc.match(/^    name: '/gm) || []).length;
 const tools = adapters + builtinTools + osintTools;
 const ops = fs.existsSync(R('src/operators/index.ts'))
   ? (fs.readFileSync(R('src/operators/index.ts'), 'utf8').match(/name: '[^']*(Operator|Scanner|Specialist|Coordinator|Analyst)'/g) || []).length : 0;

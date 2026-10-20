@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { GOOGLE_OSINT_TOOLS } from '../tools/osint-google.js';
 import {
   OSINT_SITES,
   OSINT_TOOLS,
@@ -13,6 +14,7 @@ import {
   parseHudsonRock,
   parseHibpCatalog,
 } from '../tools/osint.js';
+import { INFRA_TOOLS } from '../tools/osint-infra.js';
 
 describe('osint site catalog', () => {
   it('every site is well-formed with unique names and valid probe configs', () => {
@@ -41,14 +43,21 @@ describe('osint site catalog', () => {
 });
 
 describe('osint agent tools', () => {
-  it('registers 16 tools in the osint category with required parameters', () => {
+  it('registers 21 tools in the osint category with required parameters', () => {
+    // The infrastructure registry is a separate array but the SAME category and the
+    // SAME registered surface — src/index.ts registers both, so the gate covers both.
+    // Counting only OSINT_TOOLS would let a new infrastructure tool ship unguarded.
+    const ALL_OSINT = [...OSINT_TOOLS, ...INFRA_TOOLS, ...GOOGLE_OSINT_TOOLS];
     expect(OSINT_TOOLS.length).toBe(16);
+    expect(INFRA_TOOLS.length).toBe(3);
+    expect(GOOGLE_OSINT_TOOLS.length).toBe(2);
+    expect(ALL_OSINT.length).toBe(21);
     // Catalog generators are legitimately invocable bare (they emit a query
     // library, they don't search one subject) — documented exception to the
     // "every tool has a required input" rule.
     const INPUT_OPTIONAL = new Set(['osint_google_dorks']);
     const names = new Set<string>();
-    for (const t of OSINT_TOOLS) {
+    for (const t of ALL_OSINT) {
       expect(names.has(t.name), `duplicate tool ${t.name}`).toBe(false);
       names.add(t.name);
       expect(t.category).toBe('osint');
@@ -67,6 +76,9 @@ describe('osint agent tools', () => {
       'osint_onion_search',
       'osint_onion_fetch',
       'osint_people_records',
+      'osint_domain_infra',
+      'osint_ip_infra',
+      'osint_hash_lookup',
     ]) {
       expect(names.has(expected), `missing tool ${expected}`).toBe(true);
     }

@@ -72,7 +72,7 @@ async function fetchText(url: string, opts: { fetcher?: FetchLike; timeoutMs?: n
     const r = await f(url, { headers: { ...(opts.headers || {}) }, signal: ctrl.signal } as never);
     if (!r.ok) {
       let body = '';
-      try { body = await r.text(); } catch { /* error body is best-effort */ }
+      try { body = await r.text(); } catch { /* body stays empty — the status alone is the signal */ }
       const snippet = body ? ` — ${body.slice(0, 140).replace(/\s+/g, ' ')}` : '';
       throw new Error(`HTTP ${r.status}${snippet}`);
     }

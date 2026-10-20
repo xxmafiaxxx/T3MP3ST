@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="manifest" href="manifest.webmanifest">
     <title>T3MP3ST — OSINT & Person Locator</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -96,6 +98,7 @@
         .api-dot.ok { background: var(--success); box-shadow: 0 0 8px var(--success); }
         .api-dot.err { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        @keyframes sweepPulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
         .api-reconnect-btn {
             background: none; border: 1px solid var(--border-color); color: var(--text-secondary);
             border-radius: 4px; cursor: pointer; padding: 2px 7px; font-size: 12px;
@@ -620,6 +623,8 @@
                     <button class="tool-tab" data-pane="paneAndroid" onclick="switchTool('paneAndroid')">📱 ANDROID</button>
                     <button class="tool-tab" data-pane="panePerms" onclick="switchTool('panePerms')">🔤 PERMUTATIONS</button>
                     <button class="tool-tab" data-pane="paneSites" onclick="switchTool('paneSites')">🗂️ SITE CATALOG</button>
+                    <button class="tool-tab" data-pane="paneInfra" onclick="switchTool('paneInfra')">🏗️ DOMAIN &amp; IP INFRA</button>
+                    <button class="tool-tab" data-pane="paneGoogle" onclick="switchTool('paneGoogle')">🔗 GOOGLE APP LINKAGE</button>
                 </div>
 
                 <!-- ══════════════════ LOCATOR ══════════════════ -->
@@ -708,13 +713,16 @@
                     <div class="panel">
                         <div class="panel-header">
                             <div class="panel-title"><span class="accent">📡</span> USERNAME SWEEP — SOCIAL FOOTPRINT</div>
-                            <button class="btn" onclick="runSweep()">▶ SWEEP</button>
+                            <div style="display:flex;gap:8px;">
+                                <button class="btn" onclick="runSweep()">▶ SWEEP</button>
+                                <button class="btn" onclick="runDeepSweep()" title="Iterative sweep: reads the Keybase identity graph + link hubs, harvests the handles they publish, sweeps those too, then clusters accounts that share real evidence" style="border-color:rgba(160,90,255,0.5);color:#c9b3ff;">🕸 DEEP SWEEP</button>
+                            </div>
                         </div>
                         <div class="panel-body">
                             <div class="locator-form">
                                 <div class="search-box">
                                     <span>@</span>
-                                    <input type="text" id="sweepUser" placeholder="Username (no @)" onkeydown="if(event.key==='Enter')runSweep()">
+                                    <input type="text" id="sweepUser" placeholder="Username — or an email address" title="Accepts a username, or an email address: the local-part is turned into handle candidates (Gmail dot-folding, +tag stripping, first/last swaps) and each is swept." onkeydown="if(event.key==='Enter')runSweep()">
                                 </div>
                                 <div class="search-box" style="max-width:230px;min-width:200px;">
                                     <span>DB</span>
@@ -728,7 +736,25 @@
                                     <input type="checkbox" id="sweepAdult" onchange="updateSweepCatalogHint()"> include adult platforms
                                 </label>
                             </div>
+                            <div class="locator-form" style="margin-top:8px;">
+                                <div class="search-box" style="max-width:340px;min-width:260px;">
+                                    <span>NAME</span>
+                                    <input type="text" id="sweepName" placeholder="Subject's full name — enables identity matching" title="Without a name every account reads as 'handle-only'. With it, accounts matching the name are badged IDENTITY MATCH and same-name strangers are flagged.">
+                                </div>
+                                <label class="hint-line" style="margin:0;cursor:pointer;display:flex;align-items:center;gap:5px;">
+                                    <input type="checkbox" id="sweepDeepRounds" checked> deep sweep: follow cross-links
+                                </label>
+                            </div>
                             <div class="hint-line" id="sweepCatalogHint">Loading catalog…</div>
+                            <!-- Live run indicator + stop. A sweep of one handle can take minutes,
+                                 so without a clock and a stop the panel just looks frozen. -->
+                            <div id="sweepStatus" style="display:none; margin-top:12px; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 12px; background:rgba(255,170,0,0.08); border:1px solid rgba(255,170,0,0.4); border-radius:8px; font-size:12px;">
+                                <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#ffaa00; animation:sweepPulse 1s ease-in-out infinite;"></span>
+                                <span id="sweepStatusLabel" style="color:#ffaa00; font-weight:700;">Sweeping…</span>
+                                <span id="sweepStatusClock" style="color:#8aa0ad; font-family:'JetBrains Mono',monospace; font-size:11px;">0s</span>
+                                <span style="flex:1;"></span>
+                                <button class="btn" id="sweepStopBtn" onclick="stopSweep()" style="border-color:rgba(255,80,80,0.55); color:#ff8a8a;">⏹ STOP</button>
+                            </div>
                             <div id="sweepOut" style="margin-top:14px;"></div>
                         </div>
                     </div>
@@ -1145,6 +1171,87 @@
                     </div>
                 </div>
 
+                                <div class="tool-pane" id="paneInfra">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">🏗️</span> DOMAIN &amp; IP INFRASTRUCTURE</div>
+                            <span class="src-chip">9 keyless sources</span>
+                        </div>
+                        <div class="panel-body">
+                            <div class="hint-line" style="margin:0 0 12px;">
+                                Everything here is a <b>read-only lookup against a third-party public database</b> — RDAP registration, Certificate Transparency (crt.sh), Shodan InternetDB, RIPEstat BGP routing, DNS-over-HTTPS, urlscan.io history, AlienVault OTX and blocklist.de. Nothing here scans or touches the target's own systems.
+                            </div>
+
+                            <div class="locator-form">
+                                <div class="search-box" style="min-width:300px;flex:1;"><span>TGT</span><input type="text" id="infraTarget" placeholder="domain, URL, or public IPv4 — e.g. kernel.org" onkeydown="if(event.key==='Enter')runInfra()"></div>
+                                <button class="btn primary" onclick="runInfra()">▶ INVESTIGATE</button>
+                            </div>
+
+                            <div class="hint-line" style="margin:10px 0 0;">
+                                A domain or URL gets registration + CT subdomains + DNS + scan history. An IPv4 gets services + CVEs + routing + reputation. Paste either — the target is auto-detected.
+                            </div>
+
+                            <div id="infraOut" style="margin-top:14px;"></div>
+
+                            <div class="dossier-section-title" style="margin-top:22px;">🔑 HASH IDENTIFICATION</div>
+                            <div class="hint-line" style="margin:0 0 8px;">Identify a file from its MD5 / SHA1 / SHA256 / SHA512 hash. This is a <b>known-file</b> database (NIST Software Reference Library) — a hit means the file is recognized, <b>not</b> that it is malicious.</div>
+                            <div class="locator-form">
+                                <div class="search-box" style="min-width:340px;flex:1;"><span>HASH</span><input type="text" id="infraHash" placeholder="sha256 e3b0c442…" onkeydown="if(event.key==='Enter')runInfraHash()"></div>
+                                <button class="btn" onclick="runInfraHash()">▶ IDENTIFY</button>
+                            </div>
+                            <div id="infraHashOut" style="margin-top:12px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <div class="tool-pane" id="paneGoogle">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">🔗</span> GOOGLE APP LINKAGE &amp; WIFI GEO <span class="count" style="font-size:10px;opacity:.7;">Digital Asset Links · mxrch/ghunt (AGPL-3.0) — techniques reimplemented, no upstream code vendored</span></div>
+                            <span class="src-chip" id="googleStatusChip">checking…</span>
+                        </div>
+                        <div class="panel-body">
+                            <div class="hint-line" style="margin:0 0 12px;">
+                                A website publishes, at a standard path, the <b>Android apps it vouches for</b> and the <b>other domains it delegates to</b>. Google indexes that and serves it <b>keyless, with no account</b>. This is where SSO/auth infrastructure gets found — <code>wikipedia.org</code> names <code>auth.wikimedia.org</code>, <code>twitter.com</code> still names <code>x.com</code> — neither is reliably discoverable by scanning for subdomains.
+                            </div>
+
+                            <div class="hint-line" style="margin:0 0 12px;border-left:2px solid var(--warning);padding-left:10px;">
+                                <b>SCOPE — this is a PARTIAL port of GHunt.</b> GHunt is best known for its <code>email</code> module: paste an address, get the linked Google account's profile, Play Games, Maps reviews and Calendar. <b>That is deliberately absent</b> — it authenticates as a Google account using a session cookie, which this platform does not ingest. What runs here is the keyless half. <b>Paste a DOMAIN, not an email address.</b>
+                            </div>
+
+                            <div class="locator-form">
+                                <div class="search-box" style="min-width:300px;flex:1;"><span>DOMAIN</span><input type="text" id="googleTarget" placeholder="e.g. wikipedia.org, github.com, discord.com" onkeydown="if(event.key==='Enter')runGoogleLinkage()"></div>
+                                <button class="btn primary" onclick="runGoogleLinkage()">▶ MAP LINKAGE</button>
+                            </div>
+
+                            <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                                <label class="hint-line" style="margin:0;cursor:pointer;"><input type="checkbox" id="googleIosToggle"> <b>ALSO READ iOS BUNDLE IDS</b></label>
+                                <span class="hint-line" id="googleIosNote" style="margin:0;">off — Google returns Android targets only</span>
+                            </div>
+                            <div class="hint-line" style="margin:6px 0 0;font-size:11px;">
+                                ⚠ Ticking the iOS box is the <b>only request in this tool that touches the subject's own origin</b> — it fetches <code>/.well-known/apple-app-site-association</code> from that site. Everything else is read from Google's public index.
+                            </div>
+
+                            <div class="hint-line" style="margin:14px 0 0;font-size:11px;color:var(--text-secondary);">
+                                An app listed for a domain is the <b>domain publisher's own claim</b>. It is not an endorsement by Google and says nothing about whether the app is safe — a hostile domain can claim any package name it likes.
+                            </div>
+
+                            <div id="googleOut" style="margin-top:14px;"></div>
+
+                            <div class="dossier-section-title" style="margin-top:24px;">📡 WIFI ACCESS-POINT GEOLOCATION</div>
+                            <div class="hint-line" style="margin:0 0 8px;">Locate WiFi access points (BSSID/MAC) through Google's geolocation database. Give <b>one MAC</b> for a rough answer or <b>several neighbouring APs</b> for a tighter one — accuracy improves sharply with more. The answer is an <b>estimated coverage area</b>, not a device fix.</div>
+                            <div class="locator-form">
+                                <div class="search-box" style="min-width:340px;flex:1;"><span>BSSID</span><input type="text" id="googleBssid" placeholder="aa:bb:cc:dd:ee:ff, 11:22:33:44:55:66 …" onkeydown="if(event.key==='Enter')runGoogleWifi()"></div>
+                                <button class="btn" onclick="runGoogleWifi()">▶ LOCATE</button>
+                            </div>
+                            <div class="hint-line" style="margin:8px 0 0;font-size:11px;">Needs your own Google API key in <code>T3MP3ST_GOOGLE_GEO_KEY</code>. This platform deliberately does not ship a third-party key, and no query is sent when it is unset.</div>
+                            <div id="googleWifiOut" style="margin-top:12px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+
                 <div class="tool-pane" id="paneSites">
                     <div class="panel">
                         <div class="panel-header">
@@ -1295,6 +1402,8 @@
         function renderSocialCard(h) {
             const ident = h.identity === 'name-match'
                 ? '<span class="conf-badge conf-high">✓ IDENTITY MATCH</span>'
+                : h.identity === 'name-mismatch'
+                ? '<span class="conf-badge" style="background:rgba(255,80,80,0.16);color:#ff6b6b;border:1px solid rgba(255,80,80,0.4);">≠ DIFFERENT PERSON</span>'
                 : '';
             const dn = h.profile && h.profile.displayName ? '<div style="color:var(--text-primary);font-size:11.5px;margin-top:3px;">as "' + escapeHtml(h.profile.displayName) + '"</div>' : '';
             const contacts = [];
@@ -1302,12 +1411,22 @@
             if (h.profile && h.profile.location) contacts.push('📍 ' + escapeHtml(h.profile.location));
             if (h.profile && h.profile.blog) contacts.push('<a href="' + escapeHtml(h.profile.blog) + '" target="_blank" rel="noopener noreferrer" style="color:var(--info)">blog ↗</a>');
             if (h.profile && h.profile.twitter) contacts.push('<a href="' + escapeHtml(h.profile.twitter) + '" target="_blank" rel="noopener noreferrer" style="color:var(--info)">X ↗</a>');
-            const style = h.identity === 'name-match' ? 'border-color:var(--success);' : '';
+            // Probe provenance was fetched and then dropped on the floor: the operator could not
+            // see the HTTP code, or that a site was reached through Tor / a direct connection.
+            // That makes an unknown indistinguishable from an absent.
+            const prov = [];
+            if (h.probeStatus) prov.push('HTTP ' + escapeHtml(String(h.probeStatus)));
+            if (h.note) prov.push(escapeHtml(h.note));
+            const provHtml = prov.length
+                ? '<div style="margin-top:4px;font-size:9.5px;color:#5f7079;font-family:\'JetBrains Mono\',monospace;">' + prov.join(' · ') + '</div>'
+                : '';
+            const style = h.identity === 'name-match' ? 'border-color:var(--success);' : h.identity === 'name-mismatch' ? 'opacity:0.55;' : '';
             return '<div class="social-card" style="' + style + '">' +
                 '<div class="site">' + escapeHtml(h.site) + confBadge(h.confidence) + ident + ' <span class="cat-tag">(' + escapeHtml(h.category) + ')</span></div>' +
                 dn +
                 '<a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(h.url) + '</a>' +
                 (contacts.length ? '<div style="margin-top:4px;font-size:11px;color:var(--text-secondary);display:flex;gap:10px;flex-wrap:wrap;">' + contacts.join('') + '</div>' : '') +
+                provHtml +
                 '</div>';
         }
         function renderBreachCard(b) {
@@ -1961,6 +2080,38 @@
                 limits: ['These run UNGATED — no approval prompt, no risk tier. Read them before running: they are as powerful as adb itself.', 'The report contains real personal data. It lands in the vault, so handle the vault accordingly.'],
                 fix: ['Permission denied → the chmod step above. Device not found → adb devices.'],
             },
+            'DOMAIN & IP INFRASTRUCTURE': {
+                what: 'Answers "what IS this thing on the internet?" rather than "who is this person". Paste a domain, a URL, or a public IPv4 and it runs nine keyless public databases at once: RDAP registration data, Certificate Transparency subdomain discovery, the full DNS record set, urlscan.io scan history, and — for an IP — Shodan exposed services, RIPEstat BGP routing, OTX threat pulses and blocklist.de abuse counters.',
+                needs: ['A domain, a full URL (the scheme and path are stripped for you), or a public IPv4 address.', 'Nothing to configure. No API key, no account, no rate-limit setup.'],
+                steps: ['Paste the target into the top field and press INVESTIGATE. The target type is detected automatically.', 'Read the source chips first: each one says ✓ with a timing, — with a reason when a source genuinely has no data, or ✗ when the source was blocked or unreachable.', 'Certificate Transparency is usually the highest-yield block — it lists names the DNS zone does not expose.', 'Scan history shows who has publicly loaded the domain, and from where.'],
+                out: ['Registration: registrar, creation and expiry dates, nameservers, EPP status flags.', 'Subdomains from CT logs (thousands for large domains — the list is capped and tells you when it is).', 'Every DNS record type including TXT, which is where verification tokens and third-party service bindings leak.', 'For an IP: open ports, hostnames, product CPEs, matched CVEs, the announcing ASN and holder, abuse contact, OTX pulses and abuse counters.'],
+                limits: ['A CT name proves a certificate was ISSUED, not that the host is live today. A name missing from CT is not hidden — it may predate CT logging or use a private CA.', 'A matched CVE is a database match against a product VERSION observed on that IP. Version banners are routinely stale or spoofed — this is not proof the host is exploitable, and it is not a licence to try.', 'A missing source is not a clean result. Every lane reports its own failure, and the banner names which ones did not answer.', 'crt.sh is genuinely slow (seconds to a minute) and frequently overloaded. It is given a long timeout on purpose; cutting that short manufactures fake "no subdomains" answers.'],
+                fix: ['If a source shows ✗, the shared egress was probably blocked — retry, or run the same target with the proxy off so the request leaves from your own connection.', 'If a huge domain returns 500 CT names, narrow the query to the sub-domain you actually care about.', 'If RDAP reports "no record", the domain may simply not be registered, or the TLD may have no RDAP service.'],
+            },
+            'WIFI ACCESS-POINT GEOLOCATION': {
+                what: 'Locate WiFi access points (BSSID/MAC) through Google\'s geolocation database, which is populated from the many Android devices that have reported their surroundings. Give one MAC for a rough answer or several neighbouring access points for a much tighter one, because accuracy improves sharply with each one added.',
+                needs: ['One or more access point MAC addresses (aa:bb:cc:dd:ee:ff). Dashes, spaces and bare 12-digit forms are all accepted.', 'Your OWN Google API key in T3MP3ST_GOOGLE_GEO_KEY, with the Geolocation API enabled for it. This platform deliberately ships no third-party key.', 'A network that has actually been observed — an AP nobody has ever reported has no position to give.'],
+                steps: ['Paste one MAC, or several separated by commas or spaces. More neighbouring APs = tighter fix.', 'Press LOCATE. The result is a latitude/longitude plus an accuracy radius in metres.', 'Click the maps link to open the point directly.'],
+                out: ['A latitude/longitude and an accuracy radius in metres, plus how many access points contributed.'],
+                limits: ['This is an estimated COVERAGE AREA derived from where those access points have been observed — not a live device fix. The network may have moved since it was last seen.', 'A single MAC gives a coarse position. Several nearby APs are what make the answer usable.', 'An AP that has never been reported has no position, and no accuracy radius can be invented for one.', 'With no key configured the button refuses and NO query is sent to Google — otherwise its 403 "unregistered callers" reply reads like "Google has no location for this network".'],
+                fix: ['A 403 means T3MP3ST_GOOGLE_GEO_KEY is missing, invalid, or does not have the Geolocation API enabled for that key.', 'A 400 naming the BSSID means the MAC is malformed — check it is six hex octets.', 'A zero-accuracy or very large radius means the access point is not in Google\'s database; try additional neighbouring APs.'],
+            },
+            'GOOGLE APP LINKAGE & WIFI GEO': {
+                what: 'Two separate things behind one tab. FIRST: app linkage — a website publishes, at a standard path, the Android apps it vouches for and the other domains it delegates to; Google indexes that and serves it keyless, with no account. This finds SSO/auth infrastructure that a subdomain scan misses. SECOND: WiFi access-point geolocation — a BSSID/MAC lookup against Google\'s geolocation database, returning a position and an accuracy radius.',
+                needs: ['App linkage: just a domain. No API key, no Google account, no sign-in.', 'WiFi geolocation: your OWN Google API key in T3MP3ST_GOOGLE_GEO_KEY, with the Geolocation API enabled for it. This platform deliberately ships no third-party key, and sends no query when it is unset.', 'Only for targets you own or are authorised to investigate.'],
+                steps: ['Paste a domain and press MAP LINKAGE. Large domains resolve in seconds; the query can take a moment.', 'Read ASSOCIATED DOMAINS first — that is the highest-yield block. A domain naming its own auth or SSO host is telling you what it trusts.', '★ on an app means it holds handle_all_urls, i.e. it may act as this site everywhere. That is the "official app" signal.', 'SHARED SIGNING CERTIFICATES groups apps signed by the same key — usually one organisation shipping a branded app, a white-label build and a companion app under three package names.', 'For WiFi, paste one MAC for a rough answer or several neighbouring access points for a much tighter one, then LOCATE.'],
+                out: ['Every Android package the domain vouches for, its SHA-256 signing certificate, and the relation it holds.', 'The other domains this one delegates to — SSO/auth infrastructure and rebrand survivors.', 'iOS bundle ids when you tick the box.', 'Apps grouped by shared signing certificate. For WiFi: a latitude/longitude and an accuracy radius in metres.'],
+                limits: ['CRITICAL: an app listed for a domain is the DOMAIN PUBLISHER\'S CLAIM. It is not an endorsement by Google, and a hostile domain can claim any package name it likes. A match says a domain vouches for an app, not that the app is safe or genuine.', 'The WiFi answer is an estimated coverage area derived from where those access points have been OBSERVED — not a live device fix. A network may have moved since it was last seen, and one MAC alone is coarse.', 'Ticking the iOS box is the ONLY request in this tool that touches the subject\'s own origin; it fetches /.well-known/apple-app-site-association from that site. Everything else is read from Google\'s index.', 'No reverse lookup: given an app package, this will NOT tell you which domains it vouches for. Google\'s API answers HTTP 200 with an empty statement list for every app tested, so that lane was left out rather than shipped returning nothing for everything.', 'No subdomains here. Use Certificate Transparency in the INFRASTRUCTURE tab for that.'],
+                fix: ['If WiFi geolocation refuses with a 403, T3MP3ST_GOOGLE_GEO_KEY is missing, invalid, or does not have the Geolocation API enabled for that key.', 'If the chip reads "status unavailable", the server route is not running this build — restart the server.', 'If a domain returns no apps at all, it may genuinely publish no asset links. The line under the table says so explicitly rather than showing a blank panel.'],
+            },
+            'HASH IDENTIFICATION': {
+                what: 'Identifies a FILE from its MD5, SHA1, SHA256 or SHA512 hash against the CIRCL known-file database.',
+                needs: ['A file hash — compute one with PowerShell (Get-FileHash), shasum -a 256 <file>, or sha256sum.'],
+                steps: ['Paste the hash and press IDENTIFY.', 'If it matches, you get the original filename, size, MIME type and which OS package it ships with.'],
+                out: ['Filename, size in bytes, MIME type, the operating system package it belongs to, and the database confidence score.'],
+                limits: ['THIS IS NOT A MALWARE DATABASE. It answers "what is this file" and "is it known-good software" — never "is this malicious". A match says the file is recognized. For a malware verdict you need a sandbox.', 'A "known-good" flag means the file appears in the NIST Software Reference Library, which catalogs legitimate software.', 'No match is a normal result, not an error. Plenty of files — malware especially — are not in the database.'],
+                fix: ['If nothing is found and the file came from an incident, that absence is expected; correlate with the DFIR timeline rather than reading it as benign.'],
+            },
             'SITE CATALOG & AGENT TOOLS': {
                 what: 'The full list of platforms the sweep knows about, with provenance (hand-curated vs Sherlock-derived), plus every OSINT tool the agents can call.',
                 needs: ['Nothing.'],
@@ -1977,7 +2128,7 @@
         // the title, not part of it, and textContent would otherwise fold them in.
         function helpKeyFor(text) {
             return String(text || '')
-                .replace(/[←-⯿\u{1F000}-\u{1FAFF}\u{FE0F}]/gu, '')
+                .replace(/[\u2190-\u2BFF\u{1F000}-\u{1FAFF}]|\u{FE0F}/gu, '')
                 .replace(/\s+/g, ' ')
                 .trim()
                 .toUpperCase();
@@ -2074,6 +2225,7 @@
                 paneAndroid: 'ADB device triage, dumpsys, Wi-Fi radar, secret codes and the gated lock probe.',
                 panePerms: 'Build candidate handles from a name — the input for a username sweep.',
                 paneSites: 'The full platform inventory with provenance, plus every OSINT tool the agents can call.',
+                paneGoogle: 'Digital Asset Links: which apps a domain vouches for, and the SSO/auth domains it delegates to. Plus WiFi BSSID geolocation.',
             };
             document.querySelectorAll('.tool-tab[data-pane]').forEach(function (t) {
                 var tip = tabHelp[t.dataset.pane];
@@ -2106,7 +2258,10 @@
          ['panePhone', 'runPhone'], ['paneDorks', 'runDorks'], ['paneDarkweb', 'runLeakCheck'],
          ['paneDarkweb', 'runOnionSearch'], ['paneDarkweb', 'runOnionFetch'],
          ['paneBreach', 'runLeakcheckIo'], ['paneBreach', 'runInfostealerCheck'], ['paneBreach', 'runBreachCatalog'],
-         ['panePerms', 'runPermutations'], ['paneSites', 'loadSites'], ['paneAndroid', 'runAndroidForensics']].forEach(function (pair) {
+         // Was 'runPermutations', which does not exist — opening the PERMUTATIONS tab threw a
+        // ReferenceError. The function has always been named runPerms.
+        ['panePerms', 'runPerms'], ['paneSites', 'loadSites'], ['paneAndroid', 'runAndroidForensics'],
+ ['paneGoogle', 'runGoogleLinkage'], ['paneGoogle', 'runGoogleWifi']].forEach(function (pair) {
             const name = pair[1];
             if (typeof window[name] === 'function') window[name] = withBusy(pair[0], window[name]);
         });
@@ -2141,17 +2296,69 @@
             hint.textContent = bits.join(' · ') + ' — ' + m.skipped.length + ' POST-only entries not mapped (' + escapeHtml(m.skipped.join(', ')) + ')';
         }
 
+        // ── Run state: live indicator, elapsed clock, and a real STOP ──
+        // A single-handle curated sweep measured 105-176s on this box, and a deep sweep longer
+        // still. Without an indicator + clock the panel simply looks frozen, and there was no
+        // way to stop it at all. The Stop aborts the CLIENT fetch: the server finishes whatever
+        // sweep is in flight, so "stopped" honestly means "we stopped waiting", not "the probes
+        // ceased" — the UI says so rather than implying the work vanished.
+        let sweepAbort = null;
+        let sweepClockTimer = null;
+        let sweepStartedAt = 0;
+
+        function sweepStatusShow(label) {
+            const el = document.getElementById('sweepStatus');
+            if (el) el.style.display = 'flex';
+            const lbl = document.getElementById('sweepStatusLabel');
+            if (lbl) lbl.textContent = label;
+            sweepStartedAt = Date.now();
+            const clock = document.getElementById('sweepStatusClock');
+            if (clock) clock.textContent = '0s';
+            clearInterval(sweepClockTimer);
+            sweepClockTimer = setInterval(function () {
+                const c = document.getElementById('sweepStatusClock');
+                if (!c) return;
+                const s = Math.floor((Date.now() - sweepStartedAt) / 1000);
+                c.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+            }, 500);
+        }
+        function sweepStatusHide() {
+            const el = document.getElementById('sweepStatus');
+            if (el) el.style.display = 'none';
+            clearInterval(sweepClockTimer);
+            sweepClockTimer = null;
+        }
+        function sweepIsAborted(e) {
+            return e && (e.name === 'AbortError' || /aborted|abort/i.test(String(e.message || '')));
+        }
+        window.stopSweep = function () {
+            if (!sweepAbort) { toast('Nothing is running', 'info'); return; }
+            sweepAbort.abort();
+            const lbl = document.getElementById('sweepStatusLabel');
+            if (lbl) lbl.textContent = 'Stopped — waiting for the in-flight probe to unwind…';
+            const b = document.getElementById('sweepStopBtn');
+            if (b) b.disabled = true;
+        };
+
         async function runSweep() {
             const username = document.getElementById('sweepUser').value.trim();
             const out = document.getElementById('sweepOut');
             if (!username) { toast('Enter a username', 'error'); return; }
             const catalog = document.getElementById('sweepCatalog').value;
             const includeAdult = document.getElementById('sweepAdult').checked;
+            // The name hint was NEVER sent from this pane, so every account rendered as
+            // "handle-only" and identity corroboration looked permanently broken.
+            const name = (document.getElementById('sweepName') || {}).value;
+            // "Follow cross-links" turns the one-pass probe into the real investigation.
+            if ((document.getElementById('sweepDeepRounds') || {}).checked) return runDeepSweep();
             out.innerHTML = '<div class="dossier-empty">◈ Sweeping ' + escapeHtml(username) + ' across the ' + escapeHtml(catalog) + ' catalog…</div>';
+            sweepAbort = new AbortController();
+            sweepStatusShow('Sweeping @' + username + ' (' + catalog + ')…');
             try {
-                const d = await api('/api/osint/username-sweep', { username, catalog: catalog, includeAdult: includeAdult });
+                const d = await api('/api/osint/username-sweep', { username, catalog: catalog, includeAdult: includeAdult, name: name || undefined }, sweepAbort.signal);
                 const s = d.sweep;
                 let html = '<div class="dossier-section-title">📡 ' + escapeHtml(s.username) + ' — ' + s.found.length + ' FOUND / ' + s.absent + ' absent / ' + s.unknown.length + ' unknown <span class="count">' + s.checked + ' sites · ' + (s.durationMs / 1000).toFixed(1) + 's</span></div>';
+                if (!name) html += '<div class="hint-line" style="margin-top:6px;">⚠ No name supplied — every account is reported as <b>handle-only</b>. Enter the subject\'s full name above to separate them from a same-name stranger.</div>';
                 if (s.found.length) html += '<div class="social-grid">' + s.found.map(renderSocialCard).join('') + '</div>';
                 if (s.skippedByShape && s.skippedByShape.length) {
                     html += '<div class="hint-line" style="margin-top:8px;">not probed — the username cannot exist there (platform username rules): ' + escapeHtml(s.skippedByShape.join(', ')) + '</div>';
@@ -2161,7 +2368,97 @@
                 out.innerHTML = html;
                 toast(s.found.length + ' accounts found', s.found.length ? 'success' : '');
             } catch (e) {
-                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+                if (sweepIsAborted(e)) {
+                    out.innerHTML = '<div class="dossier-empty" style="color:#ffaa00;">⏹ Stopped by operator after '
+                        + Math.round((Date.now() - sweepStartedAt) / 1000) + 's. Partial results were discarded — the probe is per-site, '
+                        + 'so a stopped sweep has nothing trustworthy to show. Re-run to get a complete result.</div>';
+                } else {
+                    out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+                }
+            } finally {
+                sweepAbort = null;
+                sweepStatusHide();
+            }
+        }
+
+        // ── DEEP SWEEP: the iterative, cross-linking investigation ──
+        // One pass that finds a handle proves nothing on its own. This sweeps the seed, reads the
+        // public Keybase identity graph and any link hub, harvests the handles those publish,
+        // sweeps THOSE, and finally clusters accounts that share real evidence.
+        async function runDeepSweep() {
+            const username = document.getElementById('sweepUser').value.trim();
+            const out = document.getElementById('sweepOut');
+            if (!username) { toast('Enter a username or email', 'error'); return; }
+            const catalog = document.getElementById('sweepCatalog').value;
+            const includeAdult = document.getElementById('sweepAdult').checked;
+            const name = (document.getElementById('sweepName') || {}).value;
+            const isEmail = username.indexOf('@') > 0;
+            out.innerHTML = '<div class="dossier-empty">🕸 Deep sweep of ' + escapeHtml(username) + ' — '
+                + (isEmail ? 'deriving handle candidates from the email local-part, then ' : '')
+                + 'probing, then reading cross-links (link hubs, published profile fields) and sweeping whatever they name. This takes longer than a plain sweep…</div>';
+            sweepAbort = new AbortController();
+            sweepStatusShow('Deep-sweeping ' + username + ' (rounds 2, ≤8 expansion handles)…');
+            try {
+                const d = await api('/api/osint/username-sweep/deep', {
+                    username, catalog, includeAdult, name: name || undefined,
+                    rounds: 2, maxExpansionHandles: 8,
+                }, sweepAbort.signal);
+                const r = d.result;
+                let html = '<div class="dossier-section-title">🕸 DEEP SWEEP — @' + escapeHtml(r.seed) + ' — ' + r.allAccounts.length + ' account(s) across ' + r.handlesTried.length + ' handle(s) <span class="count">' + (r.durationMs / 1000).toFixed(1) + 's</span></div>';
+
+                if (!name) html += '<div class="hint-line" style="margin-top:6px;">⚠ No name supplied — accounts can\'t be separated from a same-name stranger.</div>';
+
+                // Linked groups — the actual point of the whole exercise.
+                if (r.groups && r.groups.length) {
+                    html += '<div class="dossier-section-title" style="margin-top:12px;">🔗 LINKED GROUPS — accounts that look like ONE person</div><div class="social-grid">';
+                    r.groups.forEach(function (g) {
+                        var col = g.strength === 'strong' ? '#00ff88' : g.strength === 'medium' ? '#ffaa00' : '#9fb0bd';
+                        html += '<div class="social-card" style="border-color:' + col + '55;">'
+                            + '<div style="font-size:12px;font-weight:700;color:' + col + ';">' + escapeHtml(g.sites.join(' + ')) + '</div>'
+                            + '<div style="font-size:9.5px;color:#6b7a85;margin:3px 0 5px;">evidence strength: ' + escapeHtml(g.strength.toUpperCase()) + '</div>'
+                            + '<div style="font-size:10.5px;color:#9fb0bd;line-height:1.5;">' + g.evidence.map(function (e) { return '· ' + escapeHtml(e); }).join('<br>') + '</div></div>';
+                    });
+                    html += '</div>';
+                }
+
+                if (r.keybaseLinks && r.keybaseLinks.length) {
+                    html += '<div class="dossier-section-title" style="margin-top:12px;">🔑 KEYBASE — self-published identity links</div><div class="hint-line">';
+                    r.keybaseLinks.slice(0, 20).forEach(function (l) {
+                        html += '@' + escapeHtml(l.from) + ' → @' + escapeHtml(l.to) + ' <span class="count">' + escapeHtml(l.service) + ' · proof: ' + escapeHtml(l.proof) + '</span><br>';
+                    });
+                    html += '</div>';
+                }
+
+                if (r.harvested && r.harvested.length) {
+                    html += '<div class="dossier-section-title" style="margin-top:12px;">🧭 HANDLES DISCOVERED <span class="count">' + r.harvested.length + '</span></div><div class="hint-line">';
+                    r.harvested.slice(0, 30).forEach(function (h) {
+                        html += '@' + escapeHtml(h.handle) + ' <span class="count">via ' + escapeHtml(h.via) + '</span> — ' + escapeHtml(h.detail) + '<br>';
+                    });
+                    html += '</div>';
+                }
+
+                html += '<div class="dossier-section-title" style="margin-top:12px;">📡 ALL ACCOUNTS</div>';
+                if (r.allAccounts.length) html += '<div class="social-grid">' + r.allAccounts.map(renderSocialCard).join('') + '</div>';
+                else html += '<div class="dossier-empty">No accounts found for this seed.</div>';
+
+                if (r.caveats && r.caveats.length) {
+                    html += '<div class="hint-line" style="margin-top:8px;color:#ffaa00;">' + r.caveats.map(function (c) { return '! ' + escapeHtml(c); }).join('<br>') + '</div>';
+                }
+                out.innerHTML = html;
+                toast(r.allAccounts.length + ' accounts across ' + r.handlesTried.length + ' handle(s)', 'success');
+            } catch (e) {
+                if (sweepIsAborted(e)) {
+                    out.innerHTML = '<div class="dossier-empty" style="color:#ffaa00;">⏹ Deep sweep stopped by operator after '
+                        + Math.round((Date.now() - sweepStartedAt) / 1000) + 's.<br><br>'
+                        + 'A deep sweep builds its result <b>incrementally</b> — accounts, cross-links and clusters all arrive at the end, '
+                        + 'so a stopped run yields nothing partial worth trusting. The server also finishes the sweep it already had in flight, '
+                        + 'so stopping does not cancel the probes themselves. Re-run with a smaller catalog to get a complete answer faster.</div>';
+                } else {
+                    out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ Deep sweep failed: ' + escapeHtml(e.message) + '</div>';
+                }
+            } finally {
+                sweepAbort = null;
+                sweepStatusHide();
             }
         }
 
@@ -2385,6 +2682,275 @@
                 out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
             }
         }
+
+        // ═══════════════════════════════════════════════════════════════
+        // DOMAIN & IP INFRASTRUCTURE — keyless public-database lookups
+        // ═══════════════════════════════════════════════════════════════
+        function infraLane(lane, label) {
+            if (lane.ok && lane.data) return '<span class="src-chip" style="color:var(--success);border-color:var(--success);">' + escapeHtml(label) + ' ✓ ' + (lane.ms != null ? lane.ms + 'ms' : '') + '</span> ';
+            if (lane.ok) return '<span class="src-chip">' + escapeHtml(label) + ' — ' + escapeHtml(lane.note || 'no data') + '</span> ';
+            return '<span class="src-chip" style="color:var(--danger);border-color:var(--danger);">' + escapeHtml(label) + ' ✗ ' + escapeHtml(lane.note || 'failed') + '</span> ';
+        }
+
+        function infraFailedBanner(failed) {
+            if (!failed || !failed.length) return '';
+            return '<div class="hint-line" style="color:var(--warning);margin:10px 0 0;">⚠ ' + failed.length +
+                ' source(s) could not answer: <code style="color:var(--warning);">' + escapeHtml(failed.join(', ')) +
+                '</code> — the results below are incomplete, not "clean".</div>';
+        }
+
+        function googleRelationLabel(r) {
+            const map = {
+                'delegate_permission/common.handle_all_urls': 'handles all URLs',
+                'delegate_permission/common.get_login_creds': 'login credentials',
+                'delegate_permission/common.login_service': 'login service',
+                'browser_activity': 'browser activity',
+            };
+            return map[r] || r;
+        }
+
+        async function runGoogleLinkage() {
+            const raw = document.getElementById('googleTarget').value.trim();
+            const out = document.getElementById('googleOut');
+            if (!raw) { toast('Enter a domain', 'error'); return; }
+            const includeIos = document.getElementById('googleIosToggle').checked;
+            out.innerHTML = '<div class="loading">◌ reading Google\'s Digital Asset Links index…</div>';
+            try {
+                const res = await api('/api/osint/google/app-linkage', { domain: raw, includeIos });
+                out.innerHTML = renderGoogleLinkage(res.result);
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        function renderGoogleLinkage(r) {
+            if (!r) return '<div class="dossier-empty">No result.</div>';
+            let h = '<div class="dossier-section-title">🔗 ' + escapeHtml(r.website) + ' — APP LINKAGE <span class="count">' + r.ms + 'ms</span></div>';
+
+            if (r.failed && r.failed.length) {
+                h += '<div class="hint-line" style="color:var(--warning);margin:8px 0 0;">⚠ ' + r.failed.length +
+                    ' source(s) could not answer: <code style="color:var(--warning);">' + escapeHtml(r.failed.join(', ')) +
+                    '</code> — what follows is incomplete, not "clean".</div>';
+            }
+
+            // ---- Android apps
+            h += '<div class="dossier-section-title" style="margin-top:14px;">ANDROID APPS <span class="count">' + r.apps.length + '</span></div>';
+            if (r.apps.length) {
+                h += '<table class="ident-table" style="width:100%;margin-top:6px;"><tr><th>PACKAGE</th><th>SIGNING CERT (SHA-256)</th><th>RELATION</th></tr>';
+                for (const a of r.apps.slice(0, 60)) {
+                    h += '<tr><td>' + (a.firstParty ? '★ <b>' : '') + escapeHtml(a.packageName) + (a.firstParty ? '</b>' : '') + '</td>' +
+                        '<td style="font-family:monospace;font-size:10px;">' + escapeHtml(a.certFingerprint ? a.certFingerprint.slice(0, 23) + '…' : 'none published') + '</td>' +
+                        '<td>' + escapeHtml((a.relations || []).map(googleRelationLabel).join(', ') || '—') + '</td></tr>';
+                }
+                h += '</table>';
+                h += '<div class="hint-line" style="margin:6px 0 0;font-size:11px;">★ = holds <code>handle_all_urls</code>, i.e. the app may act as this site everywhere.</div>';
+            } else {
+                h += '<div class="hint-line" style="margin:6px 0 0;">' + escapeHtml(r.dalNote || 'no Android apps vouch for this domain.') + '</div>';
+            }
+
+            // ---- Associated domains: the actual reason this lane exists
+            if (r.associatedSites && r.associatedSites.length) {
+                h += '<div class="dossier-section-title" style="margin-top:18px;">ASSOCIATED DOMAINS <span class="count">' + r.associatedSites.length + ' — SSO / auth infrastructure</span></div>';
+                h += '<table class="ident-table" style="width:100%;margin-top:6px;"><tr><th>DOMAIN</th><th>RELATION</th></tr>';
+                for (const s of r.associatedSites.slice(0, 30)) {
+                    h += '<tr><td>' + escapeHtml(s.site) + '</td><td>' + escapeHtml((s.relations || []).map(googleRelationLabel).join(', ')) + '</td></tr>';
+                }
+                h += '</table>';
+            }
+
+            // ---- Cert clusters
+            const clusters = (r.certClusters || []).filter(c => c.packages && c.packages.length > 1);
+            if (clusters.length) {
+                h += '<div class="dossier-section-title" style="margin-top:18px;">SHARED SIGNING CERTIFICATES <span class="count">same publisher</span></div>';
+                h += '<div class="hint-line" style="margin:4px 0 6px;font-size:11px;">Two apps sharing a signing certificate are almost always the same organisation — one company shipping a branded app, a white-label build and a companion app under three package names.</div>';
+                for (const c of clusters) {
+                    h += '<div class="hint-line" style="margin:2px 0;font-family:monospace;font-size:11px;">' + escapeHtml(c.fingerprint.slice(0, 23)) + '… → <b>' + escapeHtml(c.packages.join(', ')) + '</b></div>';
+                }
+            }
+
+            // ---- iOS
+            if (r.iosApps && r.iosApps.length) {
+                h += '<div class="dossier-section-title" style="margin-top:18px;">iOS APPS <span class="count">' + r.iosApps.length + '</span></div>';
+                for (const i of r.iosApps.slice(0, 20)) {
+                    h += '<div class="hint-line" style="margin:2px 0;font-family:monospace;font-size:11px;">' + escapeHtml(i.appId) +
+                        (i.components && i.components.length ? ' <span style="opacity:.7;">→ ' + escapeHtml(i.components.slice(0, 5).join(' ')) + (i.components.length > 5 ? ' …' : '') + '</span>' : '') + '</div>';
+                }
+            } else if (r.wellKnown && r.wellKnown.note) {
+                h += '<div class="hint-line" style="margin:12px 0 0;font-size:11px;opacity:.85;">iOS: ' + escapeHtml(r.wellKnown.note) + '</div>';
+            }
+
+            return h;
+        }
+
+        async function runGoogleWifi() {
+            const raw = document.getElementById('googleBssid').value.trim();
+            const out = document.getElementById('googleWifiOut');
+            if (!raw) { toast('Enter one or more access point MAC addresses', 'error'); return; }
+            out.innerHTML = '<div class="loading">◌ locating…</div>';
+            try {
+                const res = await api('/api/osint/google/wifi-locate', { bssids: raw });
+                const g = res.result || {};
+                out.innerHTML = '<div class="dossier-section-title">📡 ' + escapeHtml(String(g.lat)) + ', ' + escapeHtml(String(g.lng)) + '</div>' +
+                    '<div class="hint-line" style="margin:6px 0;">accuracy radius <b>' + escapeHtml(String(g.accuracyMeters ?? '?')) + ' m</b> from ' + escapeHtml(String(g.observations)) + ' access point(s)</div>' +
+                    '<div class="hint-line" style="margin:6px 0;font-size:11px;color:var(--warning);">This is an estimated coverage area derived from where these access points have been observed — <b>not a live device fix</b>. The network may have moved.</div>' +
+                    '<div class="hint-line" style="margin-top:6px;font-size:11px;">Open in maps: <a href="https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(g.lat + ',' + g.lng) + '" target="_blank" rel="noopener">' + escapeHtml(String(g.lat) + ',' + String(g.lng)) + '</a></div>';
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function loadGoogleStatus() {
+            const chip = document.getElementById('googleStatusChip');
+            const note = document.getElementById('googleIosNote');
+            try {
+                const s = await api('/api/osint/google/status');
+                if (chip) chip.textContent = s.source + ' · app linkage keyless · wifi ' + (s.wifiLocate.configured ? '✓ keyed' : '🔒 needs key');
+                if (note) note.textContent = s.appLinkage.configured
+                    ? 'off — Google returns Android targets only'
+                    : 'off';
+            } catch (e) {
+                if (chip) chip.textContent = 'status unavailable';
+            }
+        }
+
+        async function runInfra() {
+            const raw = document.getElementById('infraTarget').value.trim();
+            const out = document.getElementById('infraOut');
+            if (!raw) { toast('Enter a domain or public IPv4', 'error'); return; }
+            out.innerHTML = '<div class="loading">◌ querying public databases…</div>';
+            const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(raw.replace(/^https?:\/\//, '').split('/')[0].split(':')[0]);
+            try {
+                const res = isIp
+                    ? await api('/api/osint/infra/ip', { ip: raw })
+                    : await api('/api/osint/infra/domain', { domain: raw });
+                const r = res.result;
+                if (isIp) out.innerHTML = renderInfraIp(r);
+                else out.innerHTML = renderInfraDomain(r);
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        function renderInfraDomain(r) {
+            let h = '<div class="dossier-section-title">🏗️ ' + escapeHtml(r.domain) + ' — INFRASTRUCTURE <span class="count">' + r.ms + 'ms</span></div>';
+            h += '<div style="margin:8px 0 12px;">' +
+                infraLane(r.rdap, 'RDAP') + infraLane(r.crt, 'crt.sh') + infraLane(r.dns, 'DNS') +
+                infraLane(r.urlscan, 'urlscan') + infraLane(r.otx, 'OTX') + '</div>';
+            h += infraFailedBanner(r.failed);
+
+            if (r.rdap.data) {
+                const d = r.rdap.data;
+                const ev = (a) => { const e = d.events.find(x => x.action === a); return e ? e.date.slice(0, 10) : '?'; };
+                h += '<div class="panel" style="margin:0 0 12px;"><div class="panel-body"><table style="width:100%;border-collapse:collapse;">';
+                h += '<tr><td style="padding:4px 8px;color:var(--text-secondary);">Registrar</td><td style="padding:4px 8px;">' + escapeHtml(d.registrar || '?') + '</td></tr>';
+                h += '<tr><td style="padding:4px 8px;color:var(--text-secondary);">Created / expires</td><td style="padding:4px 8px;">' + escapeHtml(ev('registration')) + ' → ' + escapeHtml(ev('expiration')) + '</td></tr>';
+                h += '<tr><td style="padding:4px 8px;color:var(--text-secondary);">Nameservers</td><td style="padding:4px 8px;">' + escapeHtml(d.nameservers.slice(0, 8).join(', ') || 'none published') + '</td></tr>';
+                h += '</table></div></div>';
+            }
+
+            if (r.crt.data) {
+                const s = r.crt.data;
+                h += '<div class="dossier-section-title">📜 CERTIFICATE TRANSPARENCY — ' + s.total + ' NAMES</div>';
+                if (s.note) h += '<div class="hint-line">' + escapeHtml(s.note) + '</div>';
+                h += '<div style="max-height:230px;overflow:auto;border:1px solid var(--border);border-radius:5px;padding:8px;margin-top:6px;font-family:\'JetBrains Mono\',monospace;font-size:11.5px;">' +
+                    s.subdomains.map(x => escapeHtml(x)).join('<br>') + '</div>';
+                h += '<div class="hint-line" style="margin-top:6px;">CT proves a certificate was issued. A name here is not necessarily live, and a name <i>not</i> here is not hidden — it may just predate CT logging.</div>';
+            }
+
+            const recs = r.dns.data && r.dns.data.records;
+            if (recs && Object.keys(recs).length) {
+                h += '<div class="dossier-section-title">🌐 DNS RECORDS</div>';
+                if (r.dns.data.nxdomain) h += '<div class="hint-line" style="color:var(--warning);">NXDOMAIN — this name does not resolve at all.</div>';
+                for (const k of Object.keys(recs)) {
+                    h += '<div style="margin:6px 0;"><code style="color:var(--accent);">' + escapeHtml(k) + '</code><div style="font-family:\'JetBrains Mono\',monospace;font-size:11.5px;color:var(--text-secondary);word-break:break-all;">' +
+                        recs[k].map(x => escapeHtml(x)).join('<br>') + '</div></div>';
+                }
+                h += '<div class="hint-line">TXT records frequently leak verification tokens, mail providers and third-party service bindings — read them.</div>';
+            }
+
+            if (r.urlscan.data && r.urlscan.data.hits.length) {
+                h += '<div class="dossier-section-title">🌐 SCAN HISTORY — ' + r.urlscan.data.total + ' PUBLIC SCANS</div>';
+                h += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+                for (const hit of r.urlscan.data.hits) {
+                    h += '<tr style="border-top:1px solid var(--border);"><td style="padding:5px 6px;">' + escapeHtml(hit.url) + '</td>' +
+                        '<td style="padding:5px 6px;color:var(--text-secondary);">' + escapeHtml(hit.status || '') + '</td>' +
+                        '<td style="padding:5px 6px;color:var(--text-secondary);">' + escapeHtml(hit.ip || '') + '</td>' +
+                        '<td style="padding:5px 6px;color:var(--text-secondary);">' + escapeHtml(hit.asnname || '') + '</td></tr>';
+                }
+                h += '</table><div class="hint-line">Third-party recorded loads of this domain — who visited, from where, when.</div>';
+            }
+
+            if (r.otx.data) {
+                h += '<div class="dossier-section-title">🛡️ OTX THREAT PULSES — ' + r.otx.data.pulseCount + '</div>';
+                if (r.otx.data.pulses.length) {
+                    for (const p of r.otx.data.pulses.slice(0, 8)) {
+                        h += '<div class="hint-line">• ' + escapeHtml(p.name) + (p.created ? ' — ' + escapeHtml(p.created.slice(0, 10)) : '') + '</div>';
+                    }
+                }
+            }
+            return h;
+        }
+
+        function renderInfraIp(r) {
+            let h = '<div class="dossier-section-title">🏗️ ' + escapeHtml(r.ip) + ' — INFRASTRUCTURE <span class="count">' + r.ms + 'ms</span></div>';
+            h += '<div style="margin:8px 0 12px;">' +
+                infraLane(r.shodan, 'Shodan') + infraLane(r.ripe, 'RIPEstat') +
+                infraLane(r.otx, 'OTX') + infraLane(r.blocklist, 'blocklist.de') + '</div>';
+            h += infraFailedBanner(r.failed);
+
+            if (r.shodan.data) {
+                const d = r.shodan.data;
+                h += '<div class="dossier-section-title">🔌 EXPOSED SERVICES — ' + d.ports.length + ' PORTS</div>';
+                h += '<div style="font-family:\'JetBrains Mono\',monospace;font-size:12px;">' + d.ports.map(p => escapeHtml(String(p))).join(' · ') + '</div>';
+                if (d.hostnames.length) h += '<div class="hint-line">Hostnames: ' + escapeHtml(d.hostnames.slice(0, 10).join(', ')) + '</div>';
+                if (d.vulns.length) {
+                    h += '<div class="dossier-section-title" style="margin-top:14px;">⚠ KNOWN CVEs MATCHED — ' + d.vulns.length + '</div>';
+                    h += '<div style="font-family:\'JetBrains Mono\',monospace;font-size:11.5px;color:var(--warning);">' + d.vulns.map(v => escapeHtml(v)).join(' · ') + '</div>';
+                    h += '<div class="hint-line" style="color:var(--warning);"><b>These are Shodan database matches against a product version observed on this IP</b> — not proof the host is exploitable today. Version banners are frequently stale or spoofed. Verify before acting.</div>';
+                }
+                if (d.cpes.length) h += '<div class="hint-line">CPEs: ' + escapeHtml(d.cpes.slice(0, 6).join(', ')) + '</div>';
+            }
+
+            if (r.ripe.data) {
+                const d = r.ripe.data;
+                h += '<div class="dossier-section-title">🌍 BGP ROUTING</div>';
+                h += '<div style="font-family:\'JetBrains Mono\',monospace;font-size:12px;">' + escapeHtml(d.prefix || '?') + ' → ' + escapeHtml(d.asn || '?') + ' · ' + escapeHtml(d.holder || 'unknown holder') + '</div>';
+                if (d.abuseEmail) h += '<div class="hint-line">Abuse contact: ' + escapeHtml(d.abuseEmail) + '</div>';
+                if (d.announced === false) h += '<div class="hint-line" style="color:var(--warning);">This prefix is NOT currently announced in BGP — the address is not routed.</div>';
+            }
+
+            if (r.otx.data) h += '<div class="dossier-section-title">🛡️ OTX — ' + r.otx.data.pulseCount + ' PULSE(S)</div>';
+            if (r.blocklist.data) {
+                h += '<div class="dossier-section-title">🚫 ABUSE COUNTERS</div>';
+                h += '<div style="font-family:\'JetBrains Mono\',monospace;font-size:12px;">' + r.blocklist.data.attacks + ' attack(s) · ' + r.blocklist.data.reports + ' report(s) — ' + (r.blocklist.data.listed ? 'LISTED' : 'not listed') + '</div>';
+            }
+            return h;
+        }
+
+        async function runInfraHash() {
+            const hash = document.getElementById('infraHash').value.trim();
+            const out = document.getElementById('infraHashOut');
+            if (!hash) { toast('Enter a file hash', 'error'); return; }
+            out.innerHTML = '<div class="loading">◌ looking up…</div>';
+            try {
+                const res = await api('/api/osint/infra/hash', { hash });
+                if (!res.found) {
+                    out.innerHTML = '<div class="dossier-empty">' + escapeHtml(res.note || 'not found') + '</div>';
+                    return;
+                }
+                const d = res.result;
+                let h = '<table style="width:100%;border-collapse:collapse;">';
+                const row = (k, v) => { if (v === undefined || v === null || v === '') return ''; return '<tr><td style="padding:4px 8px;color:var(--text-secondary);width:150px;">' + escapeHtml(k) + '</td><td style="padding:4px 8px;font-family:\'JetBrains Mono\',monospace;font-size:11.5px;word-break:break-all;">' + escapeHtml(String(v)) + '</td></tr>'; };
+                h += row('Filename', d.fileName) + row('Size', d.fileSize != null ? d.fileSize + ' bytes' : '') + row('MIME type', d.mimeType) +
+                     row('Ships with', d.os) + row('Confidence', d.trust) +
+                     row('Known-good', d.knownGood ? 'yes — listed in the NIST Software Reference Library' : '') + '</table>';
+                h += '<div class="hint-line" style="margin-top:8px;color:var(--warning);">This database <b>identifies</b> files. A match is not a malware verdict — use a sandbox for that.</div>';
+                out.innerHTML = h;
+            } catch (e) {
+                out.innerHTML = '<div class="dossier-empty" style="color:var(--danger);">✗ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
 
         async function runPerms() {
             const first = document.getElementById('permFirst').value.trim();
@@ -3251,6 +3817,7 @@
             loadDumpStatus();
             loadTorStatus();
             refreshAndroidStatus();
+            loadGoogleStatus();
             injectHelpButtons();
             // Esc closes the help modal from anywhere on the page.
             document.addEventListener('keydown', function (ev) {

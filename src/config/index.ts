@@ -292,12 +292,35 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
       capabilities: ['reasoning', 'code', 'analysis', 'uncensored', 'tools'],
     },
     {
-      id: 'venice-uncensored',
-      name: 'Venice Uncensored',
+      // NOTE: the bare id `venice-uncensored` was here for months and is NOT a real Venice model
+      // tag — the live catalog serves `venice-uncensored-1-2` and `venice-uncensored-role-play`.
+      // A retired id in the static list is worse than a missing one: it is offered as a choice
+      // and then fails at call time. These ids are verified against a live /models response.
+      id: 'venice-uncensored-1-2',
+      name: 'Venice Uncensored 1.2',
       provider: 'Venice',
-      contextWindow: 32768,
+      contextWindow: 128000,
       maxOutput: 8192,
       capabilities: ['reasoning', 'uncensored'],
+    },
+    {
+      id: 'venice-uncensored-role-play',
+      name: 'Venice Uncensored (Role-Play)',
+      provider: 'Venice',
+      contextWindow: 128000,
+      maxOutput: 8192,
+      capabilities: ['reasoning', 'uncensored'],
+    },
+    {
+      // Known limitation, documented rather than hidden: this tag accepts a `tools` array but
+      // answers in prose with an EMPTY tool_calls array despite the catalog claiming
+      // function-calling — it is chat-only. For agentic work use e2ee-glm-5-3-flash below.
+      id: 'e2ee-glm-5-3-flash',
+      name: 'E2EE GLM 5.3 Flash (1M · tool-calling)',
+      provider: 'Venice',
+      contextWindow: 1000000,
+      maxOutput: 32000,
+      capabilities: ['reasoning', 'code', 'analysis', 'agents', 'tools'],
     },
   ],
 

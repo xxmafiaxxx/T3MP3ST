@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="manifest" href="manifest.webmanifest">
     <title>T3MP3ST — Settings</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
@@ -3642,12 +3644,16 @@
                                 <select class="form-input" id="uacProvider" onchange="uacLoadProvider()">
                                     <option value="openrouter">OpenRouter · OpenAI-compatible</option>
                                     <option value="venice">Venice · OpenAI-compatible</option>
-                                    <option value="openai">OpenAI · OpenAI-compatible</option>
-                                    <option value="nanogpt">NanoGPT · OpenAI-compatible</option>
-                                    <option value="novita">Novita AI · OpenAI-compatible</option>
-                                    <option value="anthropic">Claude · Anthropic Messages API</option>
-                                    <option value="ollama">Ollama · Local, keyless (native API)</option>
+                                    <option value="huggingface">Hugging Face · OpenAI-compatible</option>
+                                    <option value="openai" data-direct="0">OpenAI · key stored, not used for browser calls</option>
+                                    <option value="nanogpt" data-direct="0">NanoGPT · key stored, not used for browser calls</option>
+                                    <option value="novita" data-direct="0">Novita AI · key stored, not used for browser calls</option>
+                                    <option value="anthropic" data-direct="0">Claude · key stored, not used for browser calls</option>
+                                    <option value="ollama" data-direct="0">Ollama · local, use Settings → 🖥️ Local Model</option>
                                 </select>
+                                <div style="font-size:10.5px; color:#6b7a85; margin-top:5px; line-height:1.45;" id="uacProviderNote">
+                                    Browser-direct calls use <b>OpenRouter</b>, <b>Venice</b>, or <b>Hugging Face</b>. The other keys are stored and used by server-side missions, but a browser mission still routes through one of the three above.
+                                </div>
                             </div>
                             <div class="form-group">
                                 <label style="display:block; font-size:12px; color:#9fb0bd; margin-bottom:6px; font-weight:600;">Base URL <span style="color:#6b7a85; font-weight:400;">— optional, blank uses the provider default</span></label>
@@ -3908,7 +3914,7 @@
                                 <button id="localAgentsRefreshBtn" onclick="detectLocalAgents()" style="padding:11px 18px; font-size:13px; font-weight:600; background:rgba(255,255,255,0.05); border:1px solid rgba(0,200,255,0.3); border-radius:8px; color:#bcd; cursor:pointer;">↻ Re-scan</button>
                                 <button id="customAgentToggleBtn" onclick="toggleCustomAgentForm()" title="Enlist any other local CLI (llamafile, a wrapper, your own agent) as a backbone" style="padding:11px 18px; font-size:13px; font-weight:600; background:rgba(160,90,255,0.1); border:1px solid rgba(160,90,255,0.4); border-radius:8px; color:#c9b3ff; cursor:pointer;">➕ Custom</button>
                                 <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:11.5px; color:#8a99a5; font-weight:600;">
-                                    <input type="checkbox" id="localAgentsDeepPing" style="accent-color:#2fd6ff;">
+                                    <input type="checkbox" id="localAgentsDeepPing" onchange="storeDeepPing(this.checked)" style="accent-color:#2fd6ff;">
                                     <span title="On connect, send a real one-shot prompt to confirm the agent actually responds (spends a little of that agent's quota).">live-ping on connect</span>
                                 </label>
                             </div>
@@ -3940,6 +3946,24 @@
                     <div class="settings-section">
                         <h2 class="settings-title">🤖 Model Selection</h2>
                         <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">Select your preferred AI model for agent operations</p>
+                        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; padding:10px 12px; background:rgba(0,200,255,0.05); border:1px solid rgba(0,200,255,0.22); border-radius:8px;">
+                            <label for="modelProviderSelect" style="font-size:11px; font-weight:700; color:#7f90a0; text-transform:uppercase; letter-spacing:0.5px;">Provider</label>
+                            <select id="modelProviderSelect" onchange="switchModelProvider(this.value)"
+                                style="flex:1; min-width:170px; padding:8px 10px; background:rgba(0,0,0,0.35); border:1px solid rgba(0,200,255,0.35); border-radius:6px; color:#dbe6ea; font-size:12px; font-family:'JetBrains Mono',monospace; cursor:pointer;">
+                                <option value="openrouter">OpenRouter</option>
+                                <option value="venice">Venice</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="xai">xAI</option>
+                                <option value="gemini">Gemini</option>
+                                <option value="nanogpt">NanoGPT</option>
+                                <option value="novita">Novita</option>
+                                <option value="deepseek">DeepSeek</option>
+                                <option value="huggingface">HuggingFace</option>
+                                <option value="litellm">LiteLLM</option>
+                            </select>
+                            <span id="modelProviderSource" style="font-size:10.5px; color:#6b7a85;">—</span>
+                        </div>
                         <div class="model-selector" id="modelSelector">
                             <div style="color: var(--text-muted); padding: 20px; text-align: center;">Loading models...</div>
                         </div>
@@ -3951,7 +3975,7 @@
                             <div style="display: flex; gap: 8px; align-items: center;">
                                 <select id="fallbackModelSelect" onchange="saveFallbackModel()"
                                     style="flex: 1; padding: 8px 12px; background: rgba(0,0,0,0.3); border: 1px solid #444; border-radius: 6px; color: #fff; font-size: 12px; font-family: 'JetBrains Mono', monospace;">
-                                    <!-- options injected by renderFallbackModel() from the same MODELS list -->
+                                    <!-- options injected by renderFallbackModel() from the same list the picker shows -->
                                 </select>
                             </div>
                         </div>
@@ -5219,6 +5243,16 @@ Correlating findings across agents, identifying patterns, producing actionable i
                 try { if (typeof fn === 'function') fn(); }
                 catch (e) { console.error(`${name} error:`, e); addSystemError(name, e.message); }
             });
+
+            // The Model Selection list is per-provider now, so it has to be fetched after the
+            // renders above (which paint the static OpenRouter list immediately, so the panel is
+            // never blank) and then swapped for the selected provider's real catalog.
+            try {
+                const p = (state.settings && state.settings.activeProvider) || 'openrouter';
+                const provSel = document.getElementById('modelProviderSelect');
+                if (provSel) provSel.value = p;
+                switchModelProvider(p);
+            } catch (e) { console.error('model provider init error:', e); }
 
             // Mark as connected
             setTimeout(() => {
@@ -7433,21 +7467,120 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             else boot();
         })();
 
+        // The picker used to render ONE hardcoded list of 34 OpenRouter `vendor/model` ids, and
+        // nothing said so — so a Venice (or Anthropic, or xAI) user saw an "AI model" list that
+        // could never contain their models and concluded the app had lost them. The list is now
+        // per-provider: pick a provider, and the server returns THAT provider's catalog (live from
+        // its /models endpoint, falling back to the built-in list when no key is configured).
+        // The fallback-model dropdown is built from this same array, so the two can never disagree
+        // about which models exist.
+        let activeModelProvider = 'openrouter';
+        let activeModels = MODELS.slice();
+        window.MODELS_FOR_PICKER = function () { return activeModels; };
+
+        function applyModelList(models, source) {
+            activeModels = (models && models.length) ? models : [];
+            const src = document.getElementById('modelProviderSource');
+            if (src) {
+                const n = activeModels.length;
+                src.textContent = n
+                    ? `${n} model${n === 1 ? '' : 's'} · ${source === 'live' ? 'live from provider' : 'built-in list — add a key for the full catalog'}`
+                    : 'No models returned for this provider';
+                src.style.color = n ? '#6b7a85' : '#ff8800';
+            }
+            renderModels();
+            renderFallbackModel();
+        }
+
+        window.switchModelProvider = async function (provider) {
+            activeModelProvider = provider || 'openrouter';
+            // Only persist on an actual change — this also runs on every page load, and writing
+            // state on each load would mark the config dirty for a change nobody made.
+            // Writes the EXISTING activeProvider key, not a private one: two provider keys let the
+            // Model Selection panel and the API-provider panel disagree (that is how the page ended
+            // up on provider "novita" with a Venice model selected, and neither was usable).
+            try {
+                if (state.settings && state.settings.activeProvider !== activeModelProvider) {
+                    state.settings.activeProvider = activeModelProvider;
+                    saveState();
+                    // Keep the API-provider panel showing the same provider.
+                    const uacSel = document.getElementById('uacProvider');
+                    if (uacSel) { uacSel.value = activeModelProvider; if (typeof uacLoadProvider === 'function') uacLoadProvider(); }
+                }
+            } catch (e) { /* state not ready */ }
+            const container = document.getElementById('modelSelector');
+            if (container) container.innerHTML = '<div style="color: var(--text-muted); padding: 20px; text-align: center;">Loading ' + escHtml(activeModelProvider) + ' models…</div>';
+            // One automatic retry. A single transient failure (the page can load while the API
+            // server is mid-restart or busy) otherwise leaves the panel showing a hard error with
+            // no way forward but a manual reload — the same "it silently lost my models" feeling
+            // this panel is being fixed for.
+            let lastError = null;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                if (attempt > 0) {
+                    const s0 = document.getElementById('modelProviderSource');
+                    if (s0) s0.textContent = 'retrying…';
+                    await new Promise(r => setTimeout(r, 900));
+                }
+                try {
+                    const apiBase = (typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API.baseUrl) || '';
+                    const s = state.settings || {};
+                    const r = await fetch(apiBase + '/api/models', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            provider: activeModelProvider,
+                            apiKey: s[activeModelProvider + 'Key'] || '',
+                            baseUrl: s[activeModelProvider + 'BaseUrl'] || '',
+                        }),
+                        signal: AbortSignal.timeout(15000),
+                    });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const data = await r.json();
+                    const models = ((data && data.models) || []).map(m => ({
+                        id: m.id,
+                        name: m.name || m.id,
+                        provider: m.provider || activeModelProvider,
+                    }));
+                    applyModelList(models, data.source);
+                    return;
+                } catch (e) {
+                    lastError = e;
+                    console.warn('[model-picker] ' + activeModelProvider + ' fetch failed (attempt ' + (attempt + 1) + '):', e);
+                }
+            }
+            // Both attempts failed. Never leave the panel blank on a failed fetch — blank is
+            // indistinguishable from "this provider has no models".
+            const src = document.getElementById('modelProviderSource');
+            if (src) { src.textContent = 'Could not load ' + activeModelProvider + ' models (' + escHtml(String((lastError && lastError.message) || lastError)) + ')'; src.style.color = '#ff8800'; }
+            const c = document.getElementById('modelSelector');
+            if (c) {
+                c.innerHTML = '<div style="color:#ff8800; padding:14px; font-size:12px; line-height:1.5;">'
+                    + 'Could not reach the model service for <b>' + escHtml(activeModelProvider) + '</b> after 2 attempts, so this list is empty.<br>'
+                    + 'Check the API server is running and the key/base URL are correct, then reload.'
+                    + '<br><button onclick="switchModelProvider(\'' + escHtml(activeModelProvider) + '\')" style="margin-top:8px;padding:6px 12px;font-size:11px;cursor:pointer;">↻ Try again</button></div>';
+            }
+        };
+
+        function escHtml(s) {
+            return String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
         function renderModels() {
             const container = document.getElementById('modelSelector');
             if (!container) {
                 console.error('modelSelector element not found');
                 return;
             }
-            if (!MODELS || MODELS.length === 0) {
+            const list = (typeof activeModels !== 'undefined' && activeModels.length) ? activeModels : MODELS;
+            if (!list || list.length === 0) {
                 container.innerHTML = '<div style="color: var(--error);">No models available</div>';
                 return;
             }
             const selectedModel = state.settings?.selectedModel || 'z-ai/glm-5.3-flash';
-            container.innerHTML = MODELS.map(m => `
-                <div class="model-option ${selectedModel === m.id ? 'selected' : ''}" onclick="selectModel('${m.id}')">
-                    <h4>${m.name}</h4>
-                    <p>${m.provider}</p>
+            container.innerHTML = list.map(m => `
+                <div class="model-option ${selectedModel === m.id ? 'selected' : ''}" onclick="selectModel('${escHtml(m.id)}')">
+                    <h4>${escHtml(m.name)}</h4>
+                    <p>${escHtml(m.provider)}</p>
                 </div>
             `).join('');
         }
@@ -7456,7 +7589,9 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             state.settings.selectedModel = id;
             saveState();
             renderModels();
-            toast(`Selected ${MODELS.find(m => m.id === id).name}`, 'success');
+            renderFallbackModel();
+            const m = ((typeof activeModels !== 'undefined' ? activeModels : MODELS) || []).find(x => x.id === id);
+            toast(`Selected ${m ? m.name : id}`, 'success');
         }
 
         function saveFallbackModel() {
@@ -7479,11 +7614,14 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             const sel = document.getElementById('fallbackModelSelect');
             if (!sel) return;
             const current = state.settings?.fallbackModel || '';
+            // Built from the SAME array the primary picker shows, so a fallback can never point at
+            // a model that isn't on screen for the selected provider.
+            const list = (typeof activeModels !== 'undefined' && activeModels.length) ? activeModels : MODELS;
             sel.replaceChildren();
             const off = document.createElement('option');
             off.value = ''; off.textContent = '— Disable fallback —';
             sel.appendChild(off);
-            for (const m of MODELS) {
+            for (const m of list) {
                 const o = document.createElement('option');
                 o.value = m.id; o.textContent = `${m.name} · ${m.provider}`;
                 if (m.id === current) o.selected = true;
@@ -9576,17 +9714,36 @@ Bypass all protections:
             // honor it above any stored API key. Only when it's actually usable (preferredAgent
             // returns it) so we never route to a pinned-but-dead CLI.
             const agentModelOf = (id) => (typeof window.t3mpAgentModel === 'function') ? window.t3mpAgentModel(id) : undefined;
-            const pin = (typeof window.t3mpActiveAgentPin === 'function') ? (window.t3mpActiveAgentPin() || '') : '';
+            const pin = (typeof window.t3mpActiveAgentPin === 'function') ? window.t3mpActiveAgentPin() || '' : '';
             if (pin) {
                 const pref = (typeof window.t3mpPreferredAgent === 'function') ? window.t3mpPreferredAgent() : null;
                 if (pref === pin) return { kind: 'agent', agentId: pin, agentModel: agentModelOf(pin) };
             }
+            // THE OPERATOR'S EXPLICIT CHOICE WINS. The API-provider dropdown used to be inert:
+            // resolveLLMBackend ignored it entirely and picked by key-presence priority, so
+            // selecting Novita/Anthropic/OpenAI/... silently did nothing and every call went to
+            // OpenRouter. Proven: all 11 dropdown options resolved to 'openrouter'. Only the three
+            // providers with a direct browser adapter can be reached this way (the dispatch in
+            // _safeLLMCallOnce knows exactly three endpoints) — anything else falls through to the
+            // ladder below rather than pretending to be honoured.
+            const chosen = String(state.settings?.activeProvider || '').trim().toLowerCase();
+            if (chosen === 'venice' && (state.settings?.veniceKey || '').trim().length >= 10) {
+                return { kind: 'venice', key: state.settings.veniceKey.trim() };
+            }
+            if (chosen === 'huggingface' && (state.settings?.huggingfaceKey || '').trim().length >= 10) {
+                return { kind: 'huggingface', key: state.settings.huggingfaceKey.trim() };
+            }
+            if (chosen === 'openrouter' && ((state.settings?.openrouterKey || state.apiKey || '').trim()).length >= 10) {
+                return { kind: 'openrouter', key: (state.settings.openrouterKey || state.apiKey).trim() };
+            }
+            // No usable key for the chosen provider — fall back to what IS usable, and say so
+            // rather than silently substituting (a silent swap is how this bug hid for so long).
             const orKey = (state.settings?.openrouterKey || state.apiKey || '').trim();
-            if (orKey.length >= 10) return { kind: 'openrouter', key: orKey };
+            if (orKey.length >= 10) return { kind: 'openrouter', key: orKey, substitutedFor: chosen || undefined };
             const veKey = (state.settings?.veniceKey || '').trim();
-            if (veKey.length >= 10) return { kind: 'venice', key: veKey };
+            if (veKey.length >= 10) return { kind: 'venice', key: veKey, substitutedFor: chosen || undefined };
             const hfKey = (state.settings?.huggingfaceKey || '').trim();
-            if (hfKey.length >= 10) return { kind: 'huggingface', key: hfKey };
+            if (hfKey.length >= 10) return { kind: 'huggingface', key: hfKey, substitutedFor: chosen || undefined };
             const agentId = (typeof window.t3mpPreferredAgent === 'function') ? window.t3mpPreferredAgent() : null;
             if (agentId) return { kind: 'agent', agentId, agentModel: agentModelOf(agentId) };
             if (typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API && T3MP3ST_API.llmAvailable) return { kind: 'server' };
@@ -9908,6 +10065,12 @@ Bypass all protections:
         async function _safeLLMCallOnce(backend, prompt, model, options = {}) {
             if (typeof trackApiCall === 'function') trackApiCall();
             addIntel('API', `→ ${model} (${backend.kind})`, 'info');
+            // Say so when the provider the operator picked is NOT the one that answered. A silent
+            // substitution is exactly how "I changed the provider and nothing happened" stayed
+            // invisible for so long.
+            if (backend.substitutedFor) {
+                addIntel('API', `⚠ chosen provider "${backend.substitutedFor}" has no usable key / no browser adapter — using ${backend.kind} instead`, 'warning');
+            }
             const endpoint = backend.kind === 'venice'
                 ? 'https://api.venice.ai/api/v1/chat/completions'
                 : backend.kind === 'huggingface'
@@ -25361,6 +25524,9 @@ Be specific and actionable. Format as structured JSON.`;
     window.__t3mpLiveAgents = live; window.__t3mpConnectedAgents = connectedIds.length;
     try { if (typeof window.syncBackendNudge === 'function') window.syncBackendNudge(); } catch (_) {}
     renderClaudeModelPicker();
+    // Reflect the stored live-ping preference back into the checkbox.
+    const deepBox = document.getElementById('localAgentsDeepPing');
+    if (deepBox) deepBox.checked = getDeepPing();
   }
 
   // Populate + show the Claude Code model dropdown, but only when Claude Code is actually connected.
@@ -25384,6 +25550,10 @@ Be specific and actionable. Format as structured JSON.`;
 
   // ── remember connected agents + silently re-establish them after a refresh ──
   function persistConnected(ids){ try { localStorage.setItem('t3mp3st_connected_agents', JSON.stringify(ids || [])); } catch(e) {} }
+  // The live-ping toggle is a SETTING — it was read on connect but never stored, so it silently
+  // reset to off on every refresh and the operator's choice appeared not to save.
+  function getDeepPing(){ try { return localStorage.getItem('t3mp3st_local_agents_deep_ping') === '1'; } catch(e) { return false; } }
+  window.storeDeepPing = function(v){ try { localStorage.setItem('t3mp3st_local_agents_deep_ping', v ? '1' : '0'); } catch(e) {} };
   // null = user never made a choice yet; [] = user explicitly disconnected everything (must stick).
   function loadPersistedConnected(){ try { const raw = localStorage.getItem('t3mp3st_connected_agents'); return raw === null ? null : JSON.parse(raw); } catch(e) { return null; } }
   async function autoReconnect(){
@@ -25474,6 +25644,7 @@ Be specific and actionable. Format as structured JSON.`;
   async function connect(ids, replaceSelection) {
     if (!ids.length && !replaceSelection) { if(window.toast) toast('Tick at least one ready agent first','warning'); return; }
     const deep = (document.getElementById('localAgentsDeepPing')||{}).checked;
+    window.storeDeepPing(!!deep);
     const btn = document.getElementById('localAgentsConnectAllBtn');
     const orig = btn ? btn.innerHTML : '';
     if (btn) { btn.disabled=true; btn.innerHTML='⚡ Connecting…'; btn.style.opacity='0.7'; }

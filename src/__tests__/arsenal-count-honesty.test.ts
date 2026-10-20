@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { TOOL_ADAPTERS, type ToolAdapter } from '../arsenal/catalog.js';
 import { BUILTIN_TOOLS, EXTERNAL_TOOLS } from '../arsenal/index.js';
 import { OSINT_TOOLS } from '../tools/osint.js';
+import { INFRA_TOOLS } from '../tools/osint-infra.js';
+import { GOOGLE_OSINT_TOOLS } from '../tools/osint-google.js';
 import { ANDROID_TOOLS } from '../tools/android-forensics.js';
 import {
   isMintable,
@@ -36,16 +38,16 @@ const isGated = (a: ToolAdapter) =>
   a.execution === 'catalog_only' || a.execution === 'import_only';
 
 describe('arsenal count honesty (advertised = real registered surface)', () => {
-  it('the advertised "146 tools" is the real registered surface, not a source-line count', () => {
-    const total = TOOL_ADAPTERS.length + BUILTIN_TOOLS.length + EXTERNAL_TOOLS.length + OSINT_TOOLS.length + ANDROID_TOOLS.length;
+  it('the advertised "151 tools" is the real registered surface, not a source-line count', () => {
+    const total = TOOL_ADAPTERS.length + BUILTIN_TOOLS.length + EXTERNAL_TOOLS.length + OSINT_TOOLS.length + INFRA_TOOLS.length + GOOGLE_OSINT_TOOLS.length + ANDROID_TOOLS.length;
     // Locks the headline to code. If the arsenal grows/shrinks, update this AND the
     // README / verify-claims headline together — that is the point of the lock.
     expect(
       total,
-      `arsenal size drifted from the advertised 146 (adapters=${TOOL_ADAPTERS.length}, ` +
-        `built-ins=${BUILTIN_TOOLS.length}, externals=${EXTERNAL_TOOLS.length}, osint=${OSINT_TOOLS.length}, android=${ANDROID_TOOLS.length}) — ` +
+      `arsenal size drifted from the advertised 151 (adapters=${TOOL_ADAPTERS.length}, ` +
+        `built-ins=${BUILTIN_TOOLS.length}, externals=${EXTERNAL_TOOLS.length}, osint=${OSINT_TOOLS.length}+${INFRA_TOOLS.length}+${GOOGLE_OSINT_TOOLS.length}, android=${ANDROID_TOOLS.length}) — ` +
         'update the README / verify-claims headline to match',
-    ).toBe(146);
+    ).toBe(151);
     expect(total).toBeGreaterThanOrEqual(80); // stays consistent with verify-claims' `>= 80` gate
   });
 

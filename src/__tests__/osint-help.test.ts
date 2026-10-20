@@ -14,10 +14,7 @@ const staticHtml = html.replace(/<script\b[\s\S]*?<\/script>/gi, '');
 /** Mirror of the page's helpKeyFor(): strip emoji, collapse whitespace, upper-case. */
 function helpKeyFor(text: string): string {
   return text
-    // The trailing \u{FE0F} is deliberate — this mirrors the page's own helpKeyFor
-    // (docs/osint.html), which strips variation selectors so keys are stable.
-    // eslint-disable-next-line no-misleading-character-class
-    .replace(/[\u2190-\u2BFF\u{1F000}-\u{1FAFF}\u{FE0F}]/gu, '')
+    .replace(/[\u2190-\u2BFF\u{1F000}-\u{1FAFF}]|\u{FE0F}/gu, '')
     .replace(/\s+/g, ' ')
     .trim()
     .toUpperCase();

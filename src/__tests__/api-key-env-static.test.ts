@@ -88,8 +88,10 @@ describe('API key environment handling hardening', () => {
     expect(setupSource).toContain("provider: 'nanogpt'");
     expect(setupSource).toContain("setApiKey('nanogpt', apiKey)");
     // The provider <option> lives on the standalone Settings page; the base-URL
-    // map is in the dashboard script.
-    expect(settingsSource).toContain('<option value="nanogpt">NanoGPT · OpenAI-compatible</option>');
+    // map is in the dashboard script. Assert on the option's VALUE, not its label: the
+    // invariant is that the provider is selectable, and the label is free to change when
+    // the UI starts explaining which providers a browser call can actually reach.
+    expect(settingsSource).toMatch(/<option value="nanogpt"[^>]*>/);
     expect(uiSource).toContain("nanogpt: 'https://nano-gpt.com/api/v1'");
   });
 

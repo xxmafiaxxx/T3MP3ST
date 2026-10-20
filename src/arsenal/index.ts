@@ -3277,6 +3277,12 @@ export interface BinaryLocation {
   distro?: string;
   /** When this entry was cached — negative (not-found) results expire so a cold WSL start self-heals. */
   cachedAt?: number;
+  /**
+   * The probe did not complete (killed on timeout, or the WSL layer was unreachable), so
+   * `available: false` here means UNKNOWN, not absent. Never cached — the next call retries.
+   * Callers must not render this as "missing"; it is a failed measurement.
+   */
+  probeFailed?: boolean;
 }
 
 const binaryLocationCache = new Map<string, BinaryLocation>();
@@ -3285,28 +3291,43 @@ const binaryLocationCache = new Map<string, BinaryLocation>();
  * Clear the binary location cache (useful for testing or after installing tools)
  */
 // WSL is expensive to probe (a cold distro boot can take >10s). Availability is checked ONCE and
-// cached for 10 minutes so a host without WSL never pays the per-binary 15s probe again.
+// cached so a host without WSL never pays the per-binary probe again.
 let wslAvailabilityCache: { available: boolean; checkedAt: number } | null = null;
-const WSL_AVAILABILITY_TTL_MS = 10 * 60_000;
+// A CONFIRMED-absent WSL layer can be cached long: nothing will change it. A probe that merely
+// timed out must NOT be — a cold boot legitimately takes ~2s and an unlucky moment exceeds a
+// tight budget, and caching that verdict hides every WSL-resident tool for the whole window.
+const WSL_ABSENT_TTL_MS = 10 * 60_000;
+const WSL_FAILED_TTL_MS = 20_000;
+// Measured: a warm `wsl -d … -e /bin/true` runs ~0.5-0.6s, but a COLD distro boot takes 1.6-2.6s.
+// The old 3s budget left ~1.1s of headroom, which concurrent load ate — and because the failure
+// was cached as a definitive "WSL absent", one slow boot hid Kali's whole toolchain.
+const WSL_PROBE_TIMEOUT_MS = 15_000;
 function wslDistro(): string {
   return process.env.T3MP3ST_WSL_DISTRO || 'kali-linux';
 }
-async function isWslUsable(): Promise<boolean> {
-  if (wslAvailabilityCache && Date.now() - wslAvailabilityCache.checkedAt < WSL_AVAILABILITY_TTL_MS) {
-    return wslAvailabilityCache.available;
+/** Tri-state on purpose: a failed probe must not read as "WSL is absent". */
+async function isWslUsable(): Promise<boolean | 'unknown'> {
+  if (wslAvailabilityCache) {
+    const age = Date.now() - wslAvailabilityCache.checkedAt;
+    const ttl = wslAvailabilityCache.available ? WSL_ABSENT_TTL_MS : WSL_FAILED_TTL_MS;
+    if (age < ttl) return wslAvailabilityCache.available;
   }
-  let available = false;
   try {
     // --status answers without booting the VM, so it reports "usable" on hosts whose
     // distro can't actually start — then every per-binary `wsl -d … which` probe hangs
     // its full timeout. Probe with a real exec instead: proves the VM can run commands.
-    await execFileAsync('wsl.exe', ['-d', wslDistro(), '-e', '/bin/true'], { timeout: 3000 });
-    available = true;
+    // `which true` rather than `/bin/true`: a bare absolute POSIX path is rewritten by Git-Bash
+    // MSYS path translation into C:/Program Files/Git/usr/bin/true, which does not exist in
+    // the distro — a false negative on any host launched from Git Bash.
+    await execFileAsync('wsl.exe', ['-d', wslDistro(), '-e', 'which', 'true'], { timeout: WSL_PROBE_TIMEOUT_MS });
+    wslAvailabilityCache = { available: true, checkedAt: Date.now() };
+    return true;
   } catch {
-    available = false; // no WSL, distro can't boot, or the stub refuses — skip every per-binary distro probe
+    // Genuinely absent (wsl.exe missing) vs. merely slow — indistinguishable here, so keep the
+    // verdict short-lived: the next call re-probes instead of trusting a blip for 10 minutes.
+    wslAvailabilityCache = { available: false, checkedAt: Date.now() };
+    return 'unknown';
   }
-  wslAvailabilityCache = { available, checkedAt: Date.now() };
-  return available;
 }
 export function clearBinaryLocationCache(): void {
   binaryLocationCache.clear();
@@ -3378,27 +3399,44 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
       }
     }
 
-    // Batch query WSL for remaining tools. When WSL is unusable, the missing binaries are
-    // immediately cached as unavailable (they must NOT be left uncached, or every call
-    // re-pays the full where.exe sweep).
+    // Batch query WSL for remaining tools. When the WSL layer is CONFIRMED absent, the missing
+    // binaries are cached as unavailable (they must NOT be left uncached, or every call
+    // re-pays the full where.exe sweep). A merely-FAILED probe caches nothing — see below.
     if (missingOnHost.length > 0) {
-      if (!(await isWslUsable())) {
+      const wslUsable = await isWslUsable();
+      if (wslUsable !== true) {
+        // 'unknown' means the probe did not complete, so we learned nothing about these
+        // binaries. Recording that as "not installed" is the exact lie this fixes: it made
+        // the war room report hydra/mimikatz/rubeus/xsser as MISSING on a box where Kali has
+        // all four. Answer unknown, cache nothing, and let the next call re-measure.
+        const probeFailed = wslUsable === 'unknown';
         for (const cmd of missingOnHost) {
-          const loc: BinaryLocation = { available: false, path: null, inWsl: false, cachedAt: Date.now() };
-          binaryLocationCache.set(cmd, loc);
+          const loc: BinaryLocation = { available: false, path: null, inWsl: false, probeFailed: probeFailed || undefined };
+          if (!probeFailed) binaryLocationCache.set(cmd, loc);
           result.set(cmd, loc);
         }
       } else {
       const distro = wslDistro();
-      let wslStdout = '';
-      try {
-        const res = await execFileAsync('wsl.exe', ['-d', distro, '-e', 'which', ...missingOnHost], { timeout: 8000 });
-        wslStdout = res.stdout || '';
-      } catch (err: unknown) {
-        const e = err as { stdout?: string };
-        wslStdout = (e && typeof e.stdout === 'string') ? e.stdout : '';
-      }
+      // Chunk the probe. A single `which` over the whole catalogue (81 names) reliably
+      // overran the old 8s budget and was killed mid-flight, and a killed probe returns
+      // EMPTY stdout — which the old code read as "found nothing", marking all 81 missing.
+      // Chunking keeps each exec small, and running them concurrently keeps wall-time flat.
+      const WSL_CHUNK = 16;
+      const chunks: string[][] = [];
+      for (let i = 0; i < missingOnHost.length; i += WSL_CHUNK) chunks.push(missingOnHost.slice(i, i + WSL_CHUNK));
+      const chunkOut = await Promise.all(chunks.map((c) =>
+        execFileAsync('wsl.exe', ['-d', distro, '-e', 'which', ...c], { timeout: 20_000 })
+          .then((res) => res.stdout || '')
+          .catch((err: unknown) => {
+            const e = err as { stdout?: string };
+            return (e && typeof e.stdout === 'string') ? e.stdout : '';
+          }),
+      ));
+      const wslStdout = chunkOut.join('\n');
 
+      // A killed chunk yields no output for its names, which is indistinguishable from
+      // "absent". Detect it: if `which` printed nothing at all AND some names were asked
+      // about, the layer told us nothing — answer unknown rather than a false negative.
       const wslFound = new Map<string, string>();
       for (const line of wslStdout.split(/\r?\n/)) {
         const trimmed = line.trim();
@@ -3409,6 +3447,7 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
           }
         }
       }
+      const probeFailed = wslFound.size === 0 && missingOnHost.length > 0;
 
       for (const cmd of missingOnHost) {
         if (wslFound.has(cmd)) {
@@ -3423,8 +3462,8 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
           binaryLocationCache.set(cmd, loc);
           result.set(cmd, loc);
         } else {
-          const loc: BinaryLocation = { available: false, path: null, inWsl: false, cachedAt: Date.now() };
-          binaryLocationCache.set(cmd, loc);
+          const loc: BinaryLocation = { available: false, path: null, inWsl: false, cachedAt: Date.now(), probeFailed: probeFailed || undefined };
+          if (!probeFailed) binaryLocationCache.set(cmd, loc);
           result.set(cmd, loc);
         }
       }
@@ -3487,7 +3526,10 @@ export async function findBinaryLocation(command: string): Promise<BinaryLocatio
 }
 
 /**
- * Check if a command-line tool is available on the system (native host or WSL bridge)
+ * Check if a command-line tool is available on the system (native host or WSL bridge).
+ *
+ * A failed probe answers false, but carries `probeFailed` on the location so callers that
+ * report to a human can say "could not verify" instead of "not installed".
  */
 export async function isToolAvailable(command: string): Promise<boolean> {
   const loc = await findBinaryLocation(command);

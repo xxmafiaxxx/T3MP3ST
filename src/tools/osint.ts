@@ -3873,9 +3873,9 @@ export async function aggressivePeopleSearch(
       ran: runs,
     });
     const raw = await chat(DIRECTOR_SYSTEM, brief).catch(() => '');
-    const plan = parseDirectorPicks(raw);
-    let picks = plan.picks;
-    gaps = plan.gaps;
+    const director = parseDirectorPicks(raw);
+    let picks = director.picks;   // reassigned below when a pick is refused
+    gaps = director.gaps;
     if (picks.length === 0) {
       // Model flakiness must never idle an aggressive search: fall back to the
       // first playbook methods that have not produced a run yet.
@@ -3903,7 +3903,7 @@ export async function aggressivePeopleSearch(
         if (bad) { runs.push({ method: pick.method, round, status: 'skip', found: 0, note: 'refused — query contains unverified identifier (' + bad + ')' }); continue; }
       }
       if (pick.url) {
-        let host = ''; try { host = new URL(pick.url).hostname.toLowerCase(); } catch (_) { /* not a URL — leave host empty */ }
+        let host = ''; try { host = new URL(pick.url).hostname.toLowerCase(); } catch (_) { /* unparseable URL — host stays empty and the pick is refused below */ }
         const hostKnown = knownAll.urls.some((u) => { try { return new URL(u).hostname.toLowerCase() === host; } catch (_) { return false; } });
         if (!hostKnown) { runs.push({ method: pick.method, round, status: 'skip', found: 0, note: 'refused — url host not previously surfaced' }); continue; }
       }

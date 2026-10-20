@@ -4,6 +4,14 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+/** Every test in this file spawns a child that boots the TS config module
+ *  through tsx. That costs seconds on an idle box and much longer under
+ *  `--maxWorkers`, so vitest's 5s default cut them off MID-BOOT and the file
+ *  failed on machine load — which reads as a config-isolation bug and is not
+ *  one. The assertions are unchanged; only the budget is. It sits above the
+ *  90s spawn budget so the spawn's own budget is what governs. */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -60,7 +68,7 @@ describe('explicit configuration directory', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(childJson(result).key).toBeNull();
     expect(JSON.parse(readFileSync(join(f.config, 'config.json'), 'utf8')).apiKeys).toEqual({});
-  }, 120_000); // the spawned child's own budget is 90s — the vitest cap must exceed it, not fight it
+  }, CHILD_TEST_TIMEOUT_MS);
 
   it('loads only the explicitly selected env file', () => {
     const f = fixture();
@@ -69,19 +77,19 @@ describe('explicit configuration directory', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(childJson(result).key).toBe('isolated-key');
     expect(readFileSync(join(f.config, 'config.json'), 'utf8')).not.toContain('isolated-key');
-  }, 120_000);
+  }, CHILD_TEST_TIMEOUT_MS);
 
   it('preserves default home loading and ignores a target cwd env file', () => {
     const f = fixture();
     const result = run(f);
     expect(result.status, result.stderr).toBe(0);
     expect(childJson(result).key).toBe('operator-owned-key');
-  }, 120_000);
+  }, CHILD_TEST_TIMEOUT_MS);
 
   it('rejects relative paths before reading configuration', () => {
     const f = fixture();
     const result = run(f, 'relative-config');
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('T3MP3ST_CONFIG_DIR must be an absolute path');
-  }, 120_000);
+  }, CHILD_TEST_TIMEOUT_MS);
 });

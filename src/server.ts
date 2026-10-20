@@ -18,14 +18,14 @@ import { homedir } from 'os';
 import { connect as tcpConnect } from 'net';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual as timingSafeEqualRaw } from 'crypto';
 import { config, AVAILABLE_MODELS } from './config/index.js';
 import { loadSupabaseState, persistSupabaseState, bufferSupabaseEvent, flushSupabaseEvents } from './storage/supabase.js';
 import { resolveModels } from './config/provider-models.js';
 import { initProxyFromConfig, configureProxy, getProxyStatus, checkIp, invalidateIpCache, proxySubprocessEnv } from './net/proxy.js';
 import { redactString, redactLedgerText, redactSecrets } from './redact.js';
 import { LLMBackbone } from './llm/index.js';
-import { TempestCommand, isToolAvailable, findBinaryLocations } from './index.js';
+import { TempestCommand, findBinaryLocation, findBinaryLocations } from './index.js';
 import { OpGeneral } from './general/index.js';
 import type { Directive } from './general/index.js';
 import { detectLocalAgents, pingLocalAgent, runLocalAgent, syncLocalAgentSelection, loadCustomAgents, saveCustomAgents, normalizeCustomAgent, resolveBin, spawnAgent, needsShell } from './agent/local-agents.js';
@@ -46,6 +46,15 @@ import { CveFeedEngine } from './tools/cve-feed.js';
 import { handleCorrelationApi } from './threat-intel/correlation.js';
 import { resolveMissionLaunchConfig, resolveMissionStatus } from './mission/http-lifecycle.js';
 import { getPayloadsForCve, CVE_PAYLOAD_CATALOG } from './tools/cve-payloads.js';
+import { INFRA_TOOLS, classifyTarget, domainInfraScan, ipInfraScan, circlHash } from './tools/osint-infra.js';
+import {
+  GOOGLE_OSINT_TOOLS,
+  GOOGLE_OSINT_SOURCE,
+  GOOGLE_OSINT_VERSION,
+  googleAppLinkage,
+  googleWifiLocate,
+  googleGeoKeyConfigured,
+} from './tools/osint-google.js';
 import {
   getMergedSiteCatalog,
   OSINT_TOOLS,
@@ -77,6 +86,7 @@ import {
   dumpKeyStatus,
   type GeoPoint,
 } from './tools/osint.js';
+import { deepUsernameSweep, formatDeepSweep, OSINT_DEEP_TOOLS } from './tools/osint-correlate.js';
 import {
   SHERLOCK_SOURCE,
   SHERLOCK_LICENSE,
@@ -373,6 +383,55 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     detail: 'This local API only accepts requests from the localhost UI, curl, or the CLI. A cross-origin (foreign-website) Origin/Referer was detected and blocked to prevent CSRF/drive-by command execution.',
   });
 });
+
+// --- Bearer-token auth (opt-in; the documented upgrade path for exposure) ---
+// The Origin/CSRF guard above defends ONE threat: a malicious webpage in the
+// operator's own browser driving this local command API. It is not
+// authentication — it cannot distinguish the operator from anyone who reaches
+// the socket, and it says nothing about a request that arrives over the public
+// internet. This API executes commands and, more to the point, serves a
+// credential store in plaintext: GET /api/credentials answers with harvested
+// `secret` values and no token of any kind. So exposing this server at all —
+// on a LAN, or through a reverse proxy / tunnel / port-forward — needs a real
+// bearer token in front of it, which is exactly what this block adds and
+// exactly what line 283 and the startup exposure warning already said.
+//
+// INERT BY DEFAULT. With T3MP3ST_AUTH_TOKEN unset this is a no-op and localhost
+// behaviour is byte-for-byte what it was — no opt-in means no regression. Set
+// it and every /api route requires the header. The UI pages themselves are NOT
+// gated (they are static files and hold nothing), so a browser still loads the
+// panel; put the token in front at the tunnel/reverse proxy, or have the client
+// send it (see T3MP3ST docs).
+function timingSafeEqual(a: string, b: string): boolean {
+  // timingSafeEqual throws on a length mismatch, which would itself leak the
+  // token length, so compare fixed-width digests of the two instead.
+  const ha = createHash('sha256').update(a, 'utf8').digest();
+  const hb = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqualRaw(ha, hb);
+}
+
+const AUTH_TOKEN = (process.env.T3MP3ST_AUTH_TOKEN ?? '').trim();
+if (AUTH_TOKEN) {
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    // Static assets and the health probe stay open: they expose nothing, and
+    // locking them out would break the UI's own bootstrap with a 401 it cannot
+    // render its way out of.
+    if (!req.path.startsWith('/api/')) return next();
+    if (req.path === '/api/health') return next();
+    const header = req.get('authorization') ?? '';
+    // The scheme is REQUIRED, not stripped-if-present. The 401 below tells a
+    // caller to send `Authorization: Bearer <token>`, so a server that also
+    // accepted a bare token would accept a shape it never documented — and a
+    // guard that quietly admits more than it claims is its own kind of lie.
+    const match = /^Bearer\s+(\S+)$/i.exec(header.trim());
+    const presented = match ? match[1] : '';
+    if (presented && timingSafeEqual(presented, AUTH_TOKEN)) return next();
+    res.status(401).json({
+      error: 'unauthorized',
+      detail: 'This API requires an Authorization: Bearer <T3MP3ST_AUTH_TOKEN> header when T3MP3ST_AUTH_TOKEN is set. See the exposure warning printed at startup.',
+    });
+  });
+}
 
 // --- Host-header allow-list (anti-DNS-rebinding) --------------------------
 // B-02: a DNS-rebinding attack points a name the browser already trusts
@@ -5373,7 +5432,7 @@ function healthPayload(): Record<string, unknown> {
   };
 }
 
-async function inspectToolAvailability(): Promise<Array<{ id: string; name: string; displayName: string; binary: string; available: boolean; path?: string; category: string; risk: string; execution: string; networked: boolean; requiredFor: string[]; installHint: string; commandHint: string; parserStatus: string; note?: string }>> {
+async function inspectToolAvailability(): Promise<Array<{ id: string; name: string; displayName: string; binary: string; available: boolean; path?: string; category: string; risk: string; execution: string; networked: boolean; requiredFor: string[]; installHint: string; commandHint: string; parserStatus: string; note?: string; probeFailed?: boolean }>> {
   const requiredFor: Record<string, string[]> = {
     file: ['field_drill', 'local_artifact_inspection'],
     curl: ['api_smoke', 'http_probe'],
@@ -5434,7 +5493,12 @@ async function inspectToolAvailability(): Promise<Array<{ id: string; name: stri
       installHint: adapter.installHint,
       commandHint: adapter.commandHint,
       parserStatus: adapter.parserStatus,
-      note: requiredFor[adapter.binary]?.length ? 'Install to unlock this workflow.' : adapter.notes,
+      // A probe that did not complete tells us nothing about this binary. Say so instead of
+      // asserting "Install to unlock this workflow" for a tool that may already be present.
+      probeFailed: loc?.probeFailed || undefined,
+      note: loc?.probeFailed
+        ? 'Availability unverified — the binary probe did not complete. Re-check before installing.'
+        : requiredFor[adapter.binary]?.length ? 'Install to unlock this workflow.' : adapter.notes,
     };
   });
 }
@@ -5524,15 +5588,21 @@ async function buildArsenalStatus(family?: string): Promise<Record<string, unkno
     ...adapter,
     available: availabilityById.get(adapter.id)?.available || false,
     path: availabilityById.get(adapter.id)?.path || null,
+    // A failed probe is UNKNOWN, not missing. Reporting it as 'missing' is what made the war
+    // room claim 64 tools were absent on a box that actually has most of them in Kali WSL.
+    probeFailed: availabilityById.get(adapter.id)?.probeFailed || false,
     status: availabilityById.get(adapter.id)?.available
       ? 'installed'
-      : adapter.execution === 'catalog_only'
-        ? 'catalog_only'
-        : adapter.execution === 'import_only'
-          ? 'import_only'
-          : 'missing',
+      : availabilityById.get(adapter.id)?.probeFailed
+        ? 'unverified'
+        : adapter.execution === 'catalog_only'
+          ? 'catalog_only'
+          : adapter.execution === 'import_only'
+            ? 'import_only'
+            : 'missing',
   }));
   const installed = tools.filter(tool => tool.available).length;
+  const unverified = tools.filter(tool => tool.status === 'unverified').length;
   const commandReadyTools = tools.filter(tool => tool.execution === 'safe_command' || tool.execution === 'receipt_required');
   const commandReady = commandReadyTools.length;
   const installedCommandReady = commandReadyTools.filter(tool => tool.available).length;
@@ -5545,6 +5615,8 @@ async function buildArsenalStatus(family?: string): Promise<Record<string, unkno
       installed,
       installedCommandReady,
       missingCommandReady: missingCommandReady.length,
+      // Surfaced so a reader can tell a real gap from an unmeasured one.
+      unverified,
       readiness: commandReady ? Math.round((installedCommandReady / commandReady) * 100) : 0,
       unmodeled: commandReady === 0,
       frontierMilestone: FRONTIER_ARSENAL_MILESTONE,
@@ -5920,14 +5992,21 @@ app.get('/api/arsenal/phase-readiness', async (req: Request, res: Response): Pro
   const armed = /^(1|true|on)$/i.test(process.env.T3MP3ST_FULL_ARSENAL ?? '');
   const toolkit = PHASE_TOOLKITS[phase] || [];
   const tools = await Promise.all(toolkit.map(async (t) => {
-    const binaryAvailable = await isToolAvailable(t.binary).catch(() => false);
     // A real path needs BOTH the specialist arsenal armed AND the binary installed. Approval is a
-    // separate per-action gate at run time.
-    const status = !armed ? 'not-armed' : (!binaryAvailable ? 'binary-missing' : 'ready');
-    return { id: t.id, name: t.name, risk: t.risk, binary: t.binary, note: t.note, armed, binaryAvailable, status };
+    // separate per-action gate at run time. A probe that FAILED is reported as 'probe-failed',
+    // never as 'binary-missing' — an unverified binary is not a missing one.
+    const loc = await findBinaryLocation(t.binary).catch(() => null);
+    const probeFailed = loc?.probeFailed === true;
+    const binaryAvailable = loc?.available === true;
+    const status = !armed ? 'not-armed' : (probeFailed ? 'probe-failed' : (!binaryAvailable ? 'binary-missing' : 'ready'));
+    return { id: t.id, name: t.name, risk: t.risk, binary: t.binary, note: t.note, armed, binaryAvailable, probeFailed, status };
   }));
   const offensive = toolkit.length > 0;
   const ready = tools.some((t) => t.status === 'ready');
+  // "Not installed" is only assertable when every probe actually completed. A failed probe
+  // leaves the truth unknown, and saying "not installed" then is a false negative the operator
+  // would act on (installing tools they already have).
+  const anyProbeFailed = tools.some((t) => t.probeFailed);
   res.json({
     phase,
     offensive,
@@ -5935,6 +6014,7 @@ app.get('/api/arsenal/phase-readiness', async (req: Request, res: Response): Pro
     approvalGated: true,
     tools,
     ready,
+    probeInconclusive: anyProbeFailed,
     // A short honest headline the UI can show verbatim.
     summary: !offensive
       ? 'This phase runs on built-in recon/analysis tools.'
@@ -5942,7 +6022,9 @@ app.get('/api/arsenal/phase-readiness', async (req: Request, res: Response): Pro
         ? 'A real credential/post-ex path is available (armed + binary present). Actions are still approval-gated at run time.'
         : !armed
           ? 'No live credential/post-ex path: the specialist arsenal is not armed (set T3MP3ST_FULL_ARSENAL=1).'
-          : 'Specialist arsenal armed, but the required binaries are not installed on this host.',
+          : anyProbeFailed
+            ? 'Arsenal armed, but the binary probe did not complete (WSL layer unreachable or slow) — availability is UNKNOWN, not absent. Re-check in a moment.'
+            : 'Specialist arsenal armed, but the required binaries are not installed on this host.',
   });
 });
 
@@ -7756,7 +7838,7 @@ app.get('/api/osint/sites', (req: Request, res: Response) => {
       notes: s.notes,
     })),
     count: pool.length,
-    tools: OSINT_TOOLS.map((t) => ({ name: t.name, description: t.description })),
+    tools: [...OSINT_TOOLS, ...OSINT_DEEP_TOOLS, ...INFRA_TOOLS, ...GOOGLE_OSINT_TOOLS].map((t) => ({ name: t.name, description: t.description })),
     sherlock: {
       source: SHERLOCK_SOURCE,
       license: SHERLOCK_LICENSE,
@@ -7891,6 +7973,46 @@ app.post('/api/osint/username-sweep', async (req: Request, res: Response): Promi
       });
     }
     res.json({ success: true, sweep });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// POST /api/osint/username-sweep/deep — the ITERATIVE sweep.
+// The plain sweep above is one-pass: it attaches a handle to every catalog site and stops, which
+// is a search, not an investigation. This route runs the real technique stack: sweep → read the
+// Keybase identity graph and any link hub → harvest the handles those publish → sweep THOSE →
+// cluster every account that shares real evidence. One confirmed account becomes a graph.
+app.post('/api/osint/username-sweep/deep', async (req: Request, res: Response): Promise<void> => {
+  const username = typeof req.body?.username === 'string' ? req.body.username : '';
+  if (!username) { res.status(400).json({ error: 'username required' }); return; }
+  const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
+  const catalogRaw = typeof req.body?.catalog === 'string' ? req.body.catalog.toLowerCase() : 'full';
+  const catalog = (['curated', 'sherlock', 'full'].includes(catalogRaw) ? catalogRaw : 'full') as 'curated' | 'sherlock' | 'full';
+  const includeAdult = req.body?.includeAdult === true;
+  const clampInt = (v: unknown, lo: number, hi: number, dflt: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.trunc(n))) : dflt;
+  };
+  const maxExpansion = clampInt(req.body?.maxExpansionHandles, 0, 25, 8);
+  const rounds = clampInt(req.body?.rounds, 1, 3, 2);
+  const budgetMs = clampInt(req.body?.budgetMs, 30000, 1800000, 240000);
+  console.log(`[T3MP3ST][OSINT] DEEP username sweep: ${username} [${catalog}] rounds=${rounds} expansion=${maxExpansion}`);
+  try {
+    const result = await deepUsernameSweep(username, { name, catalog, includeAdult, maxExpansionHandles: maxExpansion, rounds, budgetMs });
+    // Ledger only the corroborated accounts: an unverified handle match is noise, and a finding
+    // ledger full of "maybe" is how a vault stops being evidence.
+    for (const hit of result.corroborated.slice(0, 20)) {
+      upsertMissionFindingToLedger({
+        title: `Corroborated Social Account — ${hit.site} (@${username})`,
+        description: `Account corroborated against subject name: ${hit.url}`,
+        severity: 'info',
+        targetId: username,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `corroborated profile → ${hit.url}`, timestamp: Date.now(), metadata: { tool: 'osint_username_deep' } }],
+      });
+    }
+    res.json({ success: true, result, report: formatDeepSweep(result) });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || String(err) });
   }
@@ -8824,6 +8946,155 @@ app.post('/api/gps/area-brief', async (req: Request, res: Response): Promise<voi
 
 // --- Dark web direct — leak-site monitor + onion search/fetch (keyless lanes) ---
 
+// --- OSINT infrastructure: domain / IP / certificate / routing intelligence.
+// Keyless and read-only throughout. Every lane reports its own outcome, and a
+// blocked source lands in `failed[]` so it can never be mistaken for a clean one.
+app.post('/api/osint/infra/domain', async (req: Request, res: Response): Promise<void> => {
+  const t = classifyTarget(String(req.body?.domain ?? ''));
+  if (t.kind !== 'domain') { res.status(400).json({ error: t.note ?? 'not a domain' }); return; }
+  console.log(`[T3MP3ST][OSINT] domain infrastructure: ${t.value}`);
+  const result = await domainInfraScan(t.value);
+  const subdomains = result.crt.data?.subdomains ?? [];
+  for (const sub of subdomains.slice(0, 50)) {
+    upsertMissionFindingToLedger({
+      title: `Subdomain Discovered (CT) — ${sub}`,
+      description: `Certificate Transparency log entry for ${sub} under ${result.domain}. Discovered via crt.sh.`,
+      severity: 'info',
+      targetId: result.domain,
+      operatorId: 'osint-panel',
+      evidence: [{ type: 'log', content: `crt.sh CT entry → ${sub}`, timestamp: Date.now(), metadata: { tool: 'osint_domain_infra' } }],
+    });
+  }
+  res.json({ success: true, result });
+});
+
+app.post('/api/osint/infra/ip', async (req: Request, res: Response): Promise<void> => {
+  const t = classifyTarget(String(req.body?.ip ?? ''));
+  if (t.kind !== 'ipv4') { res.status(400).json({ error: t.note ?? 'not a public IPv4 address' }); return; }
+  console.log(`[T3MP3ST][OSINT] IP infrastructure: ${t.value}`);
+  const result = await ipInfraScan(t.value);
+  for (const cve of (result.shodan.data?.vulns ?? []).slice(0, 25)) {
+    upsertMissionFindingToLedger({
+      title: `Known CVE matched on ${result.ip} — ${cve}`,
+      description: `Shodan InternetDB matched ${cve} against a CPE observed on ${result.ip}. This is a database match on an observed product version, NOT proof the host is exploitable — verify before acting.`,
+      severity: 'medium',
+      targetId: result.ip,
+      operatorId: 'osint-panel',
+      evidence: [{ type: 'log', content: `Shodan InternetDB → ${cve}`, timestamp: Date.now(), metadata: { tool: 'osint_ip_infra' } }],
+    });
+  }
+  if (result.blocklist.data?.listed) {
+    upsertMissionFindingToLedger({
+      title: `IP has abuse history — ${result.ip}`,
+      description: `blocklist.de reports ${result.blocklist.data.attacks} attack(s) and ${result.blocklist.data.reports} report(s).`,
+      severity: 'medium',
+      targetId: result.ip,
+      operatorId: 'osint-panel',
+      evidence: [{ type: 'log', content: `blocklist.de → ${result.blocklist.data.attacks} attacks / ${result.blocklist.data.reports} reports`, timestamp: Date.now(), metadata: { tool: 'osint_ip_infra' } }],
+    });
+  }
+  res.json({ success: true, result });
+});
+
+app.post('/api/osint/infra/hash', async (req: Request, res: Response): Promise<void> => {
+  const r = await circlHash(String(req.body?.hash ?? ''));
+  if (!r.ok) { res.status(400).json({ error: r.note ?? 'hash lookup failed' }); return; }
+  if (r.data) {
+    upsertMissionFindingToLedger({
+      title: `Known File Identified — ${r.data.fileName ?? String(req.body?.hash)}`,
+      description: `CIRCL hashlookup matched ${r.data.hash} to "${r.data.fileName}"${r.data.mimeType ? ` (${r.data.mimeType})` : ''}${r.data.os ? `, shipped as part of ${r.data.os}` : ''}. This identifies the file only — it is not a malware verdict.`,
+      severity: 'info',
+      operatorId: 'osint-panel',
+      evidence: [{ type: 'log', content: `CIRCL hashlookup → ${r.data.fileName}`, timestamp: Date.now(), metadata: { tool: 'osint_hash_lookup' } }],
+    });
+  }
+  res.json({ success: true, found: Boolean(r.data), note: r.note, result: r.data });
+});
+
+// -----------------------------------------------------------------------------
+// Google OSINT — app linkage (Digital Asset Links) + WiFi geolocation.
+//
+// Keyless and read-only. The DAL statements come from Google's own public index;
+// the ONLY request that touches the subject's origin is the iOS association file,
+// and that one is opt-in via `includeIos` because the UI states it on the control.
+// -----------------------------------------------------------------------------
+
+app.post('/api/osint/google/app-linkage', async (req: Request, res: Response): Promise<void> => {
+  const domain = String(req.body?.domain ?? '');
+  const includeIos = req.body?.includeIos === true;
+  try {
+    console.log(`[T3MP3ST][OSINT] google app linkage: ${domain}${includeIos ? ' (+iOS well-known)' : ''}`);
+    const result = await googleAppLinkage(domain, { includeIos });
+    for (const app of result.apps) {
+      upsertMissionFindingToLedger({
+        title: `Android app vouches for ${result.website} — ${app.packageName}`,
+        description: `${result.website} publishes a Digital Asset Links statement naming ${app.packageName}${app.firstParty ? ' with the handle_all_urls relation, i.e. it may act as the site everywhere' : ''}. This is the domain publisher's own claim — it is not an endorsement by Google and says nothing about whether the app is safe.`,
+        severity: 'info',
+        targetId: result.website,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `DAL → ${app.packageName}${app.certFingerprint ? ` [cert ${app.certFingerprint.slice(0, 17)}…]` : ''}`, timestamp: Date.now(), metadata: { tool: 'osint_google_app_linkage' } }],
+      });
+    }
+    // The association pivots are the genuinely novel output: domains that trust
+    // this one for login. Recorded individually, bounded so one huge domain
+    // cannot flood the ledger.
+    for (const site of result.associatedSites.slice(0, 15)) {
+      upsertMissionFindingToLedger({
+        title: `Associated domain — ${site.site}`,
+        description: `${result.website} delegates to ${site.site} via a Digital Asset Links statement. Associated domains routinely expose SSO/auth infrastructure that a subdomain scan misses.`,
+        severity: 'low',
+        targetId: site.site,
+        operatorId: 'osint-panel',
+        evidence: [{ type: 'log', content: `DAL association → ${site.site}`, timestamp: Date.now(), metadata: { tool: 'osint_google_app_linkage' } }],
+      });
+    }
+    res.json({ success: true, source: GOOGLE_OSINT_SOURCE, version: GOOGLE_OSINT_VERSION, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/osint/google/wifi-locate', async (req: Request, res: Response): Promise<void> => {
+  const bssids = String(req.body?.bssids ?? '');
+  if (!bssids.trim()) { res.status(400).json({ error: 'bssids required (one or more WiFi access point MAC addresses)' }); return; }
+  // A missing key is refused BEFORE any request to Google. Called unkeyed, that
+  // endpoint answers 403 "unregistered callers", which an operator would
+  // reasonably misread as "Google has no location for this network".
+  if (!googleGeoKeyConfigured()) {
+    res.status(400).json({
+      error: 'WiFi geolocation is not configured — set T3MP3ST_GOOGLE_GEO_KEY. Google refuses this endpoint for unregistered callers, so no query was sent.',
+      configured: false,
+    });
+    return;
+  }
+  try {
+    console.log(`[T3MP3ST][OSINT] wifi geolocation: ${bssids.replace(/[^0-9a-f:\s,;-]/gi, '')}`);
+    const result = await googleWifiLocate(bssids);
+    if (!result.ok) { res.status(400).json({ error: result.note ?? 'WiFi geolocation failed', ...result }); return; }
+    upsertMissionFindingToLedger({
+      title: `WiFi geolocation — ${result.observations} BSSID(s)`,
+      description: `Position ${result.lat}, ${result.lng} with a ${result.accuracyMeters ?? '?'} m accuracy radius, derived from ${result.observations} observed access point(s). An estimated coverage area derived from where those APs have been seen — NOT a live device fix, and the network may have moved.`,
+      severity: 'info',
+      operatorId: 'osint-panel',
+      evidence: [{ type: 'log', content: `geolocate → ${result.lat}, ${result.lng} (±${result.accuracyMeters ?? '?'}m)`, timestamp: Date.now(), metadata: { tool: 'osint_google_bssid_locate' } }],
+    });
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+/** Lets the panel show the operator the real state of the lane instead of a
+ *  button that silently does nothing. */
+app.get('/api/osint/google/status', async (_req: Request, res: Response): Promise<void> => {
+  res.json({
+    success: true,
+    source: GOOGLE_OSINT_SOURCE,
+    version: GOOGLE_OSINT_VERSION,
+    appLinkage: { configured: true, needsKey: false },
+    wifiLocate: { configured: googleGeoKeyConfigured(), envVar: 'T3MP3ST_GOOGLE_GEO_KEY' },
+  });
+});
 app.get('/api/osint/tor-status', async (_req: Request, res: Response): Promise<void> => {
   res.json({ success: true, tor: await torStatus() });
 });
@@ -12302,6 +12573,30 @@ type ConnectedLocalAgent = {
 };
 const connectedLocalAgents = new Map<string, ConnectedLocalAgent>();
 const LOCAL_AGENT_HEALTH_TTL_MS = 30_000;
+
+// ── Connected-agent selection survives a restart ──
+// The selection lived ONLY in the in-memory Map above, so every restart silently dropped it and
+// the operator's Settings panel came back empty — the "my settings didn't save" report. The web
+// UI mirrored it into localStorage and re-applied on load, which is why it looked intermittent:
+// it survived a page refresh but not a server restart, and a headless/mission run saw nothing.
+const LOCAL_AGENT_SELECTION_KEY = 'localAgents.connected';
+function persistLocalAgentSelection(reason: string): void {
+  dbSettings[LOCAL_AGENT_SELECTION_KEY] = Array.from(connectedLocalAgents.keys());
+  saveDbSettings(reason);
+}
+function restoreLocalAgentSelection(): void {
+  const stored = dbSettings[LOCAL_AGENT_SELECTION_KEY];
+  const ids = Array.isArray(stored) ? stored.filter((x): x is string => typeof x === 'string' && !!x) : [];
+  if (!ids.length) return;
+  connectedLocalAgents.clear();
+  for (const id of ids) {
+    // Re-register with a fresh timestamp. Deliberately no lastPing: the previous process's
+    // round-trip says nothing about THIS process, and carrying it forward would let a stale
+    // "ok" satisfy the live-backend gate for a CLI that is not actually running.
+    connectedLocalAgents.set(id, { id, label: id, connectedAt: Date.now() });
+  }
+  console.log(`[T3MP3ST] Restored ${ids.length} connected local agent(s): ${ids.join(', ')}`);
+}
 // A 15s liveness probe SIGKILLs a slow-but-alive local reasoning agent (which spends tens of
 // seconds thinking even on the trivial PONG probe), making requireLiveLocalAgent falsely reject
 // a healthy backend. Default to 90s and let the operator raise it via env for very slow models.
@@ -12393,6 +12688,7 @@ app.post('/api/agents/local/connect', async (req: Request, res: Response): Promi
     results.push({ id, status: 'active', label: d.label, version: d.version, authMethod: d.authMethod, ping });
   }
   syncLocalAgentSelection(connectedLocalAgents, ids, replace);
+  persistLocalAgentSelection('local-agents.connect');
   res.json({ results, connected: Array.from(connectedLocalAgents.values()) });
 });
 
@@ -12461,6 +12757,7 @@ app.post('/api/agents/local/dispatch', async (req: Request, res: Response): Prom
 app.post('/api/agents/local/disconnect', (req: Request, res: Response): void => {
   const id = (req.body || {}).id;
   connectedLocalAgents.delete(id);
+  persistLocalAgentSelection('local-agents.disconnect');
   res.json({ ok: true, connected: Array.from(connectedLocalAgents.keys()) });
 });
 
@@ -12892,7 +13189,7 @@ app.get('/:page', (req: Request, res: Response, next: NextFunction) => {
 // Strix leaf page can render the cross-run history and ingest vulns to the vault.
 // =============================================================================
 import * as pathFs from 'path';
-import { readdirSync, existsSync as _existsSync, statSync } from 'fs';
+import { readdirSync, existsSync as _existsSync, statSync as _statSync } from 'fs';
 function strixBaseDirs(): string[] {
   const env = process.env.STRIX_RUNS_DIR ? [process.env.STRIX_RUNS_DIR] : [];
   const cwd = pathFs.join(process.cwd(), 'strix_runs');
@@ -12906,7 +13203,7 @@ function strixBaseDirs(): string[] {
   return out;
 }
 function strixFirstBase(): string | null {
-  for (const d of strixBaseDirs()) try { if (_existsSync(d)) return d; } catch { /* unreadable candidate — fall through to the next base */ }
+  for (const d of strixBaseDirs()) try { if (_existsSync(d)) return d; } catch { /* unreadable candidate — try the next */ }
   // no dir exists yet — advertise the preferred base so the UI can show it
   return strixBaseDirs()[0] ?? null;
 }
@@ -12917,8 +13214,8 @@ function strixIterRunDirs(base: string): string[] {
       .filter(d => _existsSync(pathFs.join(d, 'run.json')));
     dirs.sort((a, b) => {
       try {
-        const at = _existsSync(pathFs.join(a, 'run.json')) ? statSync(pathFs.join(a, 'run.json')).mtimeMs : 0;
-        const bt = _existsSync(pathFs.join(b, 'run.json')) ? statSync(pathFs.join(b, 'run.json')).mtimeMs : 0;
+        const at = _existsSync(pathFs.join(a, 'run.json')) ? _statSync(pathFs.join(a, 'run.json')).mtimeMs : 0;
+        const bt = _existsSync(pathFs.join(b, 'run.json')) ? _statSync(pathFs.join(b, 'run.json')).mtimeMs : 0;
         return bt - at;
       } catch { return 0; }
     });
@@ -13013,7 +13310,7 @@ app.get('/api/strix/run', (req: Request, res: Response) => {
     const rec = strixReadJson<any>(pathFs.join(resolved, 'run.json'), {});
     const vulns: any[] = (() => { try { const j = strixReadJson<any>(pathFs.join(resolved, 'vulnerabilities.json'), []); return Array.isArray(j) ? j : []; } catch { return []; } })();
     let markdown = '';
-    try { const p = pathFs.join(resolved, 'penetration_test_report.md'); if (_existsSync(p)) markdown = readFileSync(p, 'utf-8'); } catch { /* report is optional */ }
+    try { const p = pathFs.join(resolved, 'penetration_test_report.md'); if (_existsSync(p)) markdown = readFileSync(p, 'utf-8'); } catch { /* no readable report — markdown stays empty and is sent as null */ }
     res.json({ name, dir: resolved, record: rec, vulnerabilities: vulns, markdown: markdown || null });
   } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }
 });
@@ -13083,7 +13380,7 @@ app.post('/api/strix/ingest', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'unknown run' }); return;
     }
     let vulns: any[] = [];
-    try { const j = strixReadJson<any>(pathFs.join(resolved, 'vulnerabilities.json'), []); vulns = Array.isArray(j) ? j : []; } catch { /* no vulnerabilities file yet */ }
+    try { const j = strixReadJson<any>(pathFs.join(resolved, 'vulnerabilities.json'), []); vulns = Array.isArray(j) ? j : []; } catch { /* unreadable or absent — vulns stays empty */ }
     if (!vulns.length) { res.json({ ok: true, ingested: 0, message: 'No vulnerabilities in this run yet.' }); return; }
     // Map Strix vulns → T3MP3ST findings (best-effort; keep the shape loose so future
     // Strix fields do not break ingestion). Persist via the same path live-scan uses.
@@ -13102,7 +13399,7 @@ app.post('/api/strix/ingest', async (req: Request, res: Response) => {
             raw: v,
           } as any);
         ingested++;
-      } catch { /* skip a malformed vulnerability row */ }
+      } catch { /* one bad record must not abort the batch */ }
     }
     res.json({ ok: true, ingested, total: vulns.length });
   } catch (e: any) { res.status(500).json({ error: e?.message || String(e) }); }
@@ -13153,6 +13450,8 @@ async function startServer() {
   if (typeof dbSettings['osint.allowDirect'] === 'boolean') {
     process.env.T3MP3ST_OSINT_ALLOW_DIRECT = dbSettings['osint.allowDirect'] ? '1' : '0';
   }
+  // Re-apply the operator's local-agent selection so a restart doesn't silently empty it.
+  try { restoreLocalAgentSelection(); } catch (e) { console.warn(`[T3MP3ST] local-agent selection restore failed: ${(e as Error).message}`); }
   try { reindexCredentialsFromLedgers(); } catch { /* ignore on boot */ }
 
   // Install the outbound SOCKS5 proxy (if TEMPEST_PROXY_URL / saved settings define one)
