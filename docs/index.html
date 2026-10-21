@@ -4705,7 +4705,19 @@
                         </div>
                     </div>
 
-                    <!-- Target Map Interactive Node Modal -->
+                                        <!-- CVE Exploit Packages  live from /api/cves/payloads (src/tools/cve-payloads.ts). Lab and receipted targets only. -->
+                    <div class="card" id="cvePackagesCard" style="margin-bottom: 18px; border: 1px solid rgba(47,255,210,0.3);">
+                        <div class="card-header">
+                            <h3 class="card-title">>è CVE Exploit Packages  WAR ROOM</h3>
+                            <span class="tag" id="cvePackagesCount">--</span>
+                        </div>
+                        <p style="font-size: 11px; color: #888; margin-bottom: 8px;">Packages ride the Target Map KEV correlation: a receipted target running an affected PHP build is in scope; everything else stays in the lab. <span style="color:#ffaa00; font-family:'JetBrains Mono',monospace;">lab-validate</span> = vector template, verify in the lab first; <span style="color:#2fffd2; font-family:'JetBrains Mono',monospace;">confirmed-poc</span> = canonical public PoC. NEW = this week's php-src advisories.</p>
+                        <div id="cvePackagesList" style="display:flex; flex-direction:column; gap:10px; max-height:420px; overflow-y:auto;">
+                            <div style="font-size:11px; color:#888;">loading packages&</div>
+                        </div>
+                    </div>
+
+<!-- Target Map Interactive Node Modal -->
                     <div class="modal-overlay" id="targetMapModalOverlay" style="z-index: 10060;">
                         <div class="modal" style="max-width: 680px; background: #0c1b25; border: 1px solid var(--border-color); box-shadow: 0 16px 48px rgba(0,0,0,0.85), 0 0 24px rgba(var(--brand-rgb), 0.2); border-radius: 10px; overflow: hidden;">
                             <div class="modal-header" style="padding: 14px 18px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.35);">
@@ -30178,5 +30190,52 @@ Be specific and actionable. Format as structured JSON.`;
 <script src="sounds.js"></script>
 <script src="findings-sort.js"></script>
 <script src="cve-vault.js"></script>
+
+<script>
+// CVE Exploit Packages  live from /api/cves/payloads. NEW = published this week.
+(function () {
+    var FRESH = { 'CVE-2026-109618': 1, 'CVE-2026-109619': 1 };
+    function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function mono(x) { return "font-family:'JetBrains Mono',monospace;"; }
+    async function loadCvePackages() {
+        var list = document.getElementById('cvePackagesList');
+        if (!list) return;
+        try {
+            var r = await fetch(getApiBase() + '/api/cves/payloads');
+            var d = await r.json();
+            var catalog = (d.catalog || []).slice().reverse();
+            var countEl = document.getElementById('cvePackagesCount');
+            if (countEl) countEl.textContent = catalog.length + ' PKG';
+            list.innerHTML = catalog.map(function (e) {
+                var fresh = !!FRESH[e.cveID];
+                var sevColor = e.severity === 'critical' ? '#ff4444' : (e.severity === 'high' ? '#ff8800' : '#ffcc00');
+                var matColor = e.maturity === 'confirmed-poc' ? '#2fffd2' : '#ffaa00';
+                return '<div style="border:1px solid var(--border-color); border-left:3px solid ' + (fresh ? '#2fffd2' : sevColor) + '; border-radius:6px; padding:10px; background:rgba(0,0,0,0.2);">'
+                    + '<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">'
+                    + '<span style="' + mono() + ' font-size:11px; font-weight:700; color:#fff;">' + esc(e.cveID) + '</span>'
+                    + (fresh ? '<span style="' + mono() + ' font-size:9px; padding:1px 6px; border-radius:999px; background:rgba(47,255,210,0.15); border:1px solid #2fffd2; color:#2fffd2; letter-spacing:1px;">NEW</span>' : '')
+                    + '<span style="' + mono() + ' font-size:10px; color:' + sevColor + ';">' + esc(String(e.severity || '').toUpperCase()) + '</span>'
+                    + '<span style="' + mono() + ' font-size:10px; color:' + matColor + ';">' + esc(e.maturity || '') + '</span>'
+                    + '<span style="font-size:11px; color:var(--text-secondary);">' + esc(e.product || '') + '</span>'
+                    + '</div>'
+                    + '<div style="font-size:11px; color:var(--text-secondary); margin:6px 0;">' + esc(e.class || '') + '</div>'
+                    + (e.payloads || []).map(function (p) {
+                        return '<div style="margin:6px 0; padding:8px; background:rgba(0,0,0,0.3); border-radius:4px;">'
+                            + '<div style="' + mono() + ' font-size:10px; color:var(--brand, #2fffd2);">' + esc(p.name || '') + ' <span style="color:#888;">[' + esc(p.placement || '') + ']</span></div>'
+                            + '<div style="' + mono() + ' font-size:11px; color:#fff; margin-top:4px; word-break:break-all; white-space:pre-wrap;">' + esc(p.value || '') + '</div>'
+                            + (p.notes ? '<div style="font-size:10px; color:var(--text-muted, #8a9aa5); margin-top:4px;">' + esc(p.notes) + '</div>' : '')
+                            + '</div>';
+                    }).join('')
+                    + (e.notes ? '<div style="font-size:10px; color:var(--text-muted, #8a9aa5); margin-top:6px;">' + esc(e.notes) + '</div>' : '')
+                    + '</div>';
+            }).join('') || '<div style="font-size:11px; color:#888;">catalog empty</div>';
+        } catch (e) {
+            if (list) list.innerHTML = '<div style="font-size:11px; color:#ff6666;">packages unavailable: ' + esc(e && e.message ? e.message : e) + '</div>';
+        }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(loadCvePackages, 800); });
+    else setTimeout(loadCvePackages, 800);
+})();
+</script>
 </body>
 </html>

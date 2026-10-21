@@ -163,12 +163,15 @@ async function main() {
   }
 
   if (apiReachable) {
-    const preflight = await apiGet('/api/preflight', 20000);
+    // The full-catalogue preflight probes the whole arsenal (WSL + where.exe
+    // sweeps) and is documented to take ~30s on a loaded box — a 20s budget
+    // aborted it and read as a blocker. Sized to the probe's own reality.
+    const preflight = await apiGet('/api/preflight', 45000);
     check('Capability preflight', preflight.ok && typeof preflight.data.score === 'number', `${preflight.data.score ?? 'n/a'}/100${preflight.error ? ' (' + preflight.error.message + ')' : ''}`);
-    const arsenal = await apiGet('/api/arsenal/status', 20000);
+    const arsenal = await apiGet('/api/arsenal/status', 45000);
     check('Arsenal status', arsenal.ok && arsenal.data.schema_version === 't3mp3st_arsenal_status/v1', `${arsenal.data.summary?.installedCommandReady ?? 0}/${arsenal.data.summary?.commandReady ?? 0} installed${arsenal.error ? ' (' + arsenal.error.message + ')' : ''}`);
     check('Arsenal does not fake empty coverage', arsenal.ok && arsenal.data.summary?.unmodeled === false, `unmodeled=${arsenal.data.summary?.unmodeled}`);
-    const activation = await apiGet('/api/arsenal/activation', 20000);
+    const activation = await apiGet('/api/arsenal/activation', 45000);
     check('Arsenal activation plan', activation.ok && activation.data.schema_version === 't3mp3st_arsenal_activation/v1', `${activation.data.summary?.total || 0} wired / doc ${activation.data.localPlanDoc || 'missing'}`);
   }
 
