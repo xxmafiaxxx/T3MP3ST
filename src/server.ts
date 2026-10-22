@@ -47,6 +47,7 @@ import { handleCorrelationApi } from './threat-intel/correlation.js';
 import { resolveMissionLaunchConfig, resolveMissionStatus } from './mission/http-lifecycle.js';
 import { getPayloadsForCve, CVE_PAYLOAD_CATALOG } from './tools/cve-payloads.js';
 import { runWoltlabChain, breakoutPayload } from './tools/cve-woltlab-rce.js';
+import { solveFormatString, solveRsaWeak } from './tools/ctf-classics.js';
 import { INFRA_TOOLS, classifyTarget, domainInfraScan, ipInfraScan, circlHash } from './tools/osint-infra.js';
 import {
   GOOGLE_OSINT_TOOLS,
@@ -12973,6 +12974,118 @@ async function ctfRangeContainersFromDocker(): Promise<CtfRangeContainer[]> {
 
 // GET /api/ctf/range/status — live container states for the ctf compose project,
 // plus a per-port reachability probe on every published host port.
+// =============================================================================
+// CTF CLASSICS — format-string counter-write solver + weak-RSA decryptor.
+// Techniques proven live 2026-10-22 (ctf_format_string, ctf_rsa_weak).
+// Lab/CTF targets only — the routes refuse public hosts.
+// =============================================================================
+const PUBLIC_HOST_RE = /^(\d+\.\d+\.\d+\.\d+|[a-z0-9.-]+\.[a-z]{2,})$/i;
+function isPrivateCtfTarget(host: string): boolean {
+  if (/^(127\.|localhost|0\.0\.0\.0|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(host)) return true;
+  if (/\.lab|\.local|\.test|host\.docker\.internal/i.test(host)) return true;
+  return !PUBLIC_HOST_RE.test(host);
+}
+
+app.post('/api/ctf/format-string/solve', async (req: Request, res: Response): Promise<void> => {
+  const b = (req.body || {}) as Record<string, unknown>;
+  const host = typeof b.host === 'string' ? b.host.trim() : '';
+  const port = typeof b.port === 'number' ? Math.floor(b.port) : NaN;
+  if (!host || !Number.isFinite(port)) {
+    res.status(400).json({ success: false, error: 'host and port required (line-echo format-string service)' });
+    return;
+  }
+  if (!isPrivateCtfTarget(host)) {
+    res.status(400).json({ success: false, error: `refused: ${host} is a public host — this lane is for the CTF range / lab targets only` });
+    return;
+  }
+  try {
+    const result = await solveFormatString({
+      host, port,
+      winValue: typeof b.winValue === 'number' ? b.winValue : undefined,
+      connectMs: typeof b.connectMs === 'number' ? b.connectMs : undefined,
+      echoMs: typeof b.echoMs === 'number' ? b.echoMs : undefined,
+    });
+    console.log(`[T3MP3ST][CTF] format-string ${host}:${port} → flag=${result.flag ? 'yes' : 'no'} counterArg=${result.leak?.counterArgIndex} (${result.ms}ms)`);
+    res.json({ success: true, ...result });
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/ctf/rsa/solve', async (req: Request, res: Response): Promise<void> => {
+  const b = (req.body || {}) as Record<string, unknown>;
+  try {
+    const toBig = (v: unknown) => {
+      if (typeof v === 'string' && v.trim()) return BigInt(v.trim());
+      if (typeof v === 'number' && Number.isFinite(v)) return BigInt(Math.trunc(v));
+      return undefined;
+    };
+    let n = toBig(b.n), e = toBig(b.e) ?? 65537n, c = toBig(b.c);
+    let fetched: string | null = null;
+    if ((!n || !c) && typeof b.challengeUrl === 'string' && b.challengeUrl.trim()) {
+      const url = new URL(b.challengeUrl.trim());
+      if (!isPrivateCtfTarget(url.hostname)) {
+        res.status(400).json({ success: false, error: `refused: ${url.hostname} is a public host — this lane is for the CTF range / lab targets only` });
+        return;
+      }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      const j = await r.json() as Record<string, unknown>;
+      n = toBig(j.n);
+      e = toBig(j.e) ?? e;
+      c = toBig(j.ciphertext ?? j.c);
+      fetched = url.toString();
+    }
+    if (n === undefined || c === undefined) {
+      res.status(400).json({ success: false, error: 'n and c required (numbers as strings), or challengeUrl returning {n,e,ciphertext}' });
+      return;
+    }
+    const solved = solveRsaWeak(n, e, c);
+    console.log(`[T3MP3ST][CTF] rsa-weak n=${n} → p=${solved.p} q=${solved.q} method=${solved.method} (${solved.ms}ms)`);
+    let flag: string | null = null;
+    let submitStatus: number | null = null;
+    if (solved.m !== undefined && typeof b.submitUrl === 'string' && b.submitUrl.trim()) {
+      const url = new URL(b.submitUrl.trim());
+      if (!isPrivateCtfTarget(url.hostname)) {
+        res.status(400).json({ success: false, error: `refused: ${url.hostname} is a public host — submitUrl is for the CTF range / lab targets only` });
+        return;
+      }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const sub = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ answer: solved.m.toString() }).toString(),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      submitStatus = sub.status;
+      try {
+        const j = await sub.json() as { flag?: string };
+        flag = j.flag ?? null;
+      } catch {
+        flag = null;
+      }
+    }
+    res.json({
+      success: true,
+      ...solved,
+      p: solved.p.toString(), q: solved.q.toString(), d: solved.d.toString(),
+      n: solved.n.toString(), e: solved.e.toString(), c: solved.c?.toString(),
+      m: solved.m?.toString(),
+      method: solved.method, ms: solved.ms,
+      fetchedFrom: fetched,
+      flag,
+      submitStatus,
+      note: 'weak-prime construction — trial division (tiny p) or Fermat (p≈q). Never valid against properly generated moduli.',
+    });
+  } catch (err: unknown) {
+    res.status(400).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.get('/api/ctf/range/status', async (_req: Request, res: Response): Promise<void> => {
   const dir = resolveCtfRangeDir();
   if (!dir) { res.status(500).json({ error: 'ctf/docker-compose.yml not found on the server host' }); return; }
