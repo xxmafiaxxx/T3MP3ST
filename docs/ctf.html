@@ -3635,7 +3635,7 @@
                     <span class="icon">🛡️</span> DFIR Response <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
                                 <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
-            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
+            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
                     <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
                 </a>
 <a class="nav-item" href="terminal.html" style="text-decoration:none;">
@@ -3698,7 +3698,36 @@
                     <div style="margin-bottom: 14px; padding: 10px 14px; background: rgba(0,200,120,0.08); border: 1px solid rgba(0,200,120,0.3); border-radius: 8px; font-size: 12px; color: #66d9a3; line-height: 1.5;">
                         📡 <b>Live range, live benchmarks.</b> Container status and controls drive the real Docker compose stack in <b>ctf/</b> through the T3MP3ST server (<code>/api/ctf/range/*</code>). Benchmark agents interact with the actual containers (HTTP fetch + raw TCP via the server) and every captured flag is <b>verified against the live target</b> — a solve only counts when the flag matches. For broader live-exploit-verified suites see <b>OBSIDIVM</b>.
                     </div>
-                    <!-- Quick Setup Wizard -->
+                                            <!-- ⚡ TOOL BELT — CTF classics (proven live 2026-10-22) -->
+                        <div id="ctf-toolbelt" style="margin: 0 0 18px; border: 1px solid rgba(var(--brand-rgb),0.35); border-radius: 8px; background: linear-gradient(180deg, rgba(var(--brand-rgb),0.06), rgba(10,12,18,0.4)); padding: 12px 14px;">
+                            <div class="ops-card-title" style="margin-bottom: 6px;">
+                                <span style="color:var(--brand);">⚡ TOOL BELT — format-string counter write · weak-RSA factor</span>
+                                <span id="ctbState" style="color:#7a7f87;">idle</span>
+                            </div>
+                            <div style="font-size: 10.5px; color: #7a7f87; margin: 2px 0 10px;">
+                                Both techniques validated end-to-end 2026-10-22: <b>format-string</b> — the counter pointer rides a REGISTER vararg only on the first message, so <code style="color:#9baeb8;">%4919c%1$hn</code> fires first and the win prints the flag; <b>weak-RSA</b> — tiny primes (trial division) or close primes (Fermat) → d = e⁻¹ mod φ → decrypt + auto-submit. Lab/CTF targets only — public hosts are refused by the route.
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px;">
+                                <div style="border: 1px solid rgba(var(--brand-rgb),0.25); border-radius: 6px; padding: 10px;">
+                                    <div style="font-size: 11px; font-weight: bold; color: var(--brand); margin-bottom: 6px;">🧵 FORMAT STRING · counter write</div>
+                                    <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 6px;">
+                                        <input id="ctbFsHost" value="127.0.0.1" spellcheck="false" style="flex: 1; min-width: 90px; padding: 3px 6px; font-size: 11px; font-family: 'JetBrains Mono',monospace; color: #cfe8d8; background: rgba(0,0,0,0.35); border: 1px solid rgba(var(--brand-rgb),0.3); border-radius: 4px; outline: none;" placeholder="host">
+                                        <input id="ctbFsPort" type="number" value="9002" style="width: 70px; padding: 3px 6px; font-size: 11px; font-family: 'JetBrains Mono',monospace; color: #cfe8d8; background: rgba(0,0,0,0.35); border: 1px solid rgba(var(--brand-rgb),0.3); border-radius: 4px; outline: none;" placeholder="port">
+                                        <button class="btn btn-sm" onclick="ctbRunFs()" style="white-space: nowrap;">▶ SOLVE</button>
+                                    </div>
+                                    <div id="ctbFsOut" style="font-family: 'JetBrains Mono',monospace; font-size: 10.5px; color: #9baeb8; word-break: break-all; min-height: 16px;"></div>
+                                </div>
+                                <div style="border: 1px solid rgba(var(--brand-rgb),0.25); border-radius: 6px; padding: 10px;">
+                                    <div style="font-size: 11px; font-weight: bold; color: var(--brand); margin-bottom: 6px;">🔑 WEAK RSA · factor + decrypt + submit</div>
+                                    <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 6px;">
+                                        <input id="ctbRsaUrl" value="http://127.0.0.1:9102/challenge" spellcheck="false" style="flex: 1; min-width: 120px; padding: 3px 6px; font-size: 11px; font-family: 'JetBrains Mono',monospace; color: #cfe8d8; background: rgba(0,0,0,0.35); border: 1px solid rgba(var(--brand-rgb),0.3); border-radius: 4px; outline: none;" placeholder="challenge URL ({n,e,ciphertext})">
+                                        <button class="btn btn-sm" onclick="ctbRunRsa()" style="white-space: nowrap;">▶ SOLVE</button>
+                                    </div>
+                                    <div id="ctbRsaOut" style="font-family: 'JetBrains Mono',monospace; font-size: 10.5px; color: #9baeb8; word-break: break-all; min-height: 16px;"></div>
+                                </div>
+                            </div>
+                        </div>
+<!-- Quick Setup Wizard -->
                     <div class="card" id="ctfSetupWizard" style="margin-bottom: 18px; background: linear-gradient(135deg, rgba(255,136,0,0.1), rgba(255,68,68,0.1)); border: 1px solid rgba(255,136,0,0.3);">
                         <div class="card-header">
                             <h3 class="card-title">🚀 Quick Setup</h3>
@@ -26723,6 +26752,53 @@ Be specific and actionable. Format as structured JSON.`;
     window.t3mpTheme = { apply: apply, themes: THEMES };
   })();
 </script>
+    <script>
+    function ctbApiBase() {
+        try { if (window.T3MP3ST_API && typeof T3MP3ST_API.getBase === 'function') return T3MP3ST_API.getBase(); } catch (e) {}
+        return 'http://' + (window.location.hostname || '127.0.0.1') + ':3333';
+    }
+    function ctbEsc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    async function ctbRunFs() {
+        const out = document.getElementById('ctbFsOut');
+        const state = document.getElementById('ctbState');
+        const host = document.getElementById('ctbFsHost').value.trim();
+        const port = parseInt(document.getElementById('ctbFsPort').value, 10);
+        out.textContent = 'running…'; state.textContent = 'running…'; state.style.color = '#ffa502';
+        try {
+            const r = await fetch(ctbApiBase() + '/api/ctf/format-string/solve', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ host: host, port: port })
+            });
+            const j = await r.json();
+            out.innerHTML = j.flag
+                ? '<span style="color:var(--brand);font-weight:bold;">🏁 ' + ctbEsc(j.flag) + '</span> <span style="color:#5a5f67;">(' + j.ms + 'ms, payload ' + ctbEsc(j.payload) + ')</span>'
+                : '<span style="color:#ff4757;">no flag</span> — counterArg=' + ctbEsc(j.leak && j.leak.counterArgIndex) + ' bufferArg=' + ctbEsc(j.leak && j.leak.bufferArgIndex) + ' ' + ctbEsc(j.error || '');
+            state.textContent = j.flag ? '🏁 solved' : 'no flag'; state.style.color = j.flag ? 'var(--brand)' : '#ff4757';
+        } catch (e) { out.textContent = 'error: ' + e.message; state.textContent = '✗ failed'; state.style.color = '#ff4757'; }
+    }
+    async function ctbRunRsa() {
+        const out = document.getElementById('ctbRsaOut');
+        const state = document.getElementById('ctbState');
+        const url = document.getElementById('ctbRsaUrl').value.trim();
+        out.textContent = 'factoring…'; state.textContent = 'factoring…'; state.style.color = '#ffa502';
+        try {
+            const r = await fetch(ctbApiBase() + '/api/ctf/rsa/solve', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ challengeUrl: url, submitUrl: url.replace(/\/challenge\/?$/, '/solve') })
+            });
+            const j = await r.json();
+            if (j.error) { out.textContent = 'error: ' + j.error; state.textContent = '✗ failed'; state.style.color = '#ff4757'; return; }
+            out.innerHTML = 'p=' + ctbEsc(j.p) + ' q=' + ctbEsc(j.q) + ' → m=' + ctbEsc(j.m) + ' (' + ctbEsc(j.method) + ', ' + j.ms + 'ms)' +
+                (j.flag ? ' <span style="color:var(--brand);font-weight:bold;">🏁 ' + ctbEsc(j.flag) + '</span>' : ' <span style="color:#ffa502;">submit ' + ctbEsc(j.submitStatus) + '</span>');
+            state.textContent = j.flag ? '🏁 solved' : 'factored (no flag)'; state.style.color = j.flag ? 'var(--brand)' : '#ffa502';
+        } catch (e) { out.textContent = 'error: ' + e.message; state.textContent = '✗ failed'; state.style.color = '#ff4757'; }
+    }
+</script>
+
     <script src="embed.js"></script>
 
 <script>
