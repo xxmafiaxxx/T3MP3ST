@@ -847,7 +847,7 @@
                     <span class="icon">🛡️</span> DFIR Response <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
                                 <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
-            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
+            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
                     <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
                 </a>
 <a class="nav-item" href="terminal.html">
@@ -1365,6 +1365,12 @@
                     '<div class="modal-section-title">Advisory Notes & References</div>' +
                     '<div style="font-size:12px; color:var(--text-secondary); background:rgba(0,0,0,0.25); padding:10px 14px; border-radius:4px; font-family:\'JetBrains Mono\',monospace; word-break:break-all;">' + notesEsc + '</div>' +
                 '</div>';
+            }
+
+            if (item.cveID === 'CVE-2026-79362') {
+                bodyHtml += '<div style="margin-top:12px;">' +
+                    '<a href="index.html#rce-chain" style="display:inline-block;padding:8px 14px;font-weight:700;color:#0a0c12;background:linear-gradient(90deg,#ff4757,#ff6b45);border-radius:6px;text-decoration:none;font-size:12px;">💥 OPEN RCE CHAIN (War Room)</a>' +
+                    '<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">automated: fingerprint → auth → inject → trigger → canary → command</span></div>';
             }
 
             document.getElementById('modalBody').innerHTML = bodyHtml;

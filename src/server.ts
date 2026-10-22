@@ -46,6 +46,7 @@ import { CveFeedEngine } from './tools/cve-feed.js';
 import { handleCorrelationApi } from './threat-intel/correlation.js';
 import { resolveMissionLaunchConfig, resolveMissionStatus } from './mission/http-lifecycle.js';
 import { getPayloadsForCve, CVE_PAYLOAD_CATALOG } from './tools/cve-payloads.js';
+import { runWoltlabChain, breakoutPayload } from './tools/cve-woltlab-rce.js';
 import { INFRA_TOOLS, classifyTarget, domainInfraScan, ipInfraScan, circlHash } from './tools/osint-infra.js';
 import {
   GOOGLE_OSINT_TOOLS,
@@ -9389,6 +9390,56 @@ app.get('/api/cves/payloads', (req: Request, res: Response): void => {
     authorizedUse: 'Lab and receipted targets only — see T3MP3ST SCOPE_AND_AUTHORIZATION. Canary/inert variants are included where out-of-band proof suffices.',
     catalog: CVE_PAYLOAD_CATALOG,
   });
+});
+
+// =============================================================================
+// ACTIVE EXPLOIT CHAIN — CVE-2026-79362 WoltLab DiskCacheSource poison → RCE.
+// The engine owns the authorization gate (rce mode vs public host requires the
+// explicit ack; canary mode is always allowed). One concurrent run per target.
+// MUST be registered before /api/cves/:cveId.
+// =============================================================================
+const WOLTLAB_CHAIN_RUNNING = new Set<string>();
+
+app.get('/api/exploit/woltlab-chain/payload-preview', (req: Request, res: Response): void => {
+  const mode = req.query.mode === 'rce' ? 'rce' : 'canary';
+  const p = breakoutPayload(mode);
+  res.json({ success: true, mode, bytes: p.length, payload: p });
+});
+
+app.post('/api/exploit/woltlab-chain', async (req: Request, res: Response): Promise<void> => {
+  const b = (req.body || {}) as Record<string, unknown>;
+  const target = typeof b.target === 'string' ? b.target.trim() : '';
+  const mode = b.mode === 'rce' ? 'rce' : 'canary';
+  if (!target) {
+    res.status(400).json({ success: false, error: 'target required (base URL, e.g. http://127.0.0.1:8095)' });
+    return;
+  }
+  const lockKey = `${mode}:${target.toLowerCase()}`;
+  if (WOLTLAB_CHAIN_RUNNING.has(lockKey)) {
+    res.status(409).json({ success: false, error: `a ${mode} chain is already running against ${target} — wait for it to finish` });
+    return;
+  }
+  WOLTLAB_CHAIN_RUNNING.add(lockKey);
+  try {
+    const result = await runWoltlabChain({
+      target,
+      mode,
+      username: typeof b.username === 'string' ? b.username : undefined,
+      password: typeof b.password === 'string' ? b.password : undefined,
+      cookie: typeof b.cookie === 'string' ? b.cookie : undefined,
+      command: typeof b.command === 'string' && b.command.trim() ? b.command.trim() : undefined,
+      authorize: typeof b.authorize === 'string' ? b.authorize : undefined,
+      injectPath: typeof b.injectPath === 'string' && b.injectPath.trim() ? b.injectPath.trim() : undefined,
+      injectField: typeof b.injectField === 'string' && b.injectField.trim() ? b.injectField.trim() : undefined,
+      timeoutMs: typeof b.timeoutMs === 'number' ? b.timeoutMs : undefined,
+    });
+    console.log(`[T3MP3ST][EXPLOIT] woltlab-chain ${mode} ${target} → poisoned=${result.poisoned} rce=${result.rce} (${result.stages.length} stages)`);
+    res.json({ success: !result.error, ...result });
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    WOLTLAB_CHAIN_RUNNING.delete(lockKey);
+  }
 });
 
 app.get('/api/cves/:cveId', (req: Request, res: Response): void => {
