@@ -1,5 +1,31 @@
 # AGENTS.md — T3MP3ST project
 
+## Session Log — 2026-10-22 (Jarvis) — "WRITE ANOTHER EXPLOIT FOR THE RECENT PHP VULNERABILITY": PHP-SRC OCT-26 SUITE SHIPPED — 109618 DETERMINISTIC (3/3 TOOL + 6/6 HAND), 8.5.11 HEAP CORRUPTION FOUND (NEW), 109619 CONSUMER WINDOW PROVEN ON 8.5.11, GADGET WALL RE-CONFIRMED
+
+**Request:** *"do research. learn everything about this ctf. write another exploit for the recent php vulnerability. when done test it and do a pr and push. upload all work done"*
+
+### WHAT SHIPPED
+`src/tools/php-src-oct26.ts` + routes `POST /api/exploit/php-oct26/{oom,uaf,consumer-window}` (private-target gates — the OOM is a DoS primitive) + `ctf/php-oct26-lab/` (RESEARCH.md with the full range research + the runbook + lab harness: single-worker conf, fatal/consumer/probe pages). Both labs live: 8.2.34 (bxlab :8399) and **php:8.5.11** (:8398 — vulnerable branch, 8.5.12 = fix).
+
+### NEW MEASURED RESULTS (this session, on top of the prior 13/13)
+1. **109618 determinism re-proven through the tool: 3/3** (hand: 6/6) on 8.2.34 — bomb = ONE multipart part, 1,656,737 × 5-byte header lines (`X:A\r\n`), 8,283,760B under the 8M post_max_size ceiling; exhaustion during rfc1867 input parsing (`in Unknown on line 0`).
+2. **NEW: php:8.5.11 does NOT exhaust cleanly — it CORRUPTS THE HEAP**: the same bomb → `zend_mm_heap corrupted` + child SIGABRT. A memory-safety violation on 8.5, stronger than the 8.2 clean-exhaustion behavior. Version-dependent classification shipped in the tool (EXHAUSTION_RE vs HEAP_CORRUPT_RE).
+3. **109619 consumer window PROVEN on 8.5.11**: a pre-RINIT ini deprecation (`.htaccess` auto_detect_line_endings) lands in error_get_last() with `file: Unknown, line: 0` before any application code. Stale-backtrace marker bleed: NOT reproduced on stock 8.5.11 — heap-craft required per advisory.
+4. **Gadget-RCE wall re-confirmed on 8.2.34**: planted `Gad::__wakeup` (pwned.txt marker) never fires through the rfc1867 session decode — `__PHP_Incomplete_Class` wall (class tables unregistered pre-RINIT).
+
+### LAB LAWS THAT BIT (all measured)
+- The standalone crypto-gateway container 502s its challenge (upstream hostname needs the compose network) — expose the INNER server directly; and MSYS path-conversion mangles `-w /challenge` (needs MSYS_NO_PATHCONV).
+- bxlab's PID1 = `sleep infinity` — Apache was hand-started in a prior session and DIES with the container restart; every lab session must re-run `apachectl start`.
+- printf-style slicing by eye fabricated three fake libc bases in one hour earlier this session; the php-side equivalent: the bomb header line is 5 bytes (`X:A\r\n`), not 6 — the structural test caught my 6-byte math before it shipped.
+- max_input_vars=1000 caps $_POST growth, but the OOM amplification lives in MIME-header parsing (NOT input vars) — duplicates accumulate regardless.
+
+### Verified
+- **Full suite 126 files, 1498 passed, 0 failed, 38 skipped** (new: `php-src-oct26.test.ts`, 7 tests — bomb builder pinned to the proven artifact's structure (1 part / >1.6M lines / ≤8M ceiling / byte-deterministic), classification regexes against REAL captured output from both branches). tsc exit 0 via direct node.
+- All three routes validated end-to-end through the restarted server (OOM 3/3, UAF honest classification, 8.5 window true, public-host gate refuses example.com).
+- Files: `src/tools/php-src-oct26.ts` (new), `src/server.ts` (3 routes + import, surgical staging), `src/__tests__/php-src-oct26.test.ts` (new), `ctf/php-oct26-lab/` (RESEARCH.md + harness).
+
+**STANDING LESSON: "ANOTHER EXPLOIT" FOR AN ALREADY-LAB-VALIDATED CVE MEANS NEW MEASUREMENT, NOT NEW PROSE — and the new measurement moved the needle.** The prior session bounded 109619/109618 on 8.2; running the same bombs against 8.5.11 — one minor branch forward — produced heap corruption the 8.2 runs never showed, plus a clean consumer-window proof. Version adjacency changes exploitability class; re-measure per branch before quoting any bound.
+
 ## Session Log — 2026-10-22 (Jarvis) — "ADD THOSE TO YOUR TOOL BELT": FORMAT-STRING COUNTER WRITE + WEAK-RSA FACTOR WIRED AS LIVE SOLVERS — BOTH FLAGS CAPTURED THROUGH THE TOOL, AND THE THREE LAB LAWS THAT GOT THERE
 
 **Request:** *"format string- got overwrite works and rsa weak prime factor. add those to your tool belt"* + *"go. get rce"*
