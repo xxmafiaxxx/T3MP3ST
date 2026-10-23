@@ -48,6 +48,7 @@ import { resolveMissionLaunchConfig, resolveMissionStatus } from './mission/http
 import { getPayloadsForCve, CVE_PAYLOAD_CATALOG } from './tools/cve-payloads.js';
 import { runWoltlabChain, breakoutPayload } from './tools/cve-woltlab-rce.js';
 import { solveFormatString, solveRsaWeak } from './tools/ctf-classics.js';
+import { fireOomExhaust, runUafAttempt, php85ConsumerWindow } from './tools/php-src-oct26.js';
 import { INFRA_TOOLS, classifyTarget, domainInfraScan, ipInfraScan, circlHash } from './tools/osint-infra.js';
 import {
   GOOGLE_OSINT_TOOLS,
@@ -9440,6 +9441,95 @@ app.post('/api/exploit/woltlab-chain', async (req: Request, res: Response): Prom
     res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
   } finally {
     WOLTLAB_CHAIN_RUNNING.delete(lockKey);
+  }
+});
+
+// =============================================================================
+// PHP-SRC OCT-2026 EXPLOITS — CVE-2026-109618 (deterministic rfc1867 OOM) and
+// CVE-2026-109619 (stale worker-state consumer window). Lab/CTF targets only —
+// the OOM is a denial-of-service primitive by nature. Public hosts refused.
+// =============================================================================
+function isPrivatePhpOctTarget(host: string): boolean {
+  if (/^(127\.|localhost|0\.0\.0\.0|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(host)) return true;
+  if (/\.lab|\.local|\.test|host\.docker\.internal/i.test(host)) return true;
+  return false;
+}
+
+app.post('/api/exploit/php-oct26/oom', async (req: Request, res: Response): Promise<void> => {
+  const b = (req.body || {}) as Record<string, unknown>;
+  const url = typeof b.url === 'string' ? b.url.trim() : '';
+  let host = '';
+  try { host = new URL(url).hostname; } catch { /* handled below */ }
+  if (!url || !host) {
+    res.status(400).json({ success: false, error: 'url required — a PHP target on the lab/CTF range (POSTs land in rfc1867 input parsing)' });
+    return;
+  }
+  if (!isPrivatePhpOctTarget(host)) {
+    res.status(400).json({ success: false, error: `refused: ${host} is a public host — the OOM is a DoS primitive, lab/CTF targets only` });
+    return;
+  }
+  try {
+    const result = await fireOomExhaust({
+      url,
+      rounds: typeof b.rounds === 'number' ? b.rounds : undefined,
+      timeoutMs: typeof b.timeoutMs === 'number' ? b.timeoutMs : undefined,
+    });
+    console.log(`[T3MP3ST][EXPLOIT] php-oct26 OOM ${url} → ${result.determinism} heapCorrupt=${result.heapCorruptEvents}`);
+    res.json({ success: true, ...result });
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/exploit/php-oct26/uaf', async (req: Request, res: Response): Promise<void> => {
+  const b = (req.body || {}) as Record<string, unknown>;
+  const producerUrl = typeof b.producerUrl === 'string' ? b.producerUrl.trim() : '';
+  const consumerUrl = typeof b.consumerUrl === 'string' ? b.consumerUrl.trim() : '';
+  let host = '';
+  try { host = new URL(producerUrl).hostname; } catch { /* handled below */ }
+  if (!producerUrl || !host) {
+    res.status(400).json({ success: false, error: 'producerUrl + consumerUrl required (single-worker lab; producer/consumer must hit the SAME worker)' });
+    return;
+  }
+  if (!isPrivatePhpOctTarget(host)) {
+    res.status(400).json({ success: false, error: `refused: ${host} is a public host — lab/CTF targets only` });
+    return;
+  }
+  try {
+    const result = await runUafAttempt({
+      producerUrl,
+      consumerUrl: consumerUrl || producerUrl,
+      plantUrl: typeof b.plantUrl === 'string' ? b.plantUrl.trim() : undefined,
+      checkUrl: typeof b.checkUrl === 'string' ? b.checkUrl.trim() : undefined,
+      cookie: typeof b.cookie === 'string' ? b.cookie : undefined,
+      timeoutMs: typeof b.timeoutMs === 'number' ? b.timeoutMs : undefined,
+    });
+    console.log(`[T3MP3ST][EXPLOIT] php-oct26 UAF ${producerUrl} → window=${result.consumerWindow} gadget=${result.gadgetRceFired}`);
+    res.json({ success: true, ...result });
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/exploit/php-oct26/consumer-window', async (req: Request, res: Response): Promise<void> => {
+  const b = (req.body || {}) as Record<string, unknown>;
+  const fatalUrl = typeof b.fatalUrl === 'string' ? b.fatalUrl.trim() : '';
+  const consumerUrl = typeof b.consumerUrl === 'string' ? b.consumerUrl.trim() : '';
+  let host = '';
+  try { host = new URL(fatalUrl).hostname; } catch { /* handled below */ }
+  if (!fatalUrl || !host || !consumerUrl) {
+    res.status(400).json({ success: false, error: 'fatalUrl + consumerUrl required (PHP 8.5 lab with fatal_error_backtraces on)' });
+    return;
+  }
+  if (!isPrivatePhpOctTarget(host)) {
+    res.status(400).json({ success: false, error: `refused: ${host} is a public host — lab/CTF targets only` });
+    return;
+  }
+  try {
+    const result = await php85ConsumerWindow({ fatalUrl, consumerUrl });
+    res.json({ success: true, ...result });
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
   }
 });
 
