@@ -92,6 +92,7 @@ import {
   type GeoPoint,
 } from './tools/osint.js';
 import { deepUsernameSweep, formatDeepSweep, OSINT_DEEP_TOOLS } from './tools/osint-correlate.js';
+import { bopInmateSearch, npiRegistryLookup, peopleNameDiscovery, formatPeopleReport } from './tools/osint-people.js';
 import {
   SHERLOCK_SOURCE,
   SHERLOCK_LICENSE,
@@ -2291,7 +2292,21 @@ function guardAction(body: Record<string, unknown>, action: GuardAction, target:
   // LAB SCOPE AUTO-GRANT: the operator owns loopback/private/CTF-lab targets — receipts are granted
   // implicitly so agents never stall asking for them (autonomous_execution stays gated).
   if (action !== 'autonomous_execution' && isLoopbackOrLabTarget(target)) return { allowed: true };
-  return { allowed: false, approval: createApprovalRequest(action, target, reason, body) };
+  const approval = createApprovalRequest(action, target, reason, body);
+  // INLINE OPERATOR AUTHORIZATION: the panel sends authorize:true when the operator's own
+  // click IS the authorization — the receipt is still minted, but approved in the same
+  // stroke (same semantics and 30-minute TTL as POST /api/approvals/:id/approve), so the
+  // scan runs now and the audit trail still shows who approved what, when. Deep
+  // autonomous execution is deliberately excluded: that gate is never bypassed inline.
+  if (body.authorize === true && action !== 'autonomous_execution') {
+    approval.status = 'approved';
+    approval.approvedBy = typeof body.approvedBy === 'string' && body.approvedBy.trim() ? body.approvedBy.trim() : 'operator-panel';
+    approval.expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
+    approval.updatedAt = nowIso();
+    emitContractEvent('approval.approved', { approvalId: approval.id, action, target, inline: true });
+    return { allowed: true, approval };
+  }
+  return { allowed: false, approval };
 }
 
 function blockForApproval(res: Response, guard: { allowed: false; approval: ApprovalRequest }): void {
@@ -5921,6 +5936,48 @@ app.get('/api/net/ip', async (req: Request, res: Response): Promise<void> => {
   }
 });
 
+// Start the Tor daemon (scripts/start-tor.cmd — idempotent, WMI-detached so the
+// daemon survives; exposes SOCKS on 127.0.0.1:9050 only). Waits up to 90s for the
+// SOCKS port to answer so the caller gets a TRUE "live", not "launched".
+app.post('/api/net/tor/start', async (_req: Request, res: Response): Promise<void> => {
+  const { createConnection } = await import('net');
+  const socksUp = () => new Promise<boolean>((resolve) => {
+    const s = createConnection({ host: '127.0.0.1', port: 9050 });
+    const done = (ok: boolean) => { s.destroy(); resolve(ok); };
+    s.setTimeout(1500);
+    s.once('connect', () => done(true));
+    s.once('timeout', () => done(false));
+    s.once('error', () => done(false));
+  });
+  if (await socksUp()) {
+    res.json({ ok: true, alreadyLive: true, socksLive: true, note: 'Tor SOCKS already answering on 127.0.0.1:9050' });
+    return;
+  }
+  const script = join(process.cwd(), 'scripts', 'start-tor.cmd');
+  if (!existsSync(script)) {
+    res.status(500).json({ error: `start-tor.cmd not found at ${script}` });
+    return;
+  }
+  try {
+    // Detached + unref: the cmd script launches tor.exe via WMI (outside any job tree),
+    // and the server outlives this spawn anyway — the daemon must not die with a request.
+    const child = spawn('cmd.exe', ['/d', '/c', script], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true });
+    child.unref();
+  } catch (e) {
+    res.status(500).json({ error: `failed to spawn start-tor.cmd: ${String((e as Error)?.message || e)}` });
+    return;
+  }
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (await socksUp()) {
+      res.json({ ok: true, socksLive: true, waitMs: 90_000 - (deadline - Date.now()), note: 'Tor SOCKS live on 127.0.0.1:9050 — bootstrap completes in the background (check /api/osint/tor-status for circuit readiness)' });
+      return;
+    }
+  }
+  res.status(202).json({ ok: false, socksLive: false, note: 'spawned but the SOCKS port did not answer within 90s — check C:\\Temp\\TorBrowser\\t3mp3st-data\\tor.log' });
+});
+
 app.get('/api/arsenal/catalog', (req: Request, res: Response) => {
   const family = typeof req.query.family === 'string' ? normalizeMissionFamily(req.query.family, 'web_api') : undefined;
   const category = typeof req.query.category === 'string' ? req.query.category : '';
@@ -7790,12 +7847,26 @@ app.post('/api/tools/recon', async (req: Request, res: Response): Promise<void> 
   if (!guard.allowed) { blockForApproval(res, guard); return; }
 
   const portArgs: Record<string, string> = { quick: '-F', standard: '--top-ports 1000', full: '-p-', stealth: '--top-ports 100 -T1' };
+  // dig/nmap are not Windows binaries — they resolve through the arsenal's locator
+  // (host PATH, else `wsl.exe -d kali-linux -e …`). Raw spawn here answered
+  // "spawn dig ENOENT" on Windows even with an approved receipt: an authorized
+  // scan that runs nothing is still not a scan.
+  const { runSubprocess } = await import('./arsenal/index.js');
   const [dns, ports] = await Promise.all([
-    executeCommand(`dig +short ${targetHost}`),
-    executeCommand(`nmap ${portArgs[scan_type] || '-F'} --open ${targetHost}`, 120000)
+    runSubprocess('dig', ['+short', targetHost], { timeout: 20_000 }),
+    runSubprocess('nmap', [portArgs[scan_type] || '-F', '--open', targetHost], { timeout: 180_000 }),
   ]);
+  const asResult = (r: { stdout: string; stderr: string; exitCode: number }) =>
+    ({ success: r.exitCode === 0, output: (r.stdout || r.stderr || '').trim(), exitCode: r.exitCode });
+  // Honesty: WSL2 (non-mirrored) cannot reach the Windows-host SOCKS client, so a
+  // WSL-resolved scan egresses from the real IP even while the egress proxy is on.
+  let egressNote: string | undefined;
+  if (getProxyStatus().enabled) {
+    const nmapLoc = await findBinaryLocation('nmap').catch(() => null);
+    if (nmapLoc?.inWsl) egressNote = 'nmap ran in WSL (kali-linux) — WSL2 cannot use the Windows-host SOCKS proxy on 127.0.0.1, so this scan egressed from the real IP. fetch()-based lanes DO exit through the proxy.';
+  }
 
-  res.json({ success: true, target: targetHost, scan_type, approvalId: guard.approval?.id || null, results: { dns, ports } });
+  res.json({ success: true, target: targetHost, scan_type, approvalId: guard.approval?.id || null, approval: guard.approval || null, egressNote: egressNote ?? null, results: { dns: asResult(dns), ports: asResult(ports) } });
 });
 
 app.post('/api/tools/sploitus', async (req: Request, res: Response): Promise<void> => {
@@ -8018,6 +8089,61 @@ app.post('/api/osint/username-sweep/deep', async (req: Request, res: Response): 
       });
     }
     res.json({ success: true, result, report: formatDeepSweep(result) });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// ── PEOPLE RECORDS (public government + name-index lanes; src/tools/osint-people.ts) ──
+// BOP federal inmate locator: bop.gov/inmateloc POSTs to /PublicInfo/execute/inmateloc and
+// consumes JSON (measured 2026-10-26). An empty InmateLocator is an HONEST zero from BOP;
+// captcha/validation refusals are reported as UNMEASURED, never laundered into "no record".
+app.post('/api/osint/records/bop-inmate', async (req: Request, res: Response): Promise<void> => {
+  const b = req.body || {};
+  try {
+    const result = await bopInmateSearch({
+      firstName: typeof b.firstName === 'string' ? b.firstName : undefined,
+      middleName: typeof b.middleName === 'string' ? b.middleName : undefined,
+      lastName: typeof b.lastName === 'string' ? b.lastName : undefined,
+      age: typeof b.age === 'string' || typeof b.age === 'number' ? String(b.age) : undefined,
+      race: typeof b.race === 'string' ? b.race : undefined,
+      sex: typeof b.sex === 'string' ? b.sex : undefined,
+      inmateNum: typeof b.inmateNum === 'string' ? b.inmateNum : undefined,
+      inmateNumType: typeof b.inmateNumType === 'string' ? (b.inmateNumType as 'IRN' | 'DCDC' | 'FBI' | 'INS') : undefined,
+    });
+    console.log(`[T3MP3ST][OSINT] BOP inmate search: ${b.lastName || ''} ${b.firstName || ''}${b.inmateNum ? ` reg ${b.inmateNum}` : ''} → ${result.found === true ? `${result.count} record(s)` : result.found === false ? 'honest zero' : `unmeasured (${result.note?.slice(0, 60) || '?'})`}`);
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// CMS NPI registry — official public clinician records (version=2.1 measured; v1 404s).
+app.post('/api/osint/records/npi', async (req: Request, res: Response): Promise<void> => {
+  const b = req.body || {};
+  try {
+    const result = await npiRegistryLookup({
+      firstName: typeof b.firstName === 'string' ? b.firstName : undefined,
+      lastName: typeof b.lastName === 'string' ? b.lastName : undefined,
+      taxonomy: typeof b.taxonomy === 'string' ? b.taxonomy : undefined,
+      state: typeof b.state === 'string' ? b.state : undefined,
+      npi: typeof b.npi === 'string' ? b.npi : undefined,
+    });
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// Name-only search-engine discovery — the walled-platform lane for a PERSON.
+app.post('/api/osint/people/discovery', async (req: Request, res: Response): Promise<void> => {
+  const name = typeof req.body?.name === 'string' ? req.body.name : '';
+  if (!name.trim()) { res.status(400).json({ error: 'name required (first + last)' }); return; }
+  const budgetMs = Math.max(15_000, Math.min(300_000, Number(req.body?.budgetMs) || 90_000));
+  try {
+    const result = await peopleNameDiscovery(name, { deadlineMs: Date.now() + budgetMs });
+    console.log(`[T3MP3ST][OSINT] people discovery: ${name} → ${result.hits.length} hit(s), ${result.mentions.length} mention(s)`);
+    res.json({ success: true, result, report: formatPeopleReport(null, null, result) });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || String(err) });
   }
@@ -13687,7 +13813,11 @@ function cairnRunView(st: CairnRunState) {
     origin: b.origin,
     goal: b.goal,
     startedAt: st.startedAt,
-    ms: Date.now() - st.startedAt,
+    // After the search settles, ms is the RUN's true duration (from the result), not
+    // time-since-start — a completed search whose age keeps climbing reads as a search
+    // that overran its budget by minutes (measured live: "complete at 154s" for a run
+    // whose journal ended at 10.3s).
+    ms: st.result ? st.result.ms : Date.now() - st.startedAt,
     completion: b.completion,
     facts: [...b.facts.values()],
     intents: [...b.intents.values()],

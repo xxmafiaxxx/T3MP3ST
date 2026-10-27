@@ -252,6 +252,7 @@ import { OSINT_TOOLS } from './tools/osint.js';
 import { OSINT_DEEP_TOOLS } from './tools/osint-correlate.js';
 import { INFRA_TOOLS } from './tools/osint-infra.js';
 import { GOOGLE_OSINT_TOOLS } from './tools/osint-google.js';
+import { OSINT_PEOPLE_TOOLS } from './tools/osint-people.js';
 import { ANDROID_TOOLS } from './tools/android-forensics.js';
 import { ApprovalController, type ApprovalRequest } from './arsenal/approval.js';
 import { TOOL_ADAPTERS } from './arsenal/catalog.js';
@@ -422,6 +423,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     this.arsenal.registerMany(OSINT_DEEP_TOOLS);
     this.arsenal.registerMany(INFRA_TOOLS);
     this.arsenal.registerMany(GOOGLE_OSINT_TOOLS);
+    this.arsenal.registerMany(OSINT_PEOPLE_TOOLS);
     this.arsenal.registerMany(ANDROID_TOOLS);
 
     // Capability approval + spicy-action warning gate. An intrusive/credential/dangerous tool is

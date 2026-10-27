@@ -35,6 +35,14 @@ import {
   type SweepResult,
   type UsernameHit,
 } from './osint.js';
+import {
+  bootstrapCashtag,
+  parseCashtagSeed,
+  searchEngineDiscovery,
+  searchLaneSummary,
+  type CashtagBootstrap,
+  type SearchFetcher,
+} from './osint-searchdiscovery.js';
 import type { CustomTool } from '../types/index.js';
 
 const FETCH_TIMEOUT_MS = 12_000;
@@ -330,7 +338,7 @@ export function isPlausibleHandle(candidate: string): boolean {
 export interface HarvestedHandle {
   handle: string;
   /** Which technique surfaced it — provenance is the whole point. */
-  via: 'keybase' | 'link-hub' | 'profile-field' | 'display-name' | 'seed';
+  via: 'keybase' | 'link-hub' | 'profile-field' | 'display-name' | 'seed' | 'search-engine';
   detail: string;
 }
 
@@ -498,9 +506,14 @@ export function correlateAccounts(
   }
 
   // (d) Near-identical handle shape across different platforms.
+  // LOW-confidence hits are excluded from pairing: a shell-200 platform answers "found" for
+  // every handle, and one live run chained 37 of those into a single WEAK group spanning
+  // Instagram→Steam — a cluster that looks impressive and means nothing. Real evidence
+  // (avatar/bio/cross-link) still groups low-confidence hits via (a)-(c).
   for (let i = 0; i < found.length; i++) {
     for (let j = i + 1; j < found.length; j++) {
       if (found[i].site === found[j].site) continue;
+      if (found[i].confidence === 'low' || found[j].confidence === 'low') continue;
       const a = handleFromProfileUrl(found[i].url);
       const b = handleFromProfileUrl(found[j].url);
       if (!a || !b) continue;
@@ -564,6 +577,8 @@ export interface DeepSweepOptions {
    */
   budgetMs?: number;
   fetcher?: CorrelateFetcher;
+  /** Injectable transport for the cashtag bootstrap + search-engine lane (tests). */
+  searchFetcher?: SearchFetcher;
   /** Progress callback for SSE/UI. */
   onStage?: (stage: string, detail: string) => void;
 }
@@ -591,6 +606,15 @@ export interface DeepSweepResult {
   harvested: HarvestedHandle[];
   /** Handles that were tried, including ones that produced nothing. */
   handlesTried: string[];
+  /** Set when the seed was a $cashtag or a cash.app URL. */
+  cashtag?: CashtagBootstrap;
+  /** Web mentions (name-bearing pages that are not profile pages) from the search lane. */
+  mentions: Array<{ title: string; url: string; snippet: string }>;
+  /** Name-directory pages (facebook.com/public/…, linkedin.com/pub/dir/…) — the name is on
+   *  the platform but the page does not say WHICH profile is the subject. */
+  directories: Array<{ platform: string; url: string }>;
+  /** One-line honest state of the search-engine lane. */
+  searchLane?: string;
   durationMs: number;
   /** Honest note when something could not be done. */
   caveats: string[];
@@ -664,11 +688,21 @@ export async function deepUsernameSweep(
   const t0 = Date.now();
   const trimmed = (seedRaw || '').trim();
   const looksLikeEmail = trimmed.includes('@') && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trimmed);
+  const cashtag = parseCashtagSeed(trimmed);
 
-  // An email seed expands into its candidate handles; a username seed is itself the first handle.
+  // An email seed expands into its candidate handles; a username seed is itself the first
+  // handle; a $cashtag / cash.app URL is stripped to its handle and BOOTSTRAPPED — the
+  // cashtag page's embedded profile JSON carries the subject's display name, which is what
+  // unlocks the name-based search queries (measured 2026-10-25: $KellyHeadley75 → "Kelly
+  // Headley" → LinkedIn/Instagram/public-records hits that handle-only queries never found).
   let seedHandles: string[] = [];
   let seedCandidatesDropped = 0;
-  if (looksLikeEmail) {
+  let effectiveName = (opts.name || '').trim() || undefined;
+  let cashtagInfo: CashtagBootstrap | null = null;
+  const onStage = opts.onStage || (() => {});
+  if (cashtag?.wasCashtag) {
+    seedHandles = [cashtag.handle];
+  } else if (looksLikeEmail) {
     // The email lane is bounded by the SAME cap as later expansion. Unbounded, `a.b.c@x.com`
     // produced 12 full catalogue sweeps and the call simply never returned.
     const cap = Math.max(1, Math.min(opts.maxExpansionHandles ?? 8, 25));
@@ -683,11 +717,24 @@ export async function deepUsernameSweep(
   if (!seedHandles.length) throw new Error(`Could not derive any usable handles from: ${trimmed}`);
   const seed = seedHandles[0];
 
+  if (cashtag?.wasCashtag) {
+    onStage('cashtag', `cash.app/$${seed} — bootstrapping the display name`);
+    cashtagInfo = await bootstrapCashtag(seed, opts.searchFetcher);
+    if (cashtagInfo.exists === false) {
+      // A clean 404 is a verdict about Cash App, not a reason to stop — the handle may live elsewhere.
+      cashtagInfo = { exists: false, note: 'cashtag not registered (clean 404)' };
+    }
+    if (!effectiveName && cashtagInfo.displayName) {
+      effectiveName = cashtagInfo.displayName;
+      cashtagInfo.note = [cashtagInfo.note, `name bootstrapped from the Cash App profile JSON: "${effectiveName}"`]
+        .filter(Boolean).join(' — ');
+    }
+  }
+
   const fetcher = opts.fetcher || defaultFetch;
   const rounds = Math.max(1, Math.min(opts.rounds ?? 2, 3));
   const maxExpansion = Math.max(0, Math.min(opts.maxExpansionHandles ?? 8, 25));
   const budgetMs = Math.max(30_000, Math.min(opts.budgetMs ?? 240_000, 1_800_000));
-  const onStage = opts.onStage || (() => {});
 
   const caveats: string[] = [];
   let budgetHit = false;
@@ -697,6 +744,31 @@ export async function deepUsernameSweep(
   const harvested: HarvestedHandle[] = [];
   const keybaseLinks: Array<{ from: string; to: string; service: string; proof: string }> = [];
   const roundResults: DeepSweepRound[] = [];
+
+  // ── SEARCH-ENGINE DISCOVERY — runs BEFORE the catalog rounds so handles it discovers
+  // (often on the login-walled platforms the catalog cannot see) enter the expansion queue.
+  const searchLane = await searchEngineDiscovery(seed, {
+    name: effectiveName,
+    deadlineMs: t0 + budgetMs,
+    fetcher: opts.searchFetcher,
+    onStage,
+  });
+  for (const h of searchLane.hits) {
+    const k = h.url.toLowerCase();
+    if (seenUrls.has(k)) continue;
+    seenUrls.add(k);
+    allAccounts.push(h);
+  }
+  for (const dh of searchLane.discoveredHandles) {
+    if (seedHandles.some((s) => s.toLowerCase() === dh) || handlesTried.length >= maxExpansion + 1) continue;
+    seedHandles.push(dh);
+    harvested.push({ handle: dh, via: 'search-engine', detail: 'profile surfaced by the search-engine index (walled-platform coverage)' });
+  }
+  caveats.push(
+    'Direct probes of Facebook/Instagram/TikTok/Reddit/LinkedIn are login- or challenge-walled ' +
+    'from server vantages (measured 2026-10-25) — the search-engine lane covers those platforms; ' +
+    '"absent" in the catalog sweep never means "proven off-platform" for them.'
+  );
 
   let queue: Array<{ handle: string; via: HarvestedHandle['via'] }> = seedHandles.map((h) => ({
     handle: h,
@@ -726,7 +798,7 @@ export async function deepUsernameSweep(
         // Round 1 honours the operator's full catalog choice; later rounds use a fast,
         // high-signal category subset so expansion does not multiply into an hour of probing.
         sweep = await runUsernameSweep(handle, {
-          hints: opts.name ? { name: opts.name } : undefined,
+          hints: effectiveName ? { name: effectiveName } : undefined,
           catalog: round === 1 ? (opts.catalog ?? 'full') : 'curated',
           categories: round === 1 ? undefined : FAST_CATEGORIES,
           sites: round === 1 ? opts.sites : undefined,
@@ -808,6 +880,10 @@ export async function deepUsernameSweep(
     keybaseLinks,
     harvested,
     handlesTried,
+    cashtag: cashtagInfo ?? undefined,
+    mentions: searchLane.mentions,
+    directories: searchLane.directories,
+    searchLane: searchLaneSummary(searchLane),
     durationMs: Date.now() - t0,
     caveats,
     budgetHit,
@@ -821,6 +897,22 @@ export function formatDeepSweep(result: DeepSweepResult): string {
   L.push(`${result.allAccounts.length} account(s) across ${result.handlesTried.length} handle(s) in ${(result.durationMs / 1000).toFixed(1)}s`);
   if (result.corroborated.length) L.push(`✓ ${result.corroborated.length} corroborated by name`);
   if (result.mismatched.length) L.push(`≠ ${result.mismatched.length} name mismatch (probably someone else)`);
+
+  if (result.cashtag) {
+    L.push('');
+    if (result.cashtag.exists === true) {
+      L.push(`CASH APP: cashtag is LIVE${result.cashtag.displayName ? ` — display name "${result.cashtag.displayName}"` : ''}${result.cashtag.verified ? ' · VERIFIED account' : ''}${result.cashtag.countryCode ? ` · country ${result.cashtag.countryCode}` : ''}`);
+    } else if (result.cashtag.exists === false) {
+      L.push('CASH APP: cashtag not registered (clean 404)');
+    } else {
+      L.push(`CASH APP: could not measure — ${result.cashtag.note}`);
+    }
+  }
+
+  if (result.searchLane) {
+    L.push('');
+    L.push(`SEARCH ENGINE: ${result.searchLane}`);
+  }
 
   if (result.groups.length) {
     L.push('');
@@ -841,6 +933,18 @@ export function formatDeepSweep(result: DeepSweepResult): string {
     L.push('');
     L.push('HANDLES DISCOVERED:');
     for (const h of result.harvested.slice(0, 25)) L.push(`  @${h.handle} — via ${h.via}: ${h.detail}`);
+  }
+
+  if (result.directories.length) {
+    L.push('');
+    L.push('NAME DIRECTORIES (the name is on the platform — open to see which profile is the subject):');
+    for (const d of result.directories.slice(0, 8)) L.push(`  ${d.platform}: ${d.url}`);
+  }
+
+  if (result.mentions.length) {
+    L.push('');
+    L.push('WEB MENTIONS (search-engine, not profile pages):');
+    for (const m of result.mentions.slice(0, 12)) L.push(`  · ${m.title || '(untitled)'} — ${m.url}`);
   }
 
   const seen = new Set<string>();
@@ -871,10 +975,10 @@ export const OSINT_DEEP_TOOLS: CustomTool[] = [
   {
     name: 'osint_username_deep',
     description:
-      'DEEP username investigation: iterative cross-site sweep. Sweeps the handle, reads the public Keybase identity graph and any link hub, harvests the handles those publish, sweeps those too, then clusters every account that shares real evidence (shared avatar, shared bio terms, near-identical handle, explicit cross-link). Prefer this over osint_username_sweep when the goal is a linked footprint rather than "does this handle exist".',
+      'DEEP username investigation: search-engine discovery + iterative cross-site sweep. Runs a paced DuckDuckGo lane over the egress ladder first (the only lane that sees Facebook/Instagram/LinkedIn/TikTok/Reddit, whose direct probes are login-walled from server vantages), bootstraps a $cashtag or cash.app URL to the subject\'s display name, then sweeps the catalog, reads Keybase and any link hub, harvests every handle those publish, sweeps those too, and clusters every account sharing real evidence (avatar, bio terms, near-identical handle, cross-link). Accepts a bare handle, $cashtag, cash.app URL, or email. Prefer this over osint_username_sweep when the goal is a linked footprint rather than "does this handle exist".',
     category: 'osint',
     parameters: [
-      { name: 'username', type: 'string', description: 'Seed username/handle to investigate (no @)', required: true },
+      { name: 'username', type: 'string', description: 'Seed to investigate: bare handle, $cashtag, cash.app/$handle URL, or email address', required: true },
       { name: 'name', type: 'string', description: "Known full name of the subject — separates the subject's accounts from a same-name stranger", required: false },
       { name: 'catalog', type: 'string', description: 'Catalog breadth for the FIRST pass: "curated" (fast), "sherlock", "full" (default). Later passes use a fast high-signal subset.', required: false },
       { name: 'rounds', type: 'number', description: 'Expansion rounds, 1-3 (default 2). Higher = deeper but slower.', required: false },

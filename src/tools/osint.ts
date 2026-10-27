@@ -114,16 +114,22 @@ export const OSINT_SITES: OsintSite[] = [
   { name: 'Keybase', category: 'dev', urlTemplate: 'https://keybase.io/{u}', probeUrlTemplate: 'https://keybase.io/{u}', probeType: 'status', reliability: 'high', notes: 'Keybase profiles list linked identities' },
 
   // --- mainstream social ---
-  { name: 'Reddit', category: 'social', urlTemplate: 'https://www.reddit.com/user/{u}', probeUrlTemplate: 'https://www.reddit.com/user/{u}/about.json', probeType: 'status', reliability: 'high', notes: 'Reddit about.json gives clean 404s' },
-  { name: 'Instagram', category: 'social', urlTemplate: 'https://www.instagram.com/{u}/', probeUrlTemplate: 'https://www.instagram.com/{u}/', probeType: 'status', reliability: 'low', notes: 'login-wall often 200s — treat FOUND as weak' },
-  { name: 'TikTok', category: 'video', urlTemplate: 'https://www.tiktok.com/@{u}', probeUrlTemplate: 'https://www.tiktok.com/@{u}', probeType: 'status', reliability: 'medium' },
-  { name: 'X (Twitter)', category: 'social', urlTemplate: 'https://x.com/{u}', probeUrlTemplate: 'https://x.com/{u}', probeType: 'status', reliability: 'low', notes: 'logged-out serving is inconsistent by region' },
-  { name: 'Threads', category: 'social', urlTemplate: 'https://www.threads.net/@{u}', probeUrlTemplate: 'https://www.threads.net/@{u}', probeType: 'status', reliability: 'low' },
-  { name: 'Facebook', category: 'social', urlTemplate: 'https://www.facebook.com/{u}', probeUrlTemplate: 'https://www.facebook.com/{u}', probeType: 'status', reliability: 'low', notes: 'login wall' },
+  // MEASURED 2026-10-25 (KellyHeadley75 investigation — each platform probed with the live
+  // handle, a never-registered control, AND a known-real handle): Reddit/Instagram/TikTok/
+  // Facebook/Threads/Twitch/Pinterest are login- or challenge-walled from server vantages —
+  // they answer 403/400 or an identical 200 app-shell for EXISTING and FAKE handles alike.
+  // A status probe there cannot distinguish, so `unknown`/weak-FOUND is the honest verdict
+  // and the search-engine lane (osint-searchdiscovery.ts) is the coverage for those platforms.
+  { name: 'Reddit', category: 'social', urlTemplate: 'https://www.reddit.com/user/{u}', probeUrlTemplate: 'https://www.reddit.com/user/{u}/about.json', probeType: 'status', reliability: 'high', notes: 'about.json gives clean 404s — but 403s datacenter AND Tor IPs (measured 2026-10-25); unknown is honest, search lane covers' },
+  { name: 'Instagram', category: 'social', urlTemplate: 'https://www.instagram.com/{u}/', probeUrlTemplate: 'https://www.instagram.com/{u}/', probeType: 'status', reliability: 'low', notes: '200 app-shell for existing AND fake handles, no og markers to datacenter IPs (measured 2026-10-25) — FOUND weak; search lane is the real coverage' },
+  { name: 'TikTok', category: 'video', urlTemplate: 'https://www.tiktok.com/@{u}', probeUrlTemplate: 'https://www.tiktok.com/@{u}', probeType: 'status', reliability: 'low', notes: '200-challenges real and control alike; oembed refuses keyless (measured 2026-10-25) — rely on the search lane' },
+  { name: 'X (Twitter)', category: 'social', urlTemplate: 'https://x.com/{u}', probeUrlTemplate: 'https://syndication.twitter.com/srv/timeline-profile/screen-name/{u}', probeType: 'body_contains', probeValue: '"headerProps":{"screenName"', reliability: 'medium', notes: 'syndication embed oracle — x.com itself serves the logged-out 404 shell for real AND fake; the embed echoes headerProps only for a handle that exists (measured 2026-10-25: jack/NASA echo it, target and control omit it)' },
+  { name: 'Threads', category: 'social', urlTemplate: 'https://www.threads.net/@{u}', probeUrlTemplate: 'https://www.threads.net/@{u}', probeType: 'status', reliability: 'low', notes: '200 app-shell for real and control (measured 2026-10-25) — FOUND weak' },
+  { name: 'Facebook', category: 'social', urlTemplate: 'https://www.facebook.com/{u}', probeUrlTemplate: 'https://www.facebook.com/{u}', probeType: 'status', reliability: 'low', notes: 'answers 400 to unauthenticated probes from datacenter AND Tor vantages (measured 2026-10-25) — unknown is honest; search lane covers' },
   { name: 'Mastodon (social)', category: 'social', urlTemplate: 'https://mastodon.social/@{u}', probeUrlTemplate: 'https://mastodon.social/@{u}', probeType: 'status', reliability: 'high' },
   { name: 'Bluesky', category: 'social', urlTemplate: 'https://bsky.app/profile/{u}', probeUrlTemplate: 'https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles?actors={u}', probeType: 'json_field', probeValue: 'profiles.0.did', reliability: 'high', notes: 'public AppView API' },
   { name: 'Telegram', category: 'messaging', urlTemplate: 'https://t.me/{u}', probeUrlTemplate: 'https://t.me/{u}', probeType: 'body_contains', probeValue: 'tgme_page_title', reliability: 'high', notes: 'soft-404 page stays 200 — body-detect needed' },
-  { name: 'Pinterest', category: 'social', urlTemplate: 'https://www.pinterest.com/{u}/', probeUrlTemplate: 'https://www.pinterest.com/{u}/', probeType: 'status', reliability: 'medium' },
+  { name: 'Pinterest', category: 'social', urlTemplate: 'https://www.pinterest.com/{u}/', probeUrlTemplate: 'https://www.pinterest.com/{u}/', probeType: 'status', reliability: 'low', notes: '200 app-shell for real and control (measured 2026-10-25) — FOUND weak; search lane covers' },
   { name: 'Tumblr', category: 'blog', urlTemplate: 'https://{u}.tumblr.com', probeUrlTemplate: 'https://{u}.tumblr.com', probeType: 'status', reliability: 'high' },
   { name: 'VK', category: 'social', urlTemplate: 'https://vk.com/{u}', probeUrlTemplate: 'https://vk.com/{u}', probeType: 'status', reliability: 'low', notes: 'auth wall' },
   { name: 'Truth Social', category: 'social', urlTemplate: 'https://truthsocial.com/@{u}', probeUrlTemplate: 'https://truthsocial.com/@{u}', probeType: 'status', reliability: 'medium' },
@@ -136,14 +142,14 @@ export const OSINT_SITES: OsintSite[] = [
   { name: 'Duolingo', category: 'social', urlTemplate: 'https://www.duolingo.com/profile/{u}', probeUrlTemplate: 'https://www.duolingo.com/profile/{u}', probeType: 'status', reliability: 'medium' },
 
   // --- streaming / video ---
-  { name: 'Twitch', category: 'video', urlTemplate: 'https://www.twitch.tv/{u}', probeUrlTemplate: 'https://www.twitch.tv/{u}', probeType: 'status', reliability: 'high' },
-  { name: 'YouTube', category: 'video', urlTemplate: 'https://www.youtube.com/@{u}', probeUrlTemplate: 'https://www.youtube.com/@{u}', probeType: 'status', reliability: 'medium', notes: 'handle pages 404 cleanly when unclaimed' },
-  { name: 'Vimeo', category: 'video', urlTemplate: 'https://vimeo.com/{u}', probeUrlTemplate: 'https://vimeo.com/{u}', probeType: 'status', reliability: 'medium' },
+  { name: 'Twitch', category: 'video', urlTemplate: 'https://www.twitch.tv/{u}', probeUrlTemplate: 'https://www.twitch.tv/{u}', probeType: 'status', reliability: 'low', notes: '200 app-shell for real and control from datacenter vantage (measured 2026-10-25: summit1g 200 with title, control 200 shell) — FOUND weak' },
+  { name: 'YouTube', category: 'video', urlTemplate: 'https://www.youtube.com/@{u}', probeUrlTemplate: 'https://www.youtube.com/@{u}', probeType: 'status', reliability: 'high', notes: 'handle pages 404 cleanly when unclaimed (measured 2026-10-25: live handle 200 with og:title, control 404)' },
+  { name: 'Vimeo', category: 'video', urlTemplate: 'https://vimeo.com/{u}', probeUrlTemplate: 'https://vimeo.com/{u}', probeType: 'status', reliability: 'high', notes: 'profile pages 404 cleanly when unclaimed (measured 2026-10-25: staff account 200, target+control 404)' },
   { name: 'Rumble', category: 'video', urlTemplate: 'https://rumble.com/user/{u}', probeUrlTemplate: 'https://rumble.com/user/{u}', probeType: 'status', reliability: 'medium' },
   { name: 'Odysee', category: 'video', urlTemplate: 'https://odysee.com/@{u}', probeUrlTemplate: 'https://odysee.com/@{u}', probeType: 'status', reliability: 'medium' },
 
   // --- music / audio ---
-  { name: 'SoundCloud', category: 'music', urlTemplate: 'https://soundcloud.com/{u}', probeUrlTemplate: 'https://soundcloud.com/{u}', probeType: 'status', reliability: 'high' },
+  { name: 'SoundCloud', category: 'music', urlTemplate: 'https://soundcloud.com/{u}', probeUrlTemplate: 'https://soundcloud.com/{u}', probeType: 'status', reliability: 'high', notes: 'clean 404 oracle (measured 2026-10-25: known-real artist 200, target+control 404)' },
   { name: 'Last.fm', category: 'music', urlTemplate: 'https://www.last.fm/user/{u}', probeUrlTemplate: 'https://www.last.fm/user/{u}', probeType: 'status', reliability: 'high' },
   { name: 'Bandcamp', category: 'music', urlTemplate: 'https://{u}.bandcamp.com', probeUrlTemplate: 'https://{u}.bandcamp.com', probeType: 'status', reliability: 'high' },
   { name: 'Mixcloud', category: 'music', urlTemplate: 'https://www.mixcloud.com/{u}/', probeUrlTemplate: 'https://www.mixcloud.com/{u}/', probeType: 'status', reliability: 'medium' },
@@ -168,6 +174,8 @@ export const OSINT_SITES: OsintSite[] = [
   { name: 'speedrun.com', category: 'gaming', urlTemplate: 'https://speedrun.com/users/{u}', probeUrlTemplate: 'https://speedrun.com/api/v1/users?lookup={u}', probeType: 'json_array_nonempty', reliability: 'high' },
 
   // --- money / support ---
+  { name: 'Cash App', category: 'money', urlTemplate: 'https://cash.app/${u}', probeUrlTemplate: 'https://cash.app/${u}', probeType: 'status', reliability: 'high', notes: 'cashtag pages 404 cleanly when unclaimed (measured 2026-10-25: live cashtag 200 + embedded `var profile` JSON with display_name/is_verified_account/country, control 404)' },
+  { name: 'Venmo', category: 'money', urlTemplate: 'https://venmo.com/u/{u}', probeUrlTemplate: 'https://venmo.com/u/{u}', probeType: 'status', reliability: 'high', notes: 'profile pages 404 cleanly when unclaimed (measured 2026-10-25: @venmo 200, target+control 404)' },
   { name: 'Patreon', category: 'money', urlTemplate: 'https://www.patreon.com/{u}', probeUrlTemplate: 'https://www.patreon.com/{u}', probeType: 'status', reliability: 'medium' },
   { name: 'Ko-fi', category: 'money', urlTemplate: 'https://ko-fi.com/{u}', probeUrlTemplate: 'https://ko-fi.com/{u}', probeType: 'status', reliability: 'medium' },
   { name: 'Buy Me a Coffee', category: 'money', urlTemplate: 'https://buymeacoff.ee/{u}', probeUrlTemplate: 'https://buymeacoff.ee/{u}', probeType: 'status', reliability: 'medium' },
@@ -431,6 +439,47 @@ async function probeDirect(url: string, readBody: boolean): Promise<ProbeOutcome
   } catch {
     return null;
   }
+}
+
+/** Same egress → Tor → direct ladder the site probes use, exported for the search-engine
+ *  discovery lane (osint-searchdiscovery.ts) — it must ride the identical transport, not a
+ *  bare global fetch that skips the operator's proxy posture. Never throws: status 0 = dead.
+ *  `init` carries method/body for POST form endpoints (e.g. the BOP inmate locator). The Tor
+ *  leg is GET-only (torFetchAny has no POST), so a bodied request escalates egress → direct. */
+export interface EgressProbeResult { status: number; body: string; via: 'egress' | 'tor' | 'direct' | 'none'; note?: string }
+
+export async function egressProbe(url: string, timeoutMs = 20_000, init: { method?: string; body?: string; headers?: Record<string, string> } = {}): Promise<EgressProbeResult> {
+  // Mirror probeSite's escalation rule: 403/429/5xx from the egress is an UNCLEAR verdict
+  // (WAFs answer those to scripted clients), never an answer. Measured live 2026-10-25:
+  // cash.app 403'd the shared egress and 200'd straight through Tor — accepting the 403
+  // killed the cashtag bootstrap and, with it, the name that unlocks the search lane.
+  const clear = (s: number) => s !== 403 && s !== 429 && s < 500;
+  let egress: EgressProbeResult | null = null;
+  try {
+    const res = await osintFetch(url, { signal: AbortSignal.timeout(timeoutMs), ...init, headers: { ...(init.headers || {}) } });
+    const body = (await res.text().catch(() => '')).slice(0, 300_000);
+    const r: EgressProbeResult = { status: res.status, body, via: 'egress' };
+    if (clear(res.status)) return r;
+    egress = r;
+  } catch { /* fall through to Tor */ }
+  const bodied = Boolean(init.body);
+  if (!bodied) {
+    const tor = await probeViaTor(url);
+    if (tor && clear(tor.status)) return { status: tor.status, body: tor.body || '', via: 'tor', note: tor.note };
+  }
+  if (directAllowed()) {
+    try {
+      const res = await directFetch(url, {
+        signal: AbortSignal.timeout(timeoutMs),
+        redirect: 'follow',
+        ...init,
+        headers: { 'user-agent': UA, 'accept-language': 'en-US,en;q=0.9', ...(init.headers || {}) },
+      } as never);
+      const body = (await res.text().catch(() => '')).slice(0, 300_000);
+      return { status: res.status, body, via: 'direct', note: 'direct connection (real IP seen)' };
+    } catch { /* all paths dead */ }
+  }
+  return egress ?? { status: 0, body: '', via: 'none' };
 }
 
 /** Extract a display name from a GitHub profile HTML page (fallback path when the API is rate-limited). */
@@ -1933,6 +1982,12 @@ export function personDorks(params: { name?: string; email?: string; username?: 
     links.push({ label: 'Whitepages', url: `https://www.whitepages.com/name/${q(params.name.replace(/\s+/g, '-'))}` });
     links.push({ label: 'Spokeo', url: `https://www.spokeo.com/${q(params.name.replace(/\s+/g, '-'))}` });
     links.push({ label: "That'sThem", url: `https://thatsthem.com/name/${q(params.name.replace(/\s+/g, '-'))}` });
+    // Federal custody + licensed-clinician records — both have live API lanes now
+    // (src/tools/osint-people.ts); these dorks are the manual cross-check the lane cites.
+    const [first, ...rest] = params.name.trim().split(/\s+/);
+    const last = rest[rest.length - 1] || '';
+    links.push({ label: 'BOP federal inmate locator (current federal custody)', url: `https://www.bop.gov/inmateloc/` });
+    if (first && last) links.push({ label: 'CMS NPI registry (clinicians)', url: `https://npiregistry.cms.hhs.gov/api/?version=2.1&enumeration_type=NPI-1&first_name=${q(first)}&last_name=${q(last)}&limit=20` });
   }
   if (params.email) {
     for (const [label, base] of engines) links.push({ label: `${label}: email`, url: `${base}${q(`"${params.email}"`)}` });

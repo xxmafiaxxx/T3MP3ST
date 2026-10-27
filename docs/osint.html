@@ -563,7 +563,7 @@
                 <a class="nav-item" href="gps.html"><span class="icon">🛰️</span> GPS Map</a>
                 <a class="nav-item" href="dfir.html"><span class="icon">🛡️</span> DFIR Response</a>
                                 <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
-            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
+            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
                     <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
                 </a>
 <a class="nav-item" href="terminal.html"><span class="icon">💻</span> Terminal</a>
@@ -615,6 +615,7 @@
                      away, and sticky means it stays reachable after a long scroll. -->
                 <div class="tool-tabs tool-nav" id="toolNav">
                     <button class="tool-tab active" data-pane="paneSweep" onclick="switchTool('paneSweep')">📡 USERNAME SWEEP</button>
+                    <button class="tool-tab" data-pane="panePeople" title="BOP federal inmate locator, CMS clinician registry, and the walled-platform name-discovery lane">👥 PEOPLE</button>
                     <button class="tool-tab" data-pane="paneBreach" onclick="switchTool('paneBreach')">🕳️ BREACH &amp; DUMPS</button>
                     <button class="tool-tab" data-pane="paneDarkweb" onclick="switchTool('paneDarkweb')">🕸️ DARK WEB</button>
                     <button class="tool-tab" data-pane="paneDorks" onclick="switchTool('paneDorks')">🎯 GOOGLE DORKS</button>
@@ -715,7 +716,7 @@
                         <div class="panel-header">
                             <div class="panel-title"><span class="accent">📡</span> USERNAME SWEEP — SOCIAL FOOTPRINT</div>
                             <div style="display:flex;gap:8px;">
-                                <button class="btn" onclick="runSweep()">▶ SWEEP</button>
+                                <button class="btn" onclick="runSweep()" title="Search-engine lane first (sees the login-walled socials), then the catalog probe, then clustering" style="border-color:rgba(0,255,136,0.45);color:#7dffc8;">🔎 SMART SWEEP</button><button class="btn" onclick="runPlainProbe()" title="Old one-pass catalog probe — no search-engine lane, no clustering. Fast but blind to walled platforms." style="opacity:0.75;">catalog-only probe</button>
                                 <button class="btn" onclick="runDeepSweep()" title="Iterative sweep: reads the Keybase identity graph + link hubs, harvests the handles they publish, sweeps those too, then clusters accounts that share real evidence" style="border-color:rgba(160,90,255,0.5);color:#c9b3ff;">🕸 DEEP SWEEP</button>
                             </div>
                         </div>
@@ -728,7 +729,8 @@
                                 <div class="search-box" style="max-width:230px;min-width:200px;">
                                     <span>DB</span>
                                     <select id="sweepCatalog" onchange="updateSweepCatalogHint()">
-                                        <option value="full">full — curated + Sherlock</option>
+                                        <option value="curated">curated — fast, hand-probed oracles</option>
+                                        <option value="full">full — curated + Sherlock (~490 sites, SLOW)</option>
                                         <option value="sherlock">sherlock only</option>
                                         <option value="curated">curated only (fast)</option>
                                     </select>
@@ -761,6 +763,43 @@
                     </div>
                 </div>
 
+                <div class="tool-pane" id="panePeople">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title"><span class="accent">👥</span> PEOPLE — PUBLIC RECORDS</div>
+                            <div style="display:flex;gap:8px;">
+                                <button class="btn" onclick="runPeopleAll()" title="Runs all three lanes on one name: BOP federal custody, CMS clinician registry, and the walled-platform search-engine discovery" style="border-color:rgba(160,90,255,0.5);color:#c9b3ff;">⚡ RUN ALL LANES</button>
+                            </div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="locator-form">
+                                <div class="search-box" style="max-width:200px;min-width:160px;"><span>FIRST</span><input type="text" id="pplFirst" placeholder="First name"></div>
+                                <div class="search-box" style="max-width:220px;min-width:170px;"><span>LAST</span><input type="text" id="pplLast" placeholder="Last name" onkeydown="if(event.key==='Enter')runBop()"></div>
+                                <div class="search-box" style="max-width:110px;min-width:90px;"><span>AGE</span><input type="text" id="pplAge" placeholder="exact"></div>
+                                <div class="search-box" style="max-width:130px;min-width:110px;"><span>SEX</span>
+                                    <select id="pplSex"><option value=""></option><option value="M">M</option><option value="F">F</option></select></div>
+                                <div class="search-box" style="max-width:130px;min-width:110px;"><span>RACE</span>
+                                    <select id="pplRace"><option value=""></option><option value="I">I</option><option value="A">A</option><option value="B">B</option><option value="W">W</option></select></div>
+                                <button class="btn" onclick="runBop()">🔒 BOP INMATE SEARCH</button>
+                            </div>
+                            <div class="hint-line" style="margin-top:4px;">Federal Bureau of Prisons locator — CURRENT federal custody only (not state prisons/jails). An empty result is an honest zero from BOP; a captcha or refusal is reported as UNMEASURED, never as "no record".</div>
+                            <div class="locator-form" style="margin-top:10px;">
+                                <div class="search-box" style="max-width:200px;min-width:160px;"><span>FIRST</span><input type="text" id="npiFirst" placeholder="First name"></div>
+                                <div class="search-box" style="max-width:220px;min-width:170px;"><span>LAST</span><input type="text" id="npiLast" placeholder="Last name"></div>
+                                <div class="search-box" style="max-width:110px;min-width:90px;"><span>ST</span><input type="text" id="npiState" placeholder="VA"></div>
+                                <div class="search-box" style="max-width:250px;min-width:200px;"><span>TAX</span><input type="text" id="npiTax" placeholder="Clinical Social Worker"></div>
+                                <button class="btn" onclick="runNpi()">🩺 NPI REGISTRY</button>
+                            </div>
+                            <div class="hint-line" style="margin-top:4px;">CMS NPI registry — every licensed US clinician: NPI number, credential, taxonomy, practice addresses. Keyless government API.</div>
+                            <div class="locator-form" style="margin-top:10px;">
+                                <div class="search-box" style="max-width:320px;min-width:250px;"><span>NAME</span><input type="text" id="pplName" placeholder="Full name — walled-platform discovery" onkeydown="if(event.key==='Enter')runPeopleDiscovery()"></div>
+                                <button class="btn" onclick="runPeopleDiscovery()">🔎 SEARCH-ENGINE DISCOVERY</button>
+                            </div>
+                            <div class="hint-line" style="margin-top:4px;">Runs the search-engine lane over the walled platforms (LinkedIn, Instagram, Facebook, X, TikTok, Reddit) — direct probes there cannot tell a real profile from a fake; the index can. Paced to stay under the engine's anomaly tripwire.</div>
+                            <div id="pplOut" class="dossier-empty" style="margin-top:12px;">Three lanes, one subject: federal custody · licensed clinicians · search-engine discovery.</div>
+                        </div>
+                    </div>
+                </div>
                 <div class="tool-pane" id="paneBreach">
                     <div class="panel">
                         <div class="panel-header">
@@ -1400,7 +1439,23 @@
         function confBadge(c) {
             return '<span class="conf-badge conf-' + escapeHtml(c) + '">' + escapeHtml(c) + '</span>';
         }
-        function renderSocialCard(h) {
+        
+        function sweepSplit(accounts) {
+            // confirmed: real oracles (high/medium) and search-engine discoveries.
+            // weak: low-confidence shell-200s — platforms that answer "found" for EVERY handle.
+            const confirmed = accounts.filter(function (h) {
+                return h.confidence !== 'low' || (h.note || '').indexOf('search-engine') >= 0;
+            });
+            const weak = accounts.filter(function (h) { return confirmed.indexOf(h) < 0; });
+            return { confirmed: confirmed, weak: weak };
+        }
+        function sweepAccountSection(accounts, title, open) {
+            if (!accounts.length) return '';
+            return '<div class="dossier-section-title" style="margin-top:12px;">' + title + ' <span class="count">' + accounts.length + '</span></div>'
+                + '<div class="social-grid"' + (open ? '' : ' style="opacity:0.62;"') + '>' + accounts.map(renderSocialCard).join('') + '</div>';
+        }
+        
+            function renderSocialCard(h) {
             const ident = h.identity === 'name-match'
                 ? '<span class="conf-badge conf-high">✓ IDENTITY MATCH</span>'
                 : h.identity === 'name-mismatch'
@@ -1906,6 +1961,7 @@
                 fix: ['Nothing here helps you get better at it. Read the "tells" section.'],
             },
             'USERNAME SWEEP — SOCIAL FOOTPRINT': {
+            'PEOPLE — PUBLIC RECORDS': { what: 'People search on public records: the BOP federal inmate locator (current federal custody only — an empty answer is an honest zero from BOP, and a captcha or refusal is reported as UNMEASURED, never as no record), the CMS NPI clinician registry (NPI number, credential, practice addresses for every licensed US provider), and the search-engine discovery lane for the login-walled socials. Fill LAST name (plus optional first/age/sex/race) for BOP, first+last (optionally state/taxonomy) for NPI, or a full name for discovery; RUN ALL LANES fires all three at once.', how: 'Pick one lane or press RUN ALL LANES. Results name the source of every verdict — a zero from BOP never means the person does not exist.', },
                 what: 'Checks one username against the merged platform catalog — 67 hand-curated sites plus 426 more from the Sherlock database, 493 total — and classifies each result as found / absent / unknown using each platform’s real soft-404 behaviour.',
                 needs: ['A handle.', 'Optionally pick the catalog: full (493 sites, ~3 min), sherlock, or curated (67, seconds).'],
                 steps: ['Enter the handle.', 'Leave CATALOG on full unless you want speed.', 'Optionally tick 18+ to include adult platforms — they are catalogued but excluded by default.'],
@@ -2216,7 +2272,8 @@
             });
             // Tabs get a one-line native tooltip instead of a modal.
             var tabHelp = {
-                paneSweep: 'Probe one handle across 493 platforms (curated + Sherlock), with real soft-404 detection.',
+                paneSweep: 'SMART SWEEP runs the search-engine lane first (the only thing that sees Facebook/Instagram/TikTok/Reddit — their direct probes cannot tell real from fake), then the catalog probe, then clusters accounts sharing real evidence. Results split into CONFIRMED vs WEAK SIGNALS — the weak bucket is shell-200 platforms that answer found for every handle. Catalog-only probe is the old fast pass, blind to walled platforms.',
+                panePeople: 'People search on public records: BOP federal inmate locator (name or register number), CMS NPI clinician registry, and the search-engine discovery lane that sees the login-walled socials.',
                 paneBreach: 'Breach exposure for an email or username — free lanes always, keyed deep lanes if armed.',
                 paneDarkweb: 'Ransomware victim-post monitor + direct .onion access over your local Tor circuit.',
                 paneDorks: 'Generate ready-to-run Google/Bing/DDG dorks from an identifier, email, phone or domain.',
@@ -2352,7 +2409,7 @@
             const name = (document.getElementById('sweepName') || {}).value;
             // "Follow cross-links" turns the one-pass probe into the real investigation.
             if ((document.getElementById('sweepDeepRounds') || {}).checked) return runDeepSweep();
-            out.innerHTML = '<div class="dossier-empty">◈ Sweeping ' + escapeHtml(username) + ' across the ' + escapeHtml(catalog) + ' catalog…</div>';
+            out.innerHTML = '<div class="dossier-empty">◈ Smart sweep of ' + escapeHtml(username) + ' — search-engine lane runs first (paced, ~40-90s), then the ' + escapeHtml(catalog) + ' catalog probe. Expect <b>several minutes</b> on curated, longer on full. The result separates confirmed accounts from weak shell-200 signals.</div>';
             sweepAbort = new AbortController();
             sweepStatusShow('Sweeping @' + username + ' (' + catalog + ')…');
             try {
@@ -2360,7 +2417,10 @@
                 const s = d.sweep;
                 let html = '<div class="dossier-section-title">📡 ' + escapeHtml(s.username) + ' — ' + s.found.length + ' FOUND / ' + s.absent + ' absent / ' + s.unknown.length + ' unknown <span class="count">' + s.checked + ' sites · ' + (s.durationMs / 1000).toFixed(1) + 's</span></div>';
                 if (!name) html += '<div class="hint-line" style="margin-top:6px;">⚠ No name supplied — every account is reported as <b>handle-only</b>. Enter the subject\'s full name above to separate them from a same-name stranger.</div>';
-                if (s.found.length) html += '<div class="social-grid">' + s.found.map(renderSocialCard).join('') + '</div>';
+                var split = sweepSplit(s.found);
+                if (!split.confirmed.length && !split.weak.length) html += '<div class="dossier-empty">No accounts found.</div>';
+                html += sweepAccountSection(split.confirmed, '✓ CONFIRMED ACCOUNTS (real oracles + search-engine hits)', true);
+                html += sweepAccountSection(split.weak, '⚠ WEAK SIGNALS — shell-200 platforms that answer found for every handle — verify before trusting', false);
                 if (s.skippedByShape && s.skippedByShape.length) {
                     html += '<div class="hint-line" style="margin-top:8px;">not probed — the username cannot exist there (platform username rules): ' + escapeHtml(s.skippedByShape.join(', ')) + '</div>';
                 }
@@ -2438,9 +2498,32 @@
                     html += '</div>';
                 }
 
+                if (r.cashtag) {
+                    html += '<div class="hint-line" style="margin-top:6px;">💵 CASH APP: ' + escapeHtml(r.cashtag.exists === true ? ('cashtag LIVE' + (r.cashtag.displayName ? ' — display name "' + r.cashtag.displayName + '"' : '') + (r.cashtag.verified ? ' · VERIFIED' : '') + (r.cashtag.countryCode ? ' · ' + r.cashtag.countryCode : '')) : r.cashtag.exists === false ? 'not registered (clean 404)' : ('unmeasured — ' + (r.cashtag.note || '?'))) + '</div>';
+                }
+                if (r.searchLane) {
+                    html += '<div class="dossier-section-title" style="margin-top:12px;">🔎 SEARCH-ENGINE LANE</div><div class="hint-line">' + escapeHtml(r.searchLane) + '</div>';
+                }
+                if (r.directories && r.directories.length) {
+                    html += '<div class="dossier-section-title" style="margin-top:12px;">🗂 NAME DIRECTORIES — the name is on the platform</div><div class="hint-line">';
+                    r.directories.slice(0, 8).forEach(function (d) {
+                        html += escapeHtml(d.platform) + ': <a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener">' + escapeHtml(d.url) + '</a><br>';
+                    });
+                    html += '</div>';
+                }
+                if (r.mentions && r.mentions.length) {
+                    html += '<div class="dossier-section-title" style="margin-top:12px;">📰 WEB MENTIONS <span class="count">' + r.mentions.length + '</span></div><div class="hint-line">';
+                    r.mentions.slice(0, 12).forEach(function (m) {
+                        html += '· ' + escapeHtml(m.title || '(untitled)') + ' — <a href="' + escapeHtml(m.url) + '" target="_blank" rel="noopener">' + escapeHtml(m.url) + '</a><br>';
+                    });
+                    html += '</div>';
+                }
+
                 html += '<div class="dossier-section-title" style="margin-top:12px;">📡 ALL ACCOUNTS</div>';
-                if (r.allAccounts.length) html += '<div class="social-grid">' + r.allAccounts.map(renderSocialCard).join('') + '</div>';
-                else html += '<div class="dossier-empty">No accounts found for this seed.</div>';
+                var dsplit = sweepSplit(r.allAccounts);
+                html += sweepAccountSection(dsplit.confirmed, '✓ CONFIRMED ACCOUNTS (real oracles + search-engine hits)', true);
+                html += sweepAccountSection(dsplit.weak, '⚠ WEAK SIGNALS — shell-200 platforms that answer found for every handle — verify before trusting (' + dsplit.weak.length + ')', false);
+                if (!r.allAccounts.length) html += '<div class="dossier-empty">No accounts found for this seed.</div>';
 
                 if (r.caveats && r.caveats.length) {
                     html += '<div class="hint-line" style="margin-top:8px;color:#ffaa00;">' + r.caveats.map(function (c) { return '! ' + escapeHtml(c); }).join('<br>') + '</div>';
@@ -3842,5 +3925,122 @@
     </div>
 
     <script src="embed.js"></script>
+<script>
+        // ── PEOPLE lanes (BOP / NPI / search-engine discovery) — osint-people.ts ──
+        function pplEsc(t) { var d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
+        function pplOut() { return document.getElementById('pplOut'); }
+        function pplRenderSection(title, bodyHtml) {
+            return '<div class="dossier-section-title" style="margin-top:12px;">' + pplEsc(title) + '</div>' + bodyHtml;
+        }
+        async function pplApi(url, body) {
+            const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+            const j = await r.json().catch(function () { return {}; });
+            if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+            return j;
+        }
+        async function runBop() {
+            const out = pplOut();
+            const body = { lastName: document.getElementById('pplLast').value.trim(), firstName: document.getElementById('pplFirst').value.trim(), age: document.getElementById('pplAge').value.trim(), sex: document.getElementById('pplSex').value, race: document.getElementById('pplRace').value };
+            if (!body.lastName && !body.firstName) { out.innerHTML = '<div class="dossier-empty">Give the locator at least a last name.</div>'; return; }
+            out.innerHTML = '<div class="dossier-empty">🔒 Querying the BOP federal inmate locator…</div>';
+            try {
+                const d = await pplApi('/api/osint/records/bop-inmate', body);
+                const r = d.result;
+                if (r.found === true) {
+                    const h = pplRenderSection('🔒 BOP — ' + r.count + ' in CURRENT federal custody', '<div class="social-grid">' + r.inmates.slice(0, 20).map(function (m) {
+                        return '<div class="social-card"><div style="font-weight:700;">' + pplEsc(m.nameFirst + ' ' + (m.nameMiddle || '') + ' ' + m.nameLast + ' ' + (m.suffix || '')) + '</div>'
+                            + '<div style="font-size:10.5px;color:#9fb0bd;line-height:1.6;">reg ' + pplEsc(m.inmateNum)
+                            + (m.age ? ' · age ' + pplEsc(m.age) : '') + (m.sex ? ' · ' + pplEsc(m.sex) : '') + (m.race ? ' · ' + pplEsc(m.race) : '')
+                            + '<br>' + pplEsc(m.facilityName || '?') + ' (' + pplEsc(m.facilityType || '?') + ')'
+                            + '<br>projected release: ' + pplEsc(m.projectedReleaseDate || 'n/a') + (m.actualReleaseDate ? ' · actual: ' + pplEsc(m.actualReleaseDate) : '')
+                            + (m.facilityUrl ? '<br><a href="' + pplEsc(m.facilityUrl) + '" target="_blank" rel="noopener">facility page</a>' : '')
+                            + '<br><a href="https://www.bop.gov/inmateloc/" target="_blank" rel="noopener">verify on bop.gov</a></div></div>';
+                    }).join('') + '</div>');
+                    out.innerHTML = h;
+                } else if (r.found === false) {
+                    out.innerHTML = pplRenderSection('🔒 BOP', '<div class="dossier-empty">No record in CURRENT federal custody — honest zero from bop.gov.' + (r.note ? '<br>' + pplEsc(r.note) : '') + '</div>');
+                } else {
+                    out.innerHTML = pplRenderSection('🔒 BOP', '<div class="dossier-empty" style="color:#ffaa00;">UNMEASURED — ' + pplEsc(r.note || 'BOP did not answer') + '</div>');
+                }
+            } catch (e) { out.innerHTML = '<div class="dossier-empty" style="color:#ff6b6b;">✗ ' + pplEsc(e.message) + '</div>'; }
+        }
+        async function runNpi() {
+            const out = pplOut();
+            const body = { firstName: document.getElementById('npiFirst').value.trim(), lastName: document.getElementById('npiLast').value.trim(), state: document.getElementById('npiState').value.trim(), taxonomy: document.getElementById('npiTax').value.trim() };
+            if (!body.lastName && !body.npi) { out.innerHTML = '<div class="dossier-empty">NPI lookup needs at least a last name.</div>'; return; }
+            out.innerHTML = '<div class="dossier-empty">🩺 Querying the CMS NPI registry…</div>';
+            try {
+                const d = await pplApi('/api/osint/records/npi', body);
+                const r = d.result;
+                if (r.found === true) {
+                    out.innerHTML = pplRenderSection('🩺 NPI REGISTRY — ' + r.count + ' clinician(s)', '<div class="social-grid">' + r.records.slice(0, 15).map(function (c) {
+                        return '<div class="social-card"><div style="font-weight:700;">' + pplEsc(c.name) + (c.credential ? ' (' + pplEsc(c.credential) + ')' : '') + '</div>'
+                            + '<div style="font-size:10.5px;color:#9fb0bd;line-height:1.6;">NPI ' + pplEsc(c.npi)
+                            + (c.sex ? ' · ' + pplEsc(c.sex) : '') + (c.enumerationDate ? ' · since ' + pplEsc(c.enumerationDate) : '')
+                            + (c.taxonomies.length ? '<br>' + pplEsc(c.taxonomies.join('; ')) : '')
+                            + c.addresses.slice(0, 2).map(function (a) { return '<br>' + pplEsc(a.address) + ', ' + pplEsc(a.city) + ', ' + pplEsc(a.state) + ' ' + pplEsc(a.postalCode) + (a.phone ? ' · ' + pplEsc(a.phone) : ''); }).join('')
+                            + '</div></div>';
+                    }).join('') + '</div>');
+                } else if (r.found === false) {
+                    out.innerHTML = pplRenderSection('🩺 NPI REGISTRY', '<div class="dossier-empty">No registered clinician under this name — honest zero.' + (r.note ? '<br>' + pplEsc(r.note) : '') + '</div>');
+                } else {
+                    out.innerHTML = pplRenderSection('🩺 NPI REGISTRY', '<div class="dossier-empty" style="color:#ffaa00;">UNMEASURED — ' + pplEsc(r.note || '?') + '</div>');
+                }
+            } catch (e) { out.innerHTML = '<div class="dossier-empty" style="color:#ff6b6b;">✗ ' + pplEsc(e.message) + '</div>'; }
+        }
+        async function runPeopleDiscovery() {
+            const out = pplOut();
+            const name = document.getElementById('pplName').value.trim() || (document.getElementById('pplFirst').value.trim() + ' ' + document.getElementById('pplLast').value.trim()).trim();
+            if (!name || name.indexOf(' ') < 0) { out.innerHTML = '<div class="dossier-empty">Discovery needs a full name (first + last).</div>'; return; }
+            out.innerHTML = '<div class="dossier-empty">🔎 Search-engine discovery on ' + pplEsc(name) + ' — quoted name + one scoped query per walled platform, paced…</div>';
+            try {
+                const d = await pplApi('/api/osint/people/discovery', { name: name, budgetMs: 90000 });
+                const r = d.result;
+                let h = pplRenderSection('🔎 DISCOVERY — ' + r.queriesRun.length + ' queries · ' + r.pagesWithResults + ' result page(s)', '');
+                if (r.hits.length) {
+                    h += '<div class="social-grid">' + r.hits.slice(0, 24).map(function (x) {
+                        return '<div class="social-card"' + (x.identity === 'name-match' ? ' style="border-color:#00ff8855;"' : '') + '><div style="font-weight:700;">' + (x.identity === 'name-match' ? '✓ ' : '? ') + pplEsc(x.site) + '</div>'
+                            + '<div style="font-size:10.5px;"><a href="' + pplEsc(x.url) + '" target="_blank" rel="noopener">' + pplEsc(x.url) + '</a></div></div>';
+                    }).join('') + '</div>';
+                } else { h += '<div class="dossier-empty">No profile hits on the walled platforms for this name.</div>'; }
+                if (r.directories.length) h += '<div class="hint-line" style="margin-top:8px;">🗂 directories: ' + r.directories.map(function (dd) { return '<a href="' + pplEsc(dd.url) + '" target="_blank" rel="noopener">' + pplEsc(dd.platform) + '</a>'; }).join(' · ') + '</div>';
+                if (r.mentions.length) h += '<div class="hint-line" style="margin-top:6px;">📰 mentions: ' + r.mentions.slice(0, 10).map(function (m) { return '<a href="' + pplEsc(m.url) + '" target="_blank" rel="noopener">' + pplEsc(m.title || m.url) + '</a>'; }).join(' · ') + '</div>';
+                if (r.engineStatus !== 'ok') h += '<div class="hint-line" style="color:#ffaa00;">engine: ' + pplEsc(r.engineStatus) + '</div>';
+                out.innerHTML = h;
+            } catch (e) { out.innerHTML = '<div class="dossier-empty" style="color:#ff6b6b;">✗ ' + pplEsc(e.message) + '</div>'; }
+        }
+        async function runPeopleAll() {
+            // One name → BOP + NPI concurrently, then the discovery lane.
+            await Promise.all([runBop(), runNpi()]);
+            const name = (document.getElementById('pplFirst').value.trim() + ' ' + document.getElementById('pplLast').value.trim()).trim();
+            if (name && name.indexOf(' ') > 0) { await runPeopleDiscovery(); }
+        }
+
+        async function runPlainProbe() {
+            const username = document.getElementById('sweepUser').value.trim();
+            const out = document.getElementById('sweepOut');
+            if (!username) { toast('Enter a username', 'error'); return; }
+            const catalog = document.getElementById('sweepCatalog').value;
+            const includeAdult = document.getElementById('sweepAdult').checked;
+            const name = (document.getElementById('sweepName') || {}).value;
+            out.innerHTML = '<div class="dossier-empty">◈ Catalog-only probe of ' + escapeHtml(username) + ' — no search-engine lane. Walled platforms (Facebook/Instagram/TikTok/Reddit) cannot be classified this way; use SMART SWEEP for those.</div>';
+            sweepAbort = new AbortController();
+            sweepStatusShow('Catalog probe @' + username + ' (' + catalog + ')…');
+            try {
+                const d = await api('/api/osint/username-sweep', { username: username, catalog: catalog, includeAdult: includeAdult, name: name || undefined }, sweepAbort.signal);
+                const sv = d.sweep;
+                let html = '<div class="dossier-section-title">📡 ' + escapeHtml(sv.username) + ' — ' + sv.found.length + ' FOUND / ' + sv.absent + ' absent / ' + sv.unknown.length + ' unknown <span class="count">' + sv.checked + ' sites · ' + (sv.durationMs / 1000).toFixed(1) + 's</span></div>';
+                const split = sweepSplit(sv.found);
+                html += sweepAccountSection(split.confirmed, '✓ CONFIRMED ACCOUNTS', true);
+                html += sweepAccountSection(split.weak, '⚠ WEAK SIGNALS — shell-200s, verify', false);
+                if (!sv.found.length) html += '<div class="dossier-empty">No accounts found.</div>';
+                if (sv.caveats && sv.caveats.length) html += '<div class="hint-line" style="margin-top:8px;color:#ffaa00;">' + sv.caveats.map(function (c) { return '! ' + escapeHtml(c); }).join('<br>') + '</div>';
+                out.innerHTML = html;
+            } catch (e) {
+                if (sweepIsAborted(e)) { out.innerHTML = '<div class="dossier-empty" style="color:#ffaa00;">⏹ Stopped by operator.</div>'; }
+                else { out.innerHTML = '<div class="dossier-empty" style="color:#ff6b6b;">✗ ' + escapeHtml(e.message || String(e)) + '</div>'; }
+            } finally { sweepStatusHide(); }
+        }
+    </script>
 </body>
 </html>
