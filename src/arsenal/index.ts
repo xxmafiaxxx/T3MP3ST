@@ -3301,33 +3301,77 @@ const WSL_FAILED_TTL_MS = 20_000;
 // Measured: a warm `wsl -d … -e /bin/true` runs ~0.5-0.6s, but a COLD distro boot takes 1.6-2.6s.
 // The old 3s budget left ~1.1s of headroom, which concurrent load ate — and because the failure
 // was cached as a definitive "WSL absent", one slow boot hid Kali's whole toolchain.
-const WSL_PROBE_TIMEOUT_MS = 15_000;
+// Re-measured 2026-10-25 with a degraded systemd user session: through the cmd.exe wrapper a
+// legit `which nmap` probe took 19.6s and even `dig` needed 11s on first exec — so the probe
+// budget has to clear 20s, not 15s.
+const WSL_PROBE_TIMEOUT_MS = 30_000;
 function wslDistro(): string {
   return process.env.T3MP3ST_WSL_DISTRO || 'kali-linux';
 }
+/**
+ * Every wsl.exe spawn from THIS process goes through `cmd.exe /c`. Measured 2026-10-25: wsl.exe
+ * spawned directly from node (piped stdio, windowsHide) hung past a 20s timeout on commands that
+ * the identical invocation through cmd.exe /c completed (`dig +short example.com` — direct: hung,
+ * wrapper: 4s warm / 11s first exec; `which nmap` — wrapper: 19.6s). The recon route answered
+ * "spawn dig ENOENT" in production because of exactly this: the locator's probe hung → WSL marked
+ * absent → raw `dig` spawn. execFile passes argv verbatim (no MSYS translation), so the
+ * Git-Bash path-mangling concern that shaped the probe command is a shell-layer issue and stays
+ * handled where it lives; node's argv never rewrites POSIX paths.
+ */
+async function execWsl(
+  args: string[],
+  opts: { timeout?: number; maxBuffer?: number } = {}
+): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync('cmd.exe', ['/c', 'wsl.exe', ...args], {
+    timeout: opts.timeout ?? 60_000,
+    maxBuffer: opts.maxBuffer,
+    windowsHide: true,
+  });
+}
 /** Tri-state on purpose: a failed probe must not read as "WSL is absent". */
+// Single-flight: concurrent findBinaryLocation calls (e.g. the recon route's
+// Promise.all over dig + nmap) each used to fire their own cold `wsl -d … which true`
+// probe; on this box two simultaneous cold boots can exceed the 15s budget, the loser
+// timed out, cached available:false for 20s, and its binary reported ENOENT while its
+// sibling worked — measured live 2026-10-22 (dig resolved, nmap ENOENT, same call).
+// One probe is shared by every waiter until it settles.
+let wslProbeInFlight: Promise<boolean | 'unknown'> | null = null;
 async function isWslUsable(): Promise<boolean | 'unknown'> {
   if (wslAvailabilityCache) {
     const age = Date.now() - wslAvailabilityCache.checkedAt;
     const ttl = wslAvailabilityCache.available ? WSL_ABSENT_TTL_MS : WSL_FAILED_TTL_MS;
-    if (age < ttl) return wslAvailabilityCache.available;
+    if (age < ttl) {
+      // A cached false is a probe that did NOT complete (only the catch writes it) — serving it
+      // as a bare `false` told callers "confirmed absent", and the caller then cached per-binary
+      // unavailable entries for every WSL tool. Measured live 2026-10-25: the boot pre-warm's
+      // probe lost its race against a cold distro, and the recon route answered
+      // "spawn dig ENOENT" in 3s while a standalone locator call (cache cleared) found
+      // /usr/bin/dig in 26s. A probe that did not complete is 'unknown', never a negative.
+      return wslAvailabilityCache.available ? true : 'unknown';
+    }
   }
-  try {
-    // --status answers without booting the VM, so it reports "usable" on hosts whose
-    // distro can't actually start — then every per-binary `wsl -d … which` probe hangs
-    // its full timeout. Probe with a real exec instead: proves the VM can run commands.
-    // `which true` rather than `/bin/true`: a bare absolute POSIX path is rewritten by Git-Bash
-    // MSYS path translation into C:/Program Files/Git/usr/bin/true, which does not exist in
-    // the distro — a false negative on any host launched from Git Bash.
-    await execFileAsync('wsl.exe', ['-d', wslDistro(), '-e', 'which', 'true'], { timeout: WSL_PROBE_TIMEOUT_MS });
-    wslAvailabilityCache = { available: true, checkedAt: Date.now() };
-    return true;
-  } catch {
-    // Genuinely absent (wsl.exe missing) vs. merely slow — indistinguishable here, so keep the
-    // verdict short-lived: the next call re-probes instead of trusting a blip for 10 minutes.
-    wslAvailabilityCache = { available: false, checkedAt: Date.now() };
-    return 'unknown';
-  }
+  if (wslProbeInFlight) return wslProbeInFlight;
+  wslProbeInFlight = (async (): Promise<boolean | 'unknown'> => {
+    try {
+      // --status answers without booting the VM, so it reports "usable" on hosts whose
+      // distro can't actually start — then every per-binary `wsl -d … which` probe hangs
+      // its full timeout. Probe with a real exec instead: proves the VM can run commands.
+      // `which true` rather than `/bin/true`: a bare absolute POSIX path is rewritten by Git-Bash
+      // MSYS path translation into C:/Program Files/Git/usr/bin/true, which does not exist in
+      // the distro — a false negative on any host launched from Git Bash.
+      await execWsl(['-d', wslDistro(), '-e', 'which', 'true'], { timeout: WSL_PROBE_TIMEOUT_MS });
+      wslAvailabilityCache = { available: true, checkedAt: Date.now() };
+      return true;
+    } catch {
+      // Genuinely absent (wsl.exe missing) vs. merely slow — indistinguishable here, so keep the
+      // verdict short-lived: the next call re-probes instead of trusting a blip for 10 minutes.
+      wslAvailabilityCache = { available: false, checkedAt: Date.now() };
+      return 'unknown';
+    } finally {
+      wslProbeInFlight = null;
+    }
+  })();
+  return wslProbeInFlight;
 }
 export function clearBinaryLocationCache(): void {
   binaryLocationCache.clear();
@@ -3425,7 +3469,7 @@ export async function findBinaryLocations(commands: string[]): Promise<Map<strin
       const chunks: string[][] = [];
       for (let i = 0; i < missingOnHost.length; i += WSL_CHUNK) chunks.push(missingOnHost.slice(i, i + WSL_CHUNK));
       const chunkOut = await Promise.all(chunks.map((c) =>
-        execFileAsync('wsl.exe', ['-d', distro, '-e', 'which', ...c], { timeout: 20_000 })
+        execWsl(['-d', distro, '-e', 'which', ...c], { timeout: 30_000 })
           .then((res) => res.stdout || '')
           .catch((err: unknown) => {
             const e = err as { stdout?: string };
@@ -3552,7 +3596,7 @@ export async function runWsl(
   const timeout = options?.timeout ?? 60000;
   const maxOutput = options?.maxOutput ?? 1024 * 1024;
   try {
-    const { stdout, stderr } = await execFileAsync('wsl.exe', ['-d', distro, '-e', ...args], {
+    const { stdout, stderr } = await execWsl(['-d', distro, '-e', ...args], {
       timeout,
       maxBuffer: maxOutput,
     });
@@ -3583,8 +3627,10 @@ export async function runSubprocess(
       // NOTE: proxy env is intentionally NOT injected here — WSL2 cannot reach a Windows-host
       // SOCKS client on 127.0.0.1:1080 (no mirrored networking on Win10), so the vars would only
       // break every WSL tool with connection-refused. WSL-side coverage is a proxychains4 follow-up.
-      execCmd = 'wsl.exe';
-      execArgs = ['-d', loc.distro, '-e', command, ...args];
+      // Through execWsl (cmd.exe /c wrapper): a bare wsl.exe spawn from node hung past 20s on this
+      // host while the wrapped invocation completed — measured 2026-10-25, see execWsl.
+      execCmd = 'cmd.exe';
+      execArgs = ['/c', 'wsl.exe', '-d', loc.distro, '-e', command, ...args];
     }
   }
 

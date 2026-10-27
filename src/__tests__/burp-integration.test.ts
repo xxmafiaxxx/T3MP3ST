@@ -13,7 +13,10 @@ describe('Burp Suite Integration', () => {
 
   // Cold findBinaryLocation can cost ~9s when the WSL which-probe hangs its
   // full ceiling on hosts with a broken WSL VM (cache is warm after first call).
-  it('retrieves Burp Suite status via burpManager', { timeout: 20_000 }, async () => {
+  // Re-measured 2026-10-25: the probe budget is now 30s (a legit wrapped probe
+  // took 19.6s on a degraded WSL), so the old 20s ceiling timed out on a healthy
+  // answer. 45s clears the probe ceiling; assertions untouched.
+  it('retrieves Burp Suite status via burpManager', { timeout: 45_000 }, async () => {
     const status = await burpManager.getStatus();
     expect(status).toHaveProperty('installed');
     expect(status).toHaveProperty('listening');

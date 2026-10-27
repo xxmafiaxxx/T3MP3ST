@@ -192,6 +192,12 @@ export async function runCairnSearch(opts: CairnSearchOptions): Promise<CairnSea
   let state: CairnSearchResult['state'] = 'stalled';
   let consecutiveNoProgress = 0;
 
+  // The budget is a wall-clock CONTRACT, not a between-rounds suggestion: a task that
+  // starts 1s before the deadline is cut at the deadline, not allowed to burn its full
+  // taskTimeout past it (measured live: a 60s budget ran 222s because waves checked the
+  // clock only between rounds while in-flight tasks kept their whole timeout).
+  const taskBudget = () => Math.max(5_000, Math.min(config.taskTimeoutMs, deadline - Date.now()));
+
   const chatOrThrow: ChatFn = async (system, user) => {
     const raw = await opts.chat(system, user);
     if (!raw || !raw.trim()) throw new Error('model returned an empty reply');
@@ -215,7 +221,7 @@ export async function runCairnSearch(opts: CairnSearchOptions): Promise<CairnSea
       let outcome = 'discarded';
       let detail: string | undefined;
       try {
-        const raw = await withTimeout(chatOrThrow(BOOTSTRAP_SYSTEM, bootstrapPrompt(board, board.hints.map((h) => h.text))), config.taskTimeoutMs);
+        const raw = await withTimeout(chatOrThrow(BOOTSTRAP_SYSTEM, bootstrapPrompt(board, board.hints.map((h) => h.text))), taskBudget());
         const payload = extractJsonObject(raw);
         const verdict = payload ? validateBootstrapPayload(payload, 'execute') : { kind: 'invalid' as const, error: 'no JSON object in output' };
         if (verdict.kind === 'complete') {
@@ -240,7 +246,7 @@ export async function runCairnSearch(opts: CairnSearchOptions): Promise<CairnSea
         let cOutcome = 'discarded';
         detail = undefined; // the conclude entry reports on the conclude phase, not the failed main phase
         try {
-          const raw = await withTimeout(chatOrThrow(BOOTSTRAP_CONCLUDE_SYSTEM, bootstrapConcludePrompt(board)), config.taskTimeoutMs);
+          const raw = await withTimeout(chatOrThrow(BOOTSTRAP_CONCLUDE_SYSTEM, bootstrapConcludePrompt(board)), taskBudget());
           const payload = extractJsonObject(raw);
           const verdict = payload ? validateBootstrapPayload(payload, 'conclude') : { kind: 'invalid' as const, error: 'no JSON object in output' };
           if (verdict.kind === 'fact') {
@@ -271,7 +277,7 @@ export async function runCairnSearch(opts: CairnSearchOptions): Promise<CairnSea
       try {
         const openIntents = board.openIntents.map((i) => ({ id: i.id, description: i.description }));
         const user = reasonPrompt(board, openIntents, config.maxIntents);
-        const raw = await withTimeout(chatOrThrow(REASON_SYSTEM, user), config.taskTimeoutMs);
+        const raw = await withTimeout(chatOrThrow(REASON_SYSTEM, user), taskBudget());
         const payload = extractJsonObject(raw);
         const verdict = payload
           ? validateReasonPayload(payload, board.openIntentsEmpty, config.maxIntents)
@@ -333,7 +339,7 @@ export async function runCairnSearch(opts: CairnSearchOptions): Promise<CairnSea
       let outcome = 'discarded';
       let detail: string | undefined;
       try {
-        const raw = await withTimeout(chatOrThrow(EXPLORE_SYSTEM, explorePrompt(board, intent)), config.taskTimeoutMs);
+        const raw = await withTimeout(chatOrThrow(EXPLORE_SYSTEM, explorePrompt(board, intent)), taskBudget());
         const payload = extractJsonObject(raw);
         const verdict = payload ? validateExplorePayload(payload) : { kind: 'invalid' as const, error: 'no JSON object in output' };
         if (verdict.kind === 'fact') {

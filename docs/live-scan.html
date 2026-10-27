@@ -3576,7 +3576,7 @@
                     <span class="icon">🛡️</span> DFIR Response <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
                                 <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
-            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
+            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
                     <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
                 </a>
 <a class="nav-item" href="terminal.html" style="text-decoration:none;">
@@ -3647,6 +3647,26 @@
                             <button id="killAllScansBtn" class="btn btn-sm" onclick="killAllScans()" title="Kill every in-flight operator dispatch, General monitoring, and self-improve pass — hard stop" style="background:rgba(255,68,68,0.16);border:1px solid rgba(255,68,68,0.45);color:#ff6666;font-weight:800;letter-spacing:0.6px;">☠ KILL ALL SCANS</button>
                         </div>
                     </div>
+
+                    <section id="quickScanCard" style="margin-bottom:14px;background:var(--bg-secondary);border:1px solid rgba(0,255,136,0.35);border-radius:8px;overflow:hidden;">
+                        <div style="padding:12px 14px;border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;">⚡ Quick Scan <span style="color:#00ff88;">— LIVE</span></div>
+                            <div style="font-size:10px;color:var(--text-muted);">real <code>dig</code> + <code>nmap</code> from the server · exits through the configured egress proxy · your click = the authorization receipt</div>
+                        </div>
+                        <div style="padding:12px 14px;">
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                <input id="quickScanTarget" placeholder="target host, e.g. scanme.nmap.org" style="flex:1;min-width:220px;background:rgba(0,0,0,0.35);border:1px solid var(--border-color);border-radius:6px;padding:9px 12px;color:var(--text-primary);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;">
+                                <select id="quickScanType" style="background:rgba(0,0,0,0.35);border:1px solid var(--border-color);border-radius:6px;padding:9px 10px;color:var(--text-primary);font-family:'JetBrains Mono',monospace;font-size:12px;">
+                                    <option value="quick">quick (top 100 ports)</option>
+                                    <option value="standard">standard (top 1000)</option>
+                                    <option value="stealth">stealth (top 100, T1)</option>
+                                    <option value="full">full (all 65535 — slow)</option>
+                                </select>
+                                <button id="quickScanBtn" class="btn btn-sm" onclick="runQuickScan()" style="background:rgba(0,255,136,0.14);border:1px solid rgba(0,255,136,0.5);color:#7CFFC4;font-weight:800;letter-spacing:0.6px;">▶ RUN SCAN</button>
+                            </div>
+                            <div id="quickScanOut" style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text-muted);">idle — enter a target and run; output lands here as the tools return it</div>
+                        </div>
+                    </section>
 
                     <div id="liveScanSummary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px;"></div>
 
@@ -6133,6 +6153,40 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
         }
 
         // Legacy startMission compatibility
+        // ── QUICK SCAN (LIVE): real dig + nmap through /api/tools/recon ──
+        // authorize:true = the operator's click IS the authorization: the server
+        // mints the receipt APPROVED in the same stroke (30-min TTL, visible in
+        // Scope Receipts) and the scan runs now instead of stalling on a wall.
+        async function runQuickScan() {
+            const target = (document.getElementById('quickScanTarget')?.value || '').trim();
+            const type = document.getElementById('quickScanType')?.value || 'quick';
+            const out = document.getElementById('quickScanOut');
+            const btn = document.getElementById('quickScanBtn');
+            if (!target) { toast('enter a target host first', 'warning'); return; }
+            if (out) { out.style.color = 'var(--text-muted)'; out.textContent = '⏳ scanning ' + target + ' (dig + nmap ' + type + ') — real packets, this can take 30s+…'; }
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ SCANNING…'; }
+            try {
+                const r = await T3MP3ST_API.post('/api/tools/recon', { target, scan_type: type, authorize: true, source: 'human' });
+                if (out) {
+                    const dns = (r.results && r.results.dns && r.results.dns.output) ? r.results.dns.output.trim() : '(no DNS answer)';
+                    const ports = (r.results && r.results.ports && r.results.ports.output) ? r.results.ports.output.trim() : '(nmap returned no output)';
+                    const note = r.egressNote ? '<div style="color:#ffaa66;margin:6px 0;border-left:3px solid #ffaa66;padding-left:8px;">⚠ ' + r.egressNote + '</div>' : '';
+                    const receipt = r.approval && r.approval.id ? '<div style="margin-top:8px;color:#5f7079;">receipt ' + r.approval.id + ' · approved inline (operator-panel) · expires ' + (r.approval.expiresAt || '') + '</div>' : '';
+                    out.style.color = 'var(--text-primary)';
+                    out.innerHTML = '<div style="color:#7CFFC4;margin-bottom:6px;">✅ scan complete — ' + target + '</div>' + note
+                        + '<div style="color:var(--text-muted);">DNS:</div><pre style="margin:4px 0 10px;white-space:pre-wrap;">' + dns + '</pre>'
+                        + '<div style="color:var(--text-muted);">PORTS (nmap ' + type + '):</div><pre style="margin:4px 0;white-space:pre-wrap;">' + ports + '</pre>' + receipt;
+                }
+                try { addActivity('success', 'Quick scan: ' + target + ' (' + type + ')', 'Live Scan'); } catch (_) {}
+                toast('scan complete: ' + target, 'success');
+            } catch (e) {
+                if (out) { out.style.color = '#ff8080'; out.textContent = '❌ scan failed: ' + (e.message || e); }
+                toast('scan failed: ' + (e.message || e), 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '▶ RUN SCAN'; }
+            }
+        }
+
         function startMission() {
             launchMission();
         }

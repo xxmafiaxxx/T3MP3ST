@@ -3576,7 +3576,7 @@
                     <span class="icon">🛡️</span> DFIR Response <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
                                 <a class="nav-item" href="strix.html" title="Strix — autonomous AI pentesters (K:codingappDevstrix)" style="text-decoration:none;">
-            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
+            <a class="nav-item" href="search.html" title="Cairn  state-space search over a fact-intent graph"><span class="icon">>�</span> Cairn Search <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">STATE SEARCH</span></a>
                     <span class="icon">🦊</span> Strix <span style="margin-left:auto; font-size:9px; letter-spacing:0.6px; opacity:0.7;">AI PENTEST</span>
                 </a>
 <a class="nav-item" href="terminal.html" style="text-decoration:none;">
@@ -3823,23 +3823,30 @@
                         <h2 class="settings-title">🧅 Egress Proxy (SOCKS5)</h2>
                         <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">
                             Route all probe/attack <code>fetch()</code> traffic through a <b style="color:#bcd;">SOCKS5 proxy</b> so tests
-                            don't leave from your own IP (Tor, an SSH <code>-D</code> tunnel, a VPS, etc.). Loopback (the local model &amp; this
-                            server) is always bypassed. Requires <code>npm run server</code>; also settable via <code>TEMPEST_PROXY_URL</code>.
+                            don't leave from your own IP. Loopback (the local model &amp; this server) and LLM API providers are always
+                            bypassed. Also settable via <code>TEMPEST_PROXY_URL</code>.
                         </p>
                         <div class="card">
+                            <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:8px;">EGRESS MODE — one click switches where attack traffic leaves from</label>
+                            <div id="egressModeRow" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+                                <button class="btn btn-sm egress-mode-btn" data-mode="direct" onclick="setEgressMode('direct')" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.2);color:#bcd;">⏹ DIRECT<br><span style="font-size:9px;opacity:0.7;">your own IP — no proxy</span></button>
+                                <button class="btn btn-sm egress-mode-btn" data-mode="tor" onclick="setEgressMode('tor')" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.2);color:#bcd;">🧅 TOR<br><span style="font-size:9px;opacity:0.7;">socks5://127.0.0.1:9050 (tor daemon)</span></button>
+                                <button class="btn btn-sm egress-mode-btn" data-mode="torbrowser" onclick="setEgressMode('torbrowser')" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.2);color:#bcd;">🧅 TOR BROWSER<br><span style="font-size:9px;opacity:0.7;">socks5://127.0.0.1:9150 (Tor Browser running)</span></button>
+                                <button class="btn btn-sm egress-mode-btn" data-mode="custom" onclick="setEgressMode('custom')" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.2);color:#bcd;">✎ CUSTOM<br><span style="font-size:9px;opacity:0.7;">any SOCKS URL below</span></button>
+                            </div>
                             <div class="form-group">
                                 <label style="font-size:12px; color:var(--text-muted);">SOCKS5 URL — <code>socks5://[user:pass@]host:port</code></label>
                                 <input type="text" class="form-input" id="proxyUrl" placeholder="socks5://127.0.0.1:9050  (empty = direct / your own IP)">
                             </div>
                             <div class="form-hint" style="margin:-6px 0 12px;">
-                                Tor: <code>socks5://127.0.0.1:9050</code> · SSH tunnel: <code>ssh -D 1080 host</code> → <code>socks5://127.0.0.1:1080</code>. Use <code>socks5h://</code> to resolve DNS at the proxy.
+                                SSH tunnel: <code>ssh -D 1080 host</code> → <code>socks5://127.0.0.1:1080</code>. Use <code>socks5h://</code> to resolve DNS at the proxy.
                             </div>
                             <div style="display:flex; gap:10px; flex-wrap:wrap;">
                                 <button class="btn btn-primary btn-sm" onclick="saveProxyConfig()">Save &amp; apply</button>
-                                <button class="btn btn-sm" onclick="saveProxyConfig('')" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.2);color:#bcd;">Disable (direct)</button>
+                                <button class="btn btn-sm" id="startTorBtn" onclick="startTorDaemon()" style="background:rgba(122,80,255,0.12);border:1px solid rgba(140,100,255,0.45);color:#cbb8ff;">🧅 Start Tor daemon</button>
                                 <button class="btn btn-sm" onclick="checkProxyIp()" style="background:rgba(255,255,255,0.05);border:1px solid rgba(0,200,255,0.3);color:#bcd;">Check IP now</button>
                             </div>
-                            <div id="proxyTestResult" style="font-size:12px; margin-top:10px; color:var(--text-muted);"></div>
+                            <div id="proxyTestResult" style="font-size:12px; margin-top:10px; color:var(--text-muted);">loading egress state…</div>
                         </div>
                     </div>
 
@@ -3981,29 +3988,6 @@
                             </div>
                         </div>
                     </div>
-
-                    <div class="settings-section">
-                        <h2 class="settings-title">🖥️ API Server</h2>
-                        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">URL of your running T3MP3ST API server (start with <code style="color: var(--accent);">npm run server</code>)</p>
-                        <div class="card">
-                            <div class="form-group">
-                                <div style="display: flex; gap: 8px;">
-                                    <input type="text" class="form-input" id="apiServerUrl" placeholder="http://localhost:3333" style="flex: 1;">
-                                    <button class="btn btn-primary btn-sm" onclick="saveApiServerUrl()">Save</button>
-                                    <button class="btn btn-secondary btn-sm" onclick="testApiConnection()">Test</button>
-                                </div>
-                                <div class="form-hint" style="margin-top: 6px;">Default: <code style="color: var(--accent);">http://localhost:3333</code> — change if your server runs on a different host/port</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="settings-section">
-                        <h2 class="settings-title">⚠️ Data</h2>
-                        <div class="card" style="border-color: var(--danger);">
-                            <button class="btn btn-danger" onclick="clearAllData()">Clear All Data</button>
-                        </div>
-                    </div>
-                </div>
 
                 <!-- Config Library -->
                 <script>
@@ -7267,27 +7251,87 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             }
         }
 
+        // ── Egress mode switch (DIRECT / TOR / TOR BROWSER / CUSTOM) ──
+        // One click = pick the preset AND apply it. Start Tor launches the daemon
+        // server-side (WMI-detached, survives the page) and adopts the TOR preset
+        // when nothing else is enabled.
+        function egressModeButtons(){ return Array.from(document.querySelectorAll('.egress-mode-btn')); }
+        function markEgressMode(mode){
+            egressModeButtons().forEach(function(b){
+                const on = b.dataset.mode === mode;
+                b.style.border = '1px solid ' + (on ? 'var(--brand)' : 'rgba(255,255,255,0.2)');
+                b.style.background = on ? 'rgba(0,255,136,0.10)' : 'rgba(255,255,255,0.05)';
+                b.style.boxShadow = on ? '0 0 10px rgba(0,255,136,0.25)' : 'none';
+            });
+        }
+        const EGRESS_PRESETS = { direct: '', tor: 'socks5://127.0.0.1:9050', torbrowser: 'socks5://127.0.0.1:9150' };
+        async function setEgressMode(mode){
+            markEgressMode(mode);
+            if (mode === 'custom') { document.getElementById('proxyUrl').focus(); return; }
+            await saveProxyConfig(EGRESS_PRESETS[mode]);
+        }
+        async function startTorDaemon(){
+            const el = document.getElementById('proxyTestResult');
+            const btn = document.getElementById('startTorBtn');
+            if (btn) { btn.disabled = true; btn.textContent = '🧅 Starting Tor… (up to 90s)'; }
+            if (el) { el.style.color = 'var(--text-muted)'; el.textContent = '⏳ Launching the Tor daemon — it is spawned server-side and survives this page closing…'; }
+            try {
+                const r = await fetch(getApiBase() + '/api/net/tor/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const d = await r.json();
+                if (el) {
+                    el.style.color = d.socksLive ? '#7CFFC4' : '#ffaa66';
+                    el.textContent = d.socksLive ? '✅ ' + (d.note || 'Tor SOCKS live on 127.0.0.1:9050') : '⚠ ' + (d.note || d.error || 'the SOCKS port did not answer in time');
+                }
+                toast(d.socksLive ? 'Tor SOCKS live on 9050' : 'Tor did not answer within 90s', d.socksLive ? 'success' : 'error');
+                // Adopt the TOR preset automatically only when nothing is enabled yet —
+                // never silently override an operator-chosen egress.
+                const st = await (await fetch(getApiBase() + '/api/net/proxy')).json();
+                if (d.socksLive && !st.enabled) await setEgressMode('tor'); else await checkProxyIp();
+            } catch (e) {
+                if (el) { el.style.color = '#ff8080'; el.textContent = '❌ Start Tor failed: ' + (e.message || e); }
+                toast('Start Tor failed: ' + (e.message || e), 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '🧅 Start Tor daemon'; }
+            }
+        }
+
         async function checkProxyIp() {
             const el = document.getElementById('proxyTestResult');
-            if (el) { el.style.color = 'var(--text-muted)'; el.textContent = '⏳ Checking egress IP via ifconfig.co …'; }
+            if (el) { el.style.color = 'var(--text-muted)'; el.textContent = '⏳ Checking egress IP + proxy health …'; }
             try {
-                const r = await fetch(`${getApiBase()}/api/net/ip?force=1`);
+                const r = await fetch(getApiBase() + '/api/net/ip?force=1');
                 const d = await r.json();
                 if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
                 const exit = (d.exit && d.exit.ip) || '—';
                 const real = (d.direct && d.direct.ip) || '—';
-                const cc = (d.exit && d.exit.country) ? ` (${d.exit.country})` : '';
+                const cc = (d.exit && d.exit.country) ? ' (' + d.exit.country + ')' : '';
+                let torNote = '';
+                try {
+                    const t = await (await fetch(getApiBase() + '/api/osint/tor-status')).json();
+                    if (t.available) torNote = ' · 🧅 Tor circuit ready (port ' + t.port + ')';
+                    else if (d.proxy && d.proxy.enabled && d.proxy.port === 9050) torNote = ' · 🧅 Tor daemon NOT running';
+                } catch (_) { /* status lane optional */ }
                 if (el) {
-                    if (d.leak) {
+                    if (d.proxyEnabled && d.proxyReachable === false) {
+                        el.style.color = '#ffaa66';
+                        el.innerHTML = '🧅 <b>PROXY DEAD</b>: ' + ((d.proxy && d.proxy.url) || '') + ' is configured but NOTHING answers on that port — every non-bypassed request is failing right now. Press <b>Start Tor daemon</b>, or switch to DIRECT.';
+                    } else if (d.leak) {
                         el.style.color = '#ff8080';
                         el.innerHTML = d.proxyEnabled
-                            ? `⚠ <b>LEAK</b>: exit IP <b>${exit}</b> equals your real IP — the proxy is not changing egress. Traffic is NOT anonymized.`
-                            : `⚠ <b>No proxy</b>: tests leave from your real IP <b>${exit}</b>. Set a SOCKS5 URL above to anonymize.`;
+                            ? '⚠ <b>LEAK</b>: exit IP <b>' + exit + '</b> equals your real IP — the proxy is not changing egress. Traffic is NOT anonymized.' + torNote
+                            : '⚠ <b>No proxy</b>: tests leave from your real IP <b>' + exit + '</b>. Pick an egress mode above to anonymize.';
                     } else {
                         el.style.color = '#7CFFC4';
-                        el.innerHTML = `✅ Egress IP <b>${exit}</b>${cc} — your real IP <b>${real}</b> is hidden. <span style="color:var(--text-muted);">via ${(d.proxy && d.proxy.url) || 'SOCKS5'}</span>`;
+                        el.innerHTML = '✅ Egress IP <b>' + exit + '</b>' + cc + ' — your real IP <b>' + real + '</b> is hidden. <span style="color:var(--text-muted);">via ' + ((d.proxy && d.proxy.url) || 'SOCKS5') + torNote + '</span>';
                     }
                 }
+                // Reflect the LIVE state on the mode buttons (server truth, not localStorage).
+                const url = (d.proxy && d.proxy.url) || '';
+                if (!d.proxyEnabled) markEgressMode('direct');
+                else if (url.indexOf(':9050') >= 0) markEgressMode('tor');
+                else if (url.indexOf(':9150') >= 0) markEgressMode('torbrowser');
+                else markEgressMode('custom');
+                if (d.proxyEnabled) { const i = document.getElementById('proxyUrl'); if (i && !i.value) i.value = url; }
                 refreshEgressIp(false);
             } catch (e) {
                 if (el) { el.style.color = '#ff8080'; el.textContent = '❌ IP check failed: ' + (e.message || e) + ' (is the backend running?)'; }
@@ -7669,6 +7713,10 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             const s = state.settings || {};
             const keyEl = document.getElementById('uacApiKey');
             const baseEl = document.getElementById('uacBaseUrl');
+            if (keyEl) keyEl.disabled = false;
+            if (baseEl) baseEl.disabled = false;
+            const _fb2=document.getElementById('uacFetchBtn'); if(_fb2){ _fb2.disabled=false; _fb2.textContent='Fetch models'; }
+            const _note2=document.getElementById('uacProviderNote'); if(_note2) _note2.innerHTML='Browser-direct calls use <b>OpenRouter</b>, <b>Venice</b>, or <b>Hugging Face</b>. The other keys are stored and used by server-side missions, but a browser mission still routes through one of the three above.';
             if (keyEl) keyEl.value = s[p + 'Key'] || '';
             if (baseEl) { baseEl.value = s[p + 'BaseUrl'] || ''; baseEl.placeholder = UAC_DEFAULT_BASE[p] || ''; }
             const modelEl = document.getElementById('uacModel');

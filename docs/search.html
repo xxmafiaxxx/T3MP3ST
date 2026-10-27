@@ -6,7 +6,7 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>T3MP3ST — Strix</title>
+    <title>T3MP3ST — Cairn Search</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
         try { var _t3mpTheme = localStorage.getItem('t3mp3st_theme'); if (_t3mpTheme && _t3mpTheme !== 'storm') document.documentElement.setAttribute('data-theme', _t3mpTheme); } catch (e) {}
@@ -351,6 +351,10 @@
                             <div id="completionText" style="font-size:12px; margin-top:6px;"></div>
                             <div id="completionFrom" class="mono" style="font-size:10px; color:var(--text-muted); margin-top:6px;"></div>
                         </div>
+                        <div id="endBanner" style="display:none; margin-top:12px; border:1px solid #ffaa00; background:rgba(255,170,0,0.07); border-radius:8px; padding:12px;">
+                            <div class="mono" style="font-size:11px; font-weight:700; color:#ffaa00;" id="endTitle">SEARCH ENDED</div>
+                            <div id="endText" style="font-size:12px; margin-top:6px; color:var(--text-secondary);"></div>
+                        </div>
                     </div>
                     <div class="card" style="padding:14px; margin-top:14px;">
                         <div class="mono" style="font-size:11px; font-weight:700; color:var(--border-glow); margin-bottom:10px;">BOARD — FACTS</div>
@@ -517,20 +521,39 @@ async function refreshSearch(){
         renderSearch(s);
     }catch(e){ /* offline or none yet — keep the last render */ }
 }
+const TERMINAL_STATES = { complete: 1, stalled: 1, budget_exhausted: 1, failed: 1 };
 function renderSearch(s){
     const chip=document.getElementById('stateChip');
     const running=!s.error && (!s.state || s.state==='running');
-    chip.textContent=String(s.state||'running').toUpperCase();
-    chip.className='chip'+(s.state==='complete'?' on':'');
-    chip.style.borderColor=s.state==='failed'?'#ff5470':(s.state==='complete'?'var(--border-glow)':(running?'#ffaa00':''));
+    const ended=!running && TERMINAL_STATES[s.state];
+    chip.textContent=String(s.state||'running').toUpperCase().replace('_',' ');
+    chip.className='chip';
+    chip.style.borderColor=s.state==='failed'?'#ff5470':(s.state==='complete'?'var(--border-glow)':(s.state==='budget_exhausted'||s.state==='stalled'?'#ffaa00':(running?'#ffaa00':'')));
+    if(ended) chip.style.color = s.state==='complete' ? 'var(--border-glow)' : (s.state==='failed' ? '#ff5470' : '#ffaa00');
+    else chip.style.color='';
     document.getElementById('searchMeta').textContent=s.id?('search '+s.id+' · '+s.facts.length+' facts · '+s.intents.length+' intents · '+((s.ms/1000)|0)+'s'):'no search yet';
+    if(ended && pollTimer){ clearInterval(pollTimer); pollTimer=null; }
     const banner=document.getElementById('completionBanner');
     if(s.completion){
         banner.style.display='block';
         document.getElementById('completionText').textContent=s.completion.description;
         document.getElementById('completionFrom').textContent='proven by: '+s.completion.from.join(', ');
-        if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
     } else { banner.style.display='none'; }
+    const endBanner=document.getElementById('endBanner');
+    if(ended && !s.completion){
+        endBanner.style.display='block';
+        const endTitle=document.getElementById('endTitle'), endText=document.getElementById('endText');
+        if(s.state==='budget_exhausted'){
+            endTitle.textContent='BUDGET EXHAUSTED';
+            endText.textContent='the search ran out of wall-clock and the goal is not yet proven. Raise BUDGET, narrow the GOAL, or inject a hint and start again — the facts on the board are real and reusable as origin knowledge.';
+        } else if(s.state==='stalled'){
+            endTitle.textContent='STALLED — FRONTIER EMPTY';
+            endText.textContent='no dispatchable work remains and the model proposed no new directions. Restate the goal, inject a hint with what you know, or accept the board as the honest end of this search.';
+        } else {
+            endTitle.textContent='SEARCH FAILED';
+            endText.textContent=s.error||'the backbone failed mid-search — check the LLM provider and start again.';
+        }
+    } else { endBanner.style.display='none'; }
     const facts=document.getElementById('factsList');
     facts.innerHTML=(s.facts||[]).map(f=>'<div style="border:1px solid var(--border-color); border-radius:6px; padding:8px 10px; background:rgba(0,0,0,0.18);">'
         +'<span class="mono" style="font-size:10px; color:var(--border-glow);">'+escapeHtml(f.id)+'</span>'
