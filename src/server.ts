@@ -154,6 +154,7 @@ import {
 } from './tools/gps-copilot.js';
 import { haversineKm } from './tools/gps-copilot.js';
 import { fetchAreaNews, newsFactLines } from './tools/gps-area-news.js';
+import { analyzeGeospyImage, parseExifGps, googleGroundingSearch, lensReverseSearch } from './tools/geospy.js';
 import { CveCorrelator } from './recon/cve-correlator.js';
 import { SE_CHANNELS, SE_OBJECTIVES, buildPretextSystemPrompt, buildPretextUserPrompt, parsePretextResponse } from './tools/osint-aggressive.js';
 import { resolveOllamaEndpoint, listOllamaModels, ollamaChat } from './tools/ollama.js';
@@ -9077,6 +9078,261 @@ app.post('/api/gps/area-brief', async (req: Request, res: Response): Promise<voi
 
 // --- Dark web direct — leak-site monitor + onion search/fetch (keyless lanes) ---
 
+// --- GEOSPY — image/video geolocation (Social Engineering Lab) ---
+// Accepts base64 image (client extracts video frame as JPEG). Two signals:
+// EXIF GPS (real hardware coordinate when present) + vision LLM (landmark/
+// signage/terrain reasoning when not). Never fabricates a coordinate.
+
+app.get('/api/geospy/status', (_req: Request, res: Response): void => {
+  const orKey = !!(config.getApiKey('openrouter') || '').trim();
+  const oaKey = !!(config.getApiKey('openai') || '').trim();
+  const gemKey = !!(config.getApiKey('gemini') || '').trim();
+  const visionReady = orKey || oaKey || gemKey;
+  // Route mirrors geospy.ts pickVisionProvider: Gemini direct wins for google/* models when GEMINI_API_KEY is valid (your OR key is currently revoked, so Auto must report gemini)
+  const isGeminiModelId = (id: string): boolean => /^google\//i.test(id) || /gemini/i.test(id);
+  const provider = (() => {
+    // Peek what Auto would actually pick — don't claim openrouter when Auto resolves to Gemini
+    const cur = (config.get('openrouter')?.defaultModel || '') as string;
+    const visionBlind = new Set(['z-ai/glm-5.3-flash','z-ai/glm-5.3','z-ai/glm-5.2:free','deepseek/deepseek-v4-pro','deepseek/deepseek-v4-flash','qwen/qwen3.8-max','qwen/qwen3.8-flash','moonshotai/kimi-k3','minimax/minimax-m3','minimax/minimax-m3:free','tencent/hy4-preview','z-ai/glm-4.7','inclusionai/ling-3.0-flash-fin:free','google/gemma-4-31b-it:free','nvidia/nemotron-3-super-120b-a12b:free']);
+    const autoResolvesToGemini = !cur || visionBlind.has(cur) || isGeminiModelId(cur);
+    if (autoResolvesToGemini && gemKey) return 'gemini';
+    if (orKey) return 'openrouter';
+    if (oaKey) return 'openai';
+    if (gemKey) return 'gemini';
+    return 'none';
+  })();
+  const VISION_DEFAULTS = ['google/gemini-2.5-flash', 'google/gemini-3-flash-preview', 'openai/gpt-4o', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.8', 'x-ai/grok-4.3'] as const;
+  const isVisionId = (id: string): boolean => {
+    const m = (AVAILABLE_MODELS as unknown as Record<string, Array<{id:string;capabilities?:string[];supportsVision?:boolean}>>)?.openrouter?.find(x => x.id === id);
+    if (!m) return /^(openai\/gpt-4o|anthropic\/claude|google\/gemini|x-ai\/grok)/.test(id);
+    const caps = (m.capabilities ?? []) as string[];
+    return caps.includes('vision') || caps.includes('multimodal') || !!(m as unknown as {supportsVision?:boolean}).supportsVision;
+  };
+  const visionDefault = (() => {
+    // For gemini provider the default must be vision-safe; otherwise mirror the provider's configured default when it's vision
+    if (provider === 'gemini') {
+      const gcur = (config.get('gemini')?.defaultModel || '') as string;
+      if (gcur && (isVisionId(gcur) || isGeminiModelId(gcur))) return gcur.includes('/') ? gcur : `google/${gcur}`;
+      return 'google/gemini-2.5-flash';
+    }
+    const cur = (orKey ? config.get('openrouter')?.defaultModel : oaKey ? config.get('openai')?.defaultModel : gemKey ? config.get('gemini')?.defaultModel : null) as string | null;
+    if (cur && isVisionId(cur)) return cur;
+    for (const v of VISION_DEFAULTS) if (orKey) return v;
+    if ((provider as string) === 'gemini') return 'google/gemini-2.5-flash';
+    return cur;
+  })() as string | null;
+  const model = visionDefault;
+  // Vision models the operator actually has keys for — drives the panel's model selector (vision-only!)
+  const visionModels = (() => {
+    const out: Array<{ id: string; label: string; provider: string }> = [];
+    const have = new Set<string>();
+    const pushOnce = (id: string, label: string, provider: string) => { if (!have.has(id)) { have.add(id); out.push({ id, label, provider }); } };
+    if (orKey) {
+      for (const m of (AVAILABLE_MODELS as unknown as Record<string, Array<{id:string;name:string;provider:string;capabilities?:string[]}>>)?.openrouter ?? []) {
+        const caps = (m.capabilities ?? []) as string[];
+        if (caps.includes('vision') || caps.includes('multimodal')) pushOnce(m.id, m.name, 'openrouter');
+      }
+      // Gemini via OpenRouter is vision even though the static list may lag — ensure they're present
+      for (const gid of ['google/gemini-2.5-flash','google/gemini-3-flash-preview','google/gemini-3.1-pro-preview'] as const) pushOnce(gid, gid, 'openrouter');
+      // Also surface gpt-4o variants if missing
+      for (const oid of ['openai/gpt-4o','openai/gpt-4o-mini'] as const) pushOnce(oid, oid, 'openrouter');
+    }
+    if (oaKey) pushOnce(config.get('openai')?.defaultModel || 'gpt-4o', (config.get('openai')?.defaultModel || 'gpt-4o') + ' (OpenAI)', 'openai');
+    if (gemKey) pushOnce(config.get('gemini')?.defaultModel || 'gemini-2.0-flash', (config.get('gemini')?.defaultModel || 'gemini-2.0-flash') + ' (Gemini)', 'gemini');
+    // Local / Hermes options — always surfaced so Geospy works offline (no key needed). Operator asked "plus hermes".
+    {
+      const localOptions: Array<{ id: string; label: string }> = [
+        { id: 'ollama/gemma4:e4b', label: 'Gemma 4 E4B — local vision (192.168.1.162)' },
+        { id: 'ollama/hermes3:8b', label: 'Hermes 3 8B — local (Ollama)' },
+        { id: 'ollama/llava:13b', label: 'LLaVA 13B — local vision (Ollama)' },
+        { id: 'ollama/bakllava', label: 'BakLLaVA — local vision (Ollama)' },
+        { id: 'ollama/qwen2-vl:7b', label: 'Qwen2 VL 7B — local vision (Ollama)' },
+      ];
+      for (const o of localOptions) pushOnce(o.id, o.label, 'ollama');
+      // Hermes on OpenRouter is TEXT-ONLY (measured live 2026-10-29: input_modalities ["text"]) — deliberately NOT in the vision selector; local Hermes rides the Ollama branch
+    }
+    if (!out.length) {
+      const fallback = ['google/gemini-2.5-flash','openai/gpt-4o','anthropic/claude-sonnet-4.5','google/gemini-3-flash-preview'] as const;
+      for (const id of fallback) pushOnce(id, id, 'openrouter');
+    }
+    return out;
+  })();
+  res.json({
+    success: true,
+    visionReady,
+    provider,
+    model,
+    visionModels,
+    exifReady: true,
+    note: visionReady
+      ? `Vision AI armed via ${provider} — images will be analysed for landmarks, language, architecture, terrain.`
+      : 'Vision AI not configured — set OPENROUTER_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY in Settings. EXIF GPS still works.',
+  });
+});
+
+app.post('/api/geospy/analyze', async (req: Request, res: Response): Promise<void> => {
+  let b64 = String(req.body?.imageBase64 ?? req.body?.image ?? '').trim();
+  const urlInput = String(req.body?.imageUrl ?? req.body?.url ?? '').trim();
+  let mime = String(req.body?.mime || 'image/jpeg').trim() || 'image/jpeg';
+  const doVision = req.body?.doVision !== false;
+  const visionTimeoutMs = Number.isFinite(Number(req.body?.visionTimeoutMs)) ? Math.max(5000, Math.min(60000, Number(req.body.visionTimeoutMs))) : 25000;
+  const context = String(req.body?.context || '').trim().slice(0, 600) || undefined;
+  const guess = String(req.body?.guess || '').trim().slice(0, 300) || undefined;
+  const visionModel = String(req.body?.model || req.body?.visionModel || '').trim().slice(0, 120) || undefined;
+  const doGoogle = req.body?.doGoogle !== false;
+  const doLens = req.body?.doLens !== false;
+  const apiKey = String((req.headers as Record<string,string>)['x-api-key'] || (req.headers as Record<string,string>)['x-gemini-key'] || req.body?.apiKey || req.body?.api_key || req.body?.geminiKey || '').trim().slice(0, 300) || undefined;
+
+  // GeoIntel-style server-side image URL fetch (bypasses browser CORS)
+  if ((!b64 || b64.length < 100) && urlInput && /^https?:\/\//i.test(urlInput)) {
+    try {
+      const { fetchImageUrlAsBase64 } = await import('./tools/geospy.js');
+      const fetched = await fetchImageUrlAsBase64(urlInput);
+      if ('error' in fetched) { res.status(400).json({ error: fetched.error }); return; }
+      b64 = fetched.b64;
+      mime = fetched.mime || mime;
+    } catch (e: unknown) {
+      res.status(400).json({ error: `imageUrl fetch failed — ${(e instanceof Error ? e.message : String(e)).slice(0,200)}` });
+      return;
+    }
+  }
+
+  if (!b64 || b64.length < 100) {
+    res.status(400).json({ error: 'imageBase64 or imageUrl required — send base64 image (data: URL prefix optional) or an http(s) image URL.' });
+    return;
+  }
+  // ~7.5 MB decoded cap (10 MB JSON limit, base64 inflates ~33%)
+  if (b64.replace(/^data:[^;]+;base64,/, '').length > 10_000_000) {
+    res.status(413).json({ error: 'image too large — max ~7.5 MB decoded. Compress or crop and retry.' });
+    return;
+  }
+
+  const t0 = Date.now();
+  try {
+    console.log(`[T3MP3ST][GEOSPY] analyze: ${mime}, ${Math.round(b64.length / 1024)} KB b64, vision=${doVision}${context ? ' +context' : ''}${guess ? ' +guess' : ''}${visionModel ? ' model='+visionModel : ''} google=${doGoogle} lens=${doLens}${urlInput ? ' viaUrl' : ''}${apiKey ? ' +apiKey' : ''}`);
+    const verdict = await analyzeGeospyImage(b64, mime, { doVision, visionTimeoutMs, context, guess, model: visionModel, doGoogle, doLens, apiKey });
+    const ms = Date.now() - t0;
+    // Ledger entry for the Evidence Vault
+    if (verdict.lat != null && verdict.lon != null) {
+      upsertMissionFindingToLedger({
+        title: `Geospy Locate — ${verdict.vision.place || verdict.reverse?.label || `${verdict.lat.toFixed(4)}, ${verdict.lon.toFixed(4)}`} (${verdict.source}/${verdict.confidence})`,
+        description: verdict.vision.reasoning?.slice(0, 400) || (verdict.exif.hasGps ? `EXIF GPS ${verdict.lat.toFixed(5)}, ${verdict.lon.toFixed(5)}` : 'Vision geolocation'),
+        severity: verdict.confidence === 'high' ? 'medium' as const : 'info' as const,
+        targetId: `${verdict.lat.toFixed(4)},${verdict.lon.toFixed(4)}`,
+        operatorId: 'geospy-lab',
+        evidence: [
+          { type: 'log' as const, content: `source=${verdict.source} conf=${verdict.confidence} ${verdict.exif.hasGps ? 'EXIF ✓' : 'EXIF ✗'} vision=${verdict.vision.model || 'none'} lens=${verdict.lens?.hits?.length ?? 0}${verdict.lens?.refinedVision ? '→refined '+verdict.lens.refinedVision.place : ''}`, timestamp: Date.now(), metadata: { tool: 'geospy_locate' } },
+          ...(verdict.vision.clues || []).slice(0, 5).map((c) => ({ type: 'log' as const, content: c, timestamp: Date.now(), metadata: { tool: 'geospy_clue' } })),
+        ],
+      });
+    }
+    res.json({ success: true, ms, ...verdict });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[T3MP3ST][GEOSPY] analyze failed:', msg);
+    res.status(502).json({ error: `geospy analyze failed — ${msg.slice(0, 300)}` });
+  }
+});
+
+// Lightweight EXIF-only probe — no vision call, no LLM spend
+app.post('/api/geospy/exif', (req: Request, res: Response): void => {
+  const b64 = String(req.body?.imageBase64 ?? req.body?.image ?? '').trim().replace(/^data:[^;]+;base64,/, '');
+  if (!b64 || b64.length < 20) { res.status(400).json({ error: 'imageBase64 required' }); return; }
+  try {
+    const buf = Buffer.from(b64, 'base64');
+    const exif = parseExifGps(new Uint8Array(buf));
+    res.json({ success: true, exif });
+  } catch (e: unknown) {
+    res.status(400).json({ error: `exif parse failed — ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}` });
+  }
+});
+
+// Server-side image URL loader for Geospy URL intake (bypasses browser CORS; cap 20 MB)
+app.post('/api/geospy/fetch-image', async (req: Request, res: Response): Promise<void> => {
+  const url = String(req.body?.imageUrl ?? req.body?.url ?? '').trim();
+  if (!url || !/^https?:\/\//i.test(url)) { res.status(400).json({ error: 'imageUrl must be http(s) URL' }); return; }
+  try {
+    const { fetchImageUrlAsBase64 } = await import('./tools/geospy.js');
+    const r = await fetchImageUrlAsBase64(url);
+    if ('error' in r) { res.status(400).json({ error: r.error }); return; }
+    // also decode dimensions hint via JPEG header is not needed — frontend will read naturalWidth
+    res.json({ success: true, b64: r.b64, imageBase64: r.b64, mime: r.mime });
+  } catch (e: unknown) { res.status(502).json({ error: `fetch-image failed — ${(e instanceof Error ? e.message : String(e)).slice(0,200)}` }); }
+});
+
+// Google grounding — like Google Images: web search for vision clues (second opinion)
+app.post('/api/geospy/google-search', async (req: Request, res: Response): Promise<void> => {
+  const q = String(req.body?.query ?? req.body?.q ?? '').trim().slice(0, 200);
+  if (!q) { res.status(400).json({ error: 'query required' }); return; }
+  try {
+    const r = await googleGroundingSearch(q);
+    res.json({ success: true, ...r });
+  } catch (e: unknown) {
+    res.status(502).json({ error: `google search failed — ${(e instanceof Error ? e.message : String(e)).slice(0,200)}` });
+  }
+});
+
+// Lens reverse-image: upload image → Lens hits → best hit re-fed to vision model for location assessment
+app.post('/api/geospy/lens', async (req: Request, res: Response): Promise<void> => {
+  const b64 = String(req.body?.imageBase64 ?? req.body?.image ?? '').trim();
+  const mime = String(req.body?.mime || 'image/jpeg').trim() || 'image/jpeg';
+  const doRefine = req.body?.doRefine !== false;
+  const model = String(req.body?.model || req.body?.visionModel || '').trim().slice(0, 120) || undefined;
+  const context = String(req.body?.context || '').trim().slice(0, 600) || undefined;
+  const guess = String(req.body?.guess || '').trim().slice(0, 300) || undefined;
+  const refineImageUrl = String(req.body?.refineImageUrl || '').trim().slice(0, 800) || undefined;
+  const apiKey = String((req.headers as Record<string,string>)['x-api-key'] || (req.headers as Record<string,string>)['x-gemini-key'] || req.body?.apiKey || req.body?.api_key || '').trim().slice(0, 300) || undefined;
+  if (!b64 || b64.length < 100) { res.status(400).json({ error: 'imageBase64 required' }); return; }
+  if (b64.replace(/^data:[^;]+;base64,/, '').length > 10_000_000) { res.status(413).json({ error: 'image too large — max ~7.5 MB' }); return; }
+  const t0 = Date.now();
+  try {
+    console.log(`[T3MP3ST][GEOSPY][LENS] upload ${mime}, ${Math.round(b64.length/1024)} KB, refine=${doRefine}${model ? ' model='+model : ''}${apiKey ? ' +apiKey' : ''}`);
+    const r = await lensReverseSearch(b64, mime, {
+      refineWithVision: doRefine,
+      visionModel: model,
+      visionTimeoutMs: 16000,
+      context,
+      guess,
+      apiKey,
+    });
+    // Per-hit loop: fetch that Lens hit image and run it through the main vision model for location assessment
+    if (refineImageUrl && /^https?:\/\//i.test(refineImageUrl)) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 11000);
+        const { directFetch: df } = await import('./net/proxy.js');
+        let art: { b64: string; mime: string } | null = null;
+        try {
+          const raw = await (df as unknown as (u: string, init: unknown) => Promise<globalThis.Response>)(refineImageUrl, { headers: { 'user-agent': 'T3MP3ST-Geospy/1.0', accept: 'image/*,*/*;q=0.8' }, signal: ctrl.signal } as unknown);
+          const rr = raw as globalThis.Response;
+          if (rr.ok) {
+            const ct = String((rr.headers as unknown as { get(n:string):string|null }).get?.('content-type') || 'image/jpeg').split(';')[0].trim() || 'image/jpeg';
+            if (ct.startsWith('image/')) {
+              const ab = await (rr as unknown as { arrayBuffer(): Promise<ArrayBuffer> }).arrayBuffer();
+              const bb = Buffer.from(ab as ArrayBuffer).toString('base64');
+              if (bb.length > 800) art = { b64: bb, mime: ct };
+            }
+          }
+        } catch {} finally { clearTimeout(t); }
+        if (art) {
+          const { visionLocate } = await import('./tools/geospy.js');
+          const v = await visionLocate(art.b64, art.mime, { timeoutMs: 16000, model, context, guess, apiKey });
+          (r as unknown as Record<string, unknown>).refinedVision = v;
+          (r as unknown as Record<string, unknown>).refinedFrom = { title: 'Re-analyzed hit', url: refineImageUrl, imageUrl: refineImageUrl };
+          if (!v.lat && !v.lon && !v.place && v.confidence === 'none') {
+            (r as unknown as Record<string, unknown>).note = ((r.note || '') + ' | hit produced no location').trim();
+          }
+        } else {
+          (r as unknown as Record<string, unknown>).note = ((r.note || '') + ' | could not fetch hit image').trim();
+        }
+      } catch (e) { (r as unknown as Record<string, unknown>).note = ((r.note || '') + ' | re-analyze failed: ' + (e instanceof Error ? e.message : String(e)).slice(0, 120)).trim(); }
+    }
+    res.json({ success: true, ms: Date.now() - t0, ...r });
+  } catch (e: unknown) {
+    res.status(502).json({ error: `lens failed — ${(e instanceof Error ? e.message : String(e)).slice(0, 280)}` });
+  }
+});
+
 // --- OSINT infrastructure: domain / IP / certificate / routing intelligence.
 // Keyless and read-only throughout. Every lane reports its own outcome, and a
 // blocked source lands in `failed[]` so it can never be mistaken for a clean one.
@@ -13554,7 +13810,7 @@ app.use('/ui', express.static('docs', {
 // root-level /ctf.html-style request 404s today. 301 the known pages to their shell location.
 const DOC_PAGES = new Set([
   'about.html', 'arsenal.html', 'configs.html', 'ctf.html', 'cves.html', 'dfir.html',
-  'evidence.html', 'general.html', 'index.html', 'live-scan.html', 'obsidivm.html',
+  'evidence.html', 'general.html', 'geospy.html', 'index.html', 'live-scan.html', 'obsidivm.html',
   'operators.html', 'osint.html', 'gps.html', 'receipts.html', 'self-improve.html', 'settings.html', 'strix.html', 'terminal.html', 'shell.html',
 ]);
 app.get('/:page', (req: Request, res: Response, next: NextFunction) => {
