@@ -3669,6 +3669,7 @@
                 <a class="nav-item" href="osint.html" data-href="osint.html" title="OSINT — public-source people locator: social sweeps, breach dumps, person dossiers" style="text-decoration:none;">
                     <span class="icon">🕵️</span> OSINT <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
+                <a class="nav-item" href="geospy.html" title="Geospy — image & video geolocation (social engineering lab)"><span class="icon">&#127758;</span> Geospy Lab</a>
                 <a class="nav-item" href="gps.html" data-href="gps.html" title="GPS Map — public geodata screen: aircraft ADS-B, quakes, weather alerts, ISS, OSM POIs around your pin" style="text-decoration:none;">
                     <span class="icon">🛰️</span> GPS Map <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
@@ -3699,6 +3700,7 @@
                 <a class="nav-item" href="settings.html" style="text-decoration:none;">
                     <span class="icon">⚙️</span> Settings <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
+                <a class="nav-item" href="help.html" title="Help and field manual - how to use and configure every tool" style="text-decoration:none;"><span class="icon">&#10067;</span> Help <span style="margin-left:auto; font-size:10px; opacity:0.6;">&#8599;</span></a>
                 <a class="nav-item" href="about.html" style="text-decoration:none;">
                     <span class="icon">ℹ️</span> About <span style="margin-left:auto; font-size:10px; opacity:0.6;">↗</span>
                 </a>
@@ -3728,6 +3730,7 @@
                         <span class="egress-ip" id="egressIpValue">…</span>
                     </span>
                     <button class="btn btn-secondary" onclick="if(window.t3mpTour)t3mpTour.start()" title="Take the guided tour" aria-label="Guided tour" style="font-weight:700;">?</button>
+                    <a class="btn btn-secondary" href="help.html" title="Open the field manual - how to use and configure every tool" aria-label="Field manual" style="font-weight:700; text-decoration:none;">&#128214; Manual</a>
                     <button class="btn btn-secondary" onclick="openQuickActions()">⌘ Actions</button>
                     <button class="btn btn-primary" onclick="navigateTo('warroom')">⚔️ War Room</button>
                 </div>
@@ -30385,6 +30388,80 @@ Be specific and actionable. Format as structured JSON.`;
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(loadCvePackages, 800); });
     else setTimeout(loadCvePackages, 800);
+})();
+</script>
+<script>
+(function(){
+  'use strict';
+  if (window.__warTipInstalled) return;
+  window.__warTipInstalled = true;
+  var TIPS = [["#cmdMissionName","Codename of the mission currently loaded. STANDBY means nothing is armed yet."],["#cmdMissionStatus","Live state of the current mission: awaiting orders, running, paused, or complete."],["#cmdElapsed","Time since ENGAGE was pressed. Pauses are included in the count."],["#cmdThreatLevel","Severity implied by CONFIRMED findings only. It never rises on unproven claims."],["#statFindings","Count of confirmed findings this run. Full detail in the Findings panel below."],["#systemStatusBar","One live view of the stack: Backend (API server), AI Backbone (LLM or agent), Local Agents (connected CLIs)."],["#sysBackend","Is the T3MP3ST API server answering? If this is red nothing else can run - restart the server (node dist/server.js)."],["#sysLLM","The brain reasoning over scan output: a cloud provider (key in Settings) or a connected local agent."],["#sitrepHeadline","Plain-language status line for the operation: what phase you are in and what happens next."],["#sitrepPipeline","The 7-stage kill chain (recon through actions-on-objective), lit live as phases complete."],["#sysEventTerminal","Raw server event stream. Every tool call, approval, and phase change lands here in order."],["#fidelityBanner","LIVE = real tools touched the target. SIMULATION = an LLM narrated without sending packets, so findings are NOT proven. Check this before trusting any result."],["#heroHuntTarget","Target for a Zero-Day Hunt: github.com/org/repo, a package name, or a host or IP. Only point this at things you own or are authorized to test."],["[onclick=\"startZeroDayHunt()\"]","Starts the hunt: live recon with real tools (nmap, DNS, HTTP probes), every finding provenance-gated to the command that produced it."],["#keylessCallout","You can run without an API key: connect Claude Code, Codex, or Hermes in Settings and T3MP3ST drives missions through your agent login."],["#noBackendNudge","Nothing can reason yet. Connect a local agent or paste an API key in Settings to unlock hunts."],["#plinyCodeOpsLayer","The ops harness: plain-language mission contracts, specialist agent lanes, and evidence gates folded around the classic war room."],["#opsReadiness","Preflight cells for the ops layer. Each must go green (scope, target, tools, mode, agents, evidence, receipt) before a routed op executes."],["#toolApprovalBoard","Gated tools (intrusive, credential, dangerous) stay inert until approved. Approve a tool once, then it runs free - and every decision is audited."],["#approvedToolsRow","Currently approved tools. To pre-approve a set headlessly: T3MP3ST_APPROVED_TOOLS=tool1,tool2."],["#spicyWarnStrip","Red banner = a credential or dangerous action just fired or was requested."],["#approvalAuditFeed","Audit trail of every gated decision: approvals, denials, and warnings, with timestamps."],["#scopeReceiptCount","How many authorization receipts await your approval."],["#scopeReceiptFeed","Receipts minted before scans touch a target. Approve here or on the Scope Receipts page. An approval lasts 30 minutes."],["#huntPlainSummary","What the hunt is doing right now, in plain English."],["#huntTimeline","Chronological hunt events: every recon call and phase transition."],["#huntProofStrip","Proof artifacts behind the claims made so far - command to evidence, no phantom flags."],["#huntDecisionStrip","Notable decisions the AI made during the hunt, with the reasoning."],["#huntSwarmGrid","Specialist sub-agents working the hunt in parallel, with each squad assignment."],["#rce-chain","Guided exploit chain for CVE-2026-79362 (WoltLab cache poison). Lab and loopback targets run freely; public hosts require the authorization ack below."],["#wcrTarget","Victim base URL. Loopback and *.lab hosts run without ceremony; public domains need the ack."],["#wcrMode","canary = inert proof-of-write only (safe). rce = full chain with a command channel - gated by the ack."],["#wcrUser","WSC username if the target needs login. Leave empty on lab targets that skip auth."],["#wcrPass","WSC password, paired with the username above."],["#wcrCookie","Alternative to user and password: paste a raw session cookie instead."],["#wcrCmd","Command to run through the shell once RCE lands (mode=rce only). Empty means info-only."],["#wcrRunBtn","Runs the chain stage by stage: fingerprint, authenticate, inject, trigger, canary, RCE. Per-stage status lands below."],["#wcrAck","Type the authorization phrase to unlock mode=rce against a public host. The ack is logged with the run."],["#wcrStages","Live per-stage status of the chain."],["#wcrOutput","Raw chain output: fingerprints, receipts, and command results."],["#cognitionLoop","Swarm cognition: splits the mission into chunks and routes them to operators (adaptive, parallel, debate, best-of-N)."],["#cognitionBus","Message traffic between agents on the reasoning bus."],["#workflowPresetList","One-click mission presets. Each primes the contract with a matching route."],["#resourcePackList","Context packs loaded into agent prompts for this operation family."],["#promptPackList","Active prompt packs layered onto agent instructions."],["#capabilityPreflightList","Checks whether the configured arsenal can actually reach this target class before you commit."],["#arsenalReadinessStatus","Sync state between the tool catalog and wired adapters. Not synced means run a preflight."],["#arsenalStatusList","Which arsenal tools are installed and reachable on this box, WSL tools included."],["#arsenalPlanList","What the operation plans to call, tool by tool."],["#evidenceLedgerList","Every artifact the run produced, hashed into the ledger. This is the backbone of honest reports."],["#hypothesisGraphList","Attack hypotheses formed so far, each with the evidence for and against."],["#workOrderQueueList","The hunt task queue: planned, running, done."],["#watchLoopArmButton","Arm a repeating watch: re-checks the target on an interval and reports drift."],["#selfHealList","The Fixer: detects stalled or dead tooling mid-run and restarts it."],["#findingRetestList","Open findings and their retest state. A finding stays open until it reproduces."],["#reproPackList","One-click repro bundles per finding - request plus payload, ready to hand to engineering."],["#pressurePathList","Adversarial pressure passes against your findings (canary, duel, mutate, chain) to weed out false positives."],["#btnPlinyPressurePlan","Draft a pressure-test plan against the current findings."],["#btnPlinyPressureCanary","Fire a canary pass: proves a finding reproduces from scratch."],["#btnPlinyPressureDuel","Duel: two agents argue for and against each finding; the losing claim is demoted."],["#btnPlinyPressureMutate","Mutate payloads to test how robust each finding is."],["#btnPlinyPressureChain","Chain findings into an end-to-end attack path."],["#btnPlinyBundlePressure","Bundle everything into a hand-off pack."],["#runbookPhaseList","The runbook: phases the AI intends to execute, in order."],["#missionBundleList","Bundled artifacts for hand-off: plan, evidence, and report."],["#learningStatusList","Lessons captured from this run."],["#memoryProposalList","Proposed memory writes. Gated: nothing sticks without approval."],["#plinyDirective","Describe the authorized operation in plain language. It is parsed into a route: family, scope, constraints."],["#operationDraftPreview","The parsed contract. Read this before staging - it is what will actually run."],["#fieldDrillSummary","Result of the last field drill (dry run against the local training range, no live target)."],[".ops-command-strip","Slash shortcuts: prime a route (/audit web, /agent probe, /repo review, /report), mint a receipt, stage the contract, or dry-run it as a field drill."],[".ops-lane-list","Division of labor: Codex = code and repo audits, Claude = long-context review and report prose, Hermes = local tools and shell, Browser = visual checks."],[".ops-gate-list","Gates every claim must pass before it hardens: scope, proof, judge, receipt, range."],["#targetHost","Primary target host. Add puts it on the mission target list."],["#targetScope","Scope statement: what is in and out of bounds. Copied into every receipt."],["#targetPorts","Ports to scan, comma separated (for example 80,443)."],["#targetFileInput","Bulk-load targets from a file, one per line."],["#targetListContainer","All targets loaded for this mission."],["#swarmFormation","How operatives deploy. Formation shapes concurrency and roles."],["#missionTemplate","Preset mission shape: pre-fills name, family, and defaults."],["#missionName","Op codename. Appears in receipts, reports, and the vault."],["#launchMissionBtn","Validates the preflight checklist, then launches the mission across the target list."],["#launchBlitzBtn","BLITZ: rapid repeated strikes against the targets. Live stats appear in the Blitz monitor."],["#qualityStatus","Quality-gate counters for the run: approvals, revisions, rejections, escalations."],["#statTargets","Targets loaded for this mission."],["#statCredentials","Credentials captured so far."],["#statAccess","Confirmed access gained so far."],["#statPhases","Kill-chain phases completed."],["#findingsPanel","Every confirmed finding this session. Hover a row for attack guidance; click for full detail and evidence."],["#targetMapPanel","Live map of the target surface. Nodes are hosts, services, and CVEs discovered by real probes."],["#btnViewStringMap","Graph view: nodes laid out by relationship."],["#btnViewAttackPaths","Storyline view: the attack path as an ordered narrative."],["#targetMapEpssBadge","EPSS exposure across mapped CVEs: the probability each is being exploited in the wild."],["#cvePackagesCard","Exploit packages from the vault that map to CVEs seen on this target. Click a card for payloads."],["#warGangConsole","The War Gang: resident operatives running background work orders between missions."],["#warGangPauseBtn","Pause or resume the gang background work."],["#warGangFeed","Live gang activity feed."],["#checklistStatus","Launch preflight: operatives connected, targets set, API key or agent present, tools wired. All green = launch allowed."],["#blitzMonitor","Live BLITZ stats: strikes, hits, crits, hit rate, and the strike log."],["#configBenchBtn","Validate the CURRENT configuration against the selected categories. No self-improvement loop."],["#liveBenchBtn","Run benchmarks live against the configured backend."],["#enableLLMJudge","Let an LLM grade answers on top of exact-match checks. Slower, but catches subtler quality."],["#autoImproveToggle","Self-improvement loop: run, AI analysis, apply changes, repeat."],["#loopIterations","How many improve iterations to run."],["#selfImprovementBtn","Start the self-improvement loop now."],["#benchmarkCategorySelector","Pick which benchmark categories to run."],["#ctfSetupToggle","One-click lab setup: checks Docker, pulls challenge images, boots the range."],["#ctfRunBtn","Turn the selected agent loose on the chosen challenges."],["#ctfStopBtn","Stop the running challenge execution."],["#ctfTimeLimit","Per-challenge time limit."],["#ctfMaxAttempts","Attempts allowed per challenge before it counts as failed."],["#generalDirective","Plain-language directive for Op Admiral. It drafts the operation plan from this."],["#generalOpsec","How loud the operation may be."],["#generalUrgency","Trade speed against thoroughness."],["#generalScope","Scope statement, copied into receipts and the plan."],["#generalConstraints","Hard constraints, for example: no exploitation, recon only."],["#generalPlanBtn","Draft the mission plan (targets, operatives, objectives, rules of engagement) from the directive."],["#generalCodexHuntBtn","Hand the directive to the Codex auto-hunt lane."],["#generalDrillBtn","Load a local drill scenario: safe practice against the training range."],["#generalDegradedDrillBtn","Drill with degraded tooling: practice for when tools are missing."],["#generalHoldDrillBtn","Hold drill: plan only, no execution."],["#generalSmokeGauntletBtn","Run the smoke gauntlet: end-to-end health checks across the stack."],["#generalAutoBtn","FULL AUTO: plan and execute without stopping. Receipted, and red-bordered for a reason."],["#generalExecuteBtn","Execute the staged plan. Receipted."],["#uacProvider","Provider for the universal API config: OpenRouter, Venice, Anthropic, OpenAI, or local."],["#uacFetchBtn","Fetch the live model list from the provider."],["#proxyUrl","SOCKS5 egress for TEST traffic. Tor default: socks5://127.0.0.1:9050. Provider API calls do NOT go through this."],["#useLocalToggle","Use a local model (llama.cpp, Ollama, or any OpenAI-compatible server) instead of a cloud provider."],["#modelSelector","Primary model used for reasoning."],["#fallbackModelInput","Fallback chain when the primary model fails. 401, 403, 404, and 501 escalate to the next entry."],["#apiServerUrl","Where this UI finds the T3MP3ST API."],["#pendingReceiptCount","Pending scope receipts. Open Scope Receipts to approve them."]];
+  function hostOf(el){ return el && el.closest ? el.closest("[data-tip]") : null; }
+  function apply(){
+    TIPS.forEach(function(t){
+      var els;
+      try { els = document.querySelectorAll(t[0]); } catch (e) { return; }
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.hasAttribute("data-tip") || el.hasAttribute("title")) continue;
+        el.setAttribute("data-tip", t[1]);
+      }
+    });
+  }
+  var tip = null, showT = null;
+  function ensureTip(){
+    if (tip) return tip;
+    tip = document.createElement("div");
+    tip.id = "warTip";
+    tip.setAttribute("role", "tooltip");
+    tip.style.cssText = "display:none;position:fixed;z-index:10002;max-width:340px;padding:8px 11px;" +
+      "background:linear-gradient(135deg,rgba(8,14,20,0.97),rgba(14,24,32,0.97));" +
+      "border:1px solid rgba(var(--brand-rgb,0,255,136),0.45);border-radius:8px;color:#d9e6df;" +
+      "font:12px/1.5 'JetBrains Mono',monospace;box-shadow:0 6px 24px rgba(0,0,0,0.7);" +
+      "pointer-events:none;white-space:pre-wrap;";
+    document.body.appendChild(tip);
+    return tip;
+  }
+  function show(el){
+    if (window.matchMedia && window.matchMedia("(hover: none)").matches) return;
+    var t = el.getAttribute("data-tip");
+    if (!t) return;
+    var n = ensureTip();
+    n.textContent = t;
+    n.style.display = "block";
+    var r = el.getBoundingClientRect();
+    var vw = window.innerWidth, vh = window.innerHeight, m = 8;
+    var nw = n.offsetWidth, nh = n.offsetHeight;
+    var top = r.top - nh - 10;
+    var left = r.left + r.width / 2 - nw / 2;
+    if (top < m) top = r.bottom + 10;
+    if (top + nh > vh - m) top = Math.max(m, vh - nh - m);
+    left = Math.min(Math.max(m, left), vw - nw - m);
+    n.style.top = top + "px";
+    n.style.left = left + "px";
+  }
+  function hide(){
+    if (showT) { clearTimeout(showT); showT = null; }
+    if (tip) tip.style.display = "none";
+  }
+  document.addEventListener("mouseover", function(e){
+    var el = hostOf(e.target);
+    if (!el) return;
+    if (showT) clearTimeout(showT);
+    showT = setTimeout(function(){ show(el); }, 250);
+  }, true);
+  document.addEventListener("mouseout", function(e){
+    var el = hostOf(e.target);
+    if (el && (!e.relatedTarget || !el.contains(e.relatedTarget))) hide();
+  }, true);
+  document.addEventListener("focusin", function(e){ var el = hostOf(e.target); if (el) show(el); }, true);
+  document.addEventListener("focusout", function(){ hide(); }, true);
+  document.addEventListener("click", function(){ hide(); }, true);
+  window.addEventListener("scroll", function(){ hide(); }, true);
+  window.addEventListener("resize", function(){ hide(); });
+  function boot(){ apply(); setTimeout(apply, 2000); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
 })();
 </script>
 </body>

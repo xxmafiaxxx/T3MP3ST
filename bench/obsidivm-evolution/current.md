@@ -1,7 +1,7 @@
 # T3MP3ST × OBSIDIVM — Learned Tactics (curated by ablation)
 
 These tactics survived ablation pruning. Sorted by lifetime lift contribution.
-Total alive: 5.  Last rebuild: 2026-09-15T08:35:50.924Z.
+Total alive: 5.  Last rebuild: 2026-10-27T02:55:40.721Z.
 
 ### dvwa/DVWA-012 — Brute Force (No Lockout)  [lift +3, conf 0.87, gen 001]
 
