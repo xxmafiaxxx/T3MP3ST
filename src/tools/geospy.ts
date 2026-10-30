@@ -780,6 +780,8 @@ export interface LensHit {
   thumbUrl?: string;
   imageUrl?: string;
   source?: string;
+  /** Server-fetched copy of the thumb as a data: URL — cannot be referrer-blocked (measured: hotlinked thumbs fail on some CDNs) */
+  thumbDataUrl?: string;
 }
 
 export interface LensResult {
@@ -788,143 +790,98 @@ export interface LensResult {
   refinedVision?: GeospyVisionResult | null;
   refinedFrom?: LensHit | null;
   note?: string;
-}
-
-function normalizeLensUrl(raw: string): string {
-  let u = raw.replace(/&amp;/g, '&').trim();
-  if (!u) return '';
-  // Unwrap Google /url?q= wrapper
-  try {
-    if (/^\/url\?/i.test(u)) {
-      const abs = new URL(u, 'https://www.google.com');
-      const q = abs.searchParams.get('q') || abs.searchParams.get('url');
-      if (q) u = decodeURIComponent(q);
-    } else if (/^https?:\/\/www\.google\.com\/url\?/i.test(u)) {
-      const abs = new URL(u);
-      const q = abs.searchParams.get('q') || abs.searchParams.get('url');
-      if (q) u = decodeURIComponent(q);
-    }
-  } catch { /* keep raw */ }
-  // Relative → absolute
-  if (u.startsWith('/')) {
-    try { u = new URL(u, 'https://www.google.com').toString(); } catch { /* keep */ }
-  }
-  return u;
-}
-
-function extractLensHitsFromHtml(html: string, cap = 8): LensHit[] {
-  const hits: LensHit[] = [];
-  const seen = new Set<string>();
-
-  // 1) Lens / Images json-embedded image blocks — "ou":"https://…jpg", "tu":"thumb", "pt":"Title", "ru":"pageUrl"
-  const collectJsonUrls = (key: string): string[] => {
-    const re = new RegExp('"' + key + '"\\s*:\\s*"([^"]+)"', 'g');
-    const out: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) && out.length < cap * 3) {
-      let v = m[1];
-      try { v = JSON.parse('"' + v + '"') as string; } catch { /* raw */ }
-      // JSON escapes \/ and \u002F
-      v = v.replace(/\\\//g, '/');
-      if (/^https?:\/\//i.test(v)) out.push(v);
-      else if (v.startsWith('\/') || v.startsWith('/')) {
-        try { out.push(new URL(v, 'https://www.google.com').toString()); } catch { /* skip */ }
-      }
-    }
-    return out;
-  };
-  const ous = collectJsonUrls('ou');
-  const pts: string[] = (() => {
-    const re = /"pt"\s*:\s*"([^"]+)"/g;
-    const out: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) && out.length < cap * 3) {
-      let v = m[1];
-      try { v = JSON.parse('"' + v + '"') as string; } catch { /* raw */ }
-      v = v.replace(/\\u003c/g, '<').replace(/\\u003e/g, '>').replace(/\\\//g, '/').replace(/&amp;/g, '&');
-      if (v.length >= 2) out.push(v.trim().slice(0, 120));
-    }
-    return out;
-  })();
-  const tus = collectJsonUrls('tu');
-  const rus = collectJsonUrls('ru');
-
-  // Also collect any image-like URLs hidden in data attributes or img src — thumbs from GCS/SRI
-  const imgSrcRe = /<img[^>]+src="([^"]+)"/gi;
-  const imgSrcs: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = imgSrcRe.exec(html)) && imgSrcs.length < cap * 6) {
-    let v = m[1].replace(/&amp;/g, '&');
-    if (/^data:image\//i.test(v)) continue;
-    if (/^https?:\/\//i.test(v) || v.startsWith('/')) {
-      if (v.startsWith('/')) { try { v = new URL(v, 'https://www.google.com').toString(); } catch { continue; } }
-      // Heuristic: Lens thumbs are encrypted-tbn*, gstatic, googleusercontent — keep image-ish hosts
-      if (/encrypted-tbn|gstatic|googleusercontent|\.jpg|\.jpeg|\.png|\.webp/i.test(v)) imgSrcs.push(v);
-    }
-  }
-
-  // 2) Anchors — include relative hrefs; unwrap /url?q=
-  const anchorRe = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]{1,200}?)<\/a>/gi;
-  const anchors: Array<{ url: string; title: string }> = [];
-  while ((m = anchorRe.exec(html)) && anchors.length < cap * 6) {
-    let raw = m[1].replace(/&amp;/g, '&');
-    const title = m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 120);
-    // Drop empty / placeholder titles unless URL itself is interesting
-    if (title.length < 2 && !/\/search|\/imgres|encrypted-tbn/i.test(raw)) continue;
-    let url = normalizeLensUrl(raw);
-    if (!/^https?:\/\//i.test(url)) continue;
-    if (url.length < 12) continue;
-    // Keep google search/lens pages — prior filter dropped all google.com except /search; now keep them but prefer non-google content pages first
-    const isGoogleInternal = /google\.(com|co\.)\//i.test(url) && !/\/search|\/imgres|support\.google|lens\.google/i.test(url);
-    if (isGoogleInternal) continue;
-    // Skip analytics / logout
-    if (/accounts\.google|google\.com\/preferences|google\.com\/advanced_search/i.test(url)) continue;
-    if (title.length < 3 && /google\.com\/search/i.test(url) && !title) continue;
-    anchors.push({ url, title: title || url.slice(0, 60) });
-  }
-
-  // 3) Build image-backed hits first — align ou/tu/ru/pt by index, but use ru as page URL when present
-  for (let i = 0; i < Math.max(ous.length, imgSrcs.length) && hits.length < cap; i++) {
-    const imageUrl = ous[i] || undefined;
-    if (imageUrl && seen.has(imageUrl)) continue;
-    if (imageUrl) seen.add(imageUrl);
-    // Need at least an image to make a visual hit — fall back to imgSrcs for thumb-only hits
-    const thumbCandidate = tus[i] || imgSrcs[i] || undefined;
-    const pageUrl = rus[i] || anchors.find((a) => !seen.has(a.url))?.url || imageUrl || thumbCandidate || '';
-    if (!pageUrl && !imageUrl) continue;
-    // For Lens v3 interstitial (JS-heavy, no ou) we may have no ou — treat imgSrcs as thumb-driven hits via anchors
-    const effectiveImageUrl = imageUrl || (pageUrl && /^https?:\/\//i.test(pageUrl) && /\.(jpg|jpeg|png|webp)(\?|$)/i.test(pageUrl) ? pageUrl : undefined);
-    const effectiveThumb = thumbCandidate || effectiveImageUrl || undefined;
-    // Skip pure google-internal thumb without a page to click
-    if (!effectiveImageUrl && !effectiveThumb && !anchors.length) continue;
-    const title = (pts[i] || anchors[i]?.title || anchors.find((a) => !seen.has(a.url))?.title || '').trim().slice(0, 120) || 'Lens image result';
-    let url = pageUrl || effectiveImageUrl || '';
-    if (url && !/^https?:\/\//i.test(url)) continue;
-    if (url) seen.add(url);
-    if (!url && !effectiveImageUrl && !effectiveThumb) continue;
-    hits.push({ title, url: url || effectiveImageUrl || effectiveThumb || '', thumbUrl: effectiveThumb, imageUrl: effectiveImageUrl || effectiveThumb, source: 'lens' });
-  }
-
-  // 4) Fill remaining slots from bare anchors when image json is sparse (typical for vsrid interstitial)
-  if (hits.length < 3) {
-    for (const a of anchors) {
-      if (hits.length >= cap) break;
-      if (seen.has(a.url)) continue;
-      if (a.url.includes('googleusercontent.com') && !a.title) continue;
-      if (/\.google\.com\/search\?.*vsrid/i.test(a.url) && !a.title) continue;
-      seen.add(a.url);
-      // Try to attach a nearby thumb by position if available
-      const nearbyThumb = tus[anchors.indexOf(a)] || imgSrcs[anchors.indexOf(a)] || undefined;
-      hits.push({ title: a.title, url: a.url, thumbUrl: nearbyThumb, imageUrl: nearbyThumb && /\.(jpg|jpeg|png|webp)/i.test(nearbyThumb) ? nearbyThumb : undefined });
-    }
-  }
-  return hits;
+  /** Google Lens vsrid URL — results are JS-only server-side (measured 2026-10-29), this is the open-in-your-browser hand-off */
+  lensHandoff?: string;
 }
 
 function pickBestLensHitForRefine(hits: LensHit[]): LensHit | null {
   if (!hits.length) return null;
   // Prefer hits that actually carry a fetchable image URL
   return hits.find((h) => !!h.imageUrl) || hits[0] || null;
+}
+
+// ---------------------------------------------------------------------------
+// Bing Visual Search (reverse image by URL) — the lane that actually works
+// server-side. Measured 2026-10-29: Google Lens upload returns a pure JS shell
+// (vsrid page, zero data) and headless renders hit the /sorry CAPTCHA wall, so
+// machine-readable reverse-image results come from Bing's server-rendered HTML:
+// anchors class="iusc" carry m="{...}" (HTML-escaped JSON) with murl (source
+// image on the page), turl (Bing-hosted thumb, hotlinkable), purl (the page).
+// ---------------------------------------------------------------------------
+
+const BING_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+function titleFromPurl(purl: string): string {
+  try {
+    const u = new URL(purl);
+    const seg = u.pathname.split('/').filter(Boolean).pop() || '';
+    const base = decodeURIComponent(seg).replace(/\.(html?|php|aspx?|jpe?g|png|webp|gif)$/i, '').replace(/[-_+]+/g, ' ').trim();
+    if (base.length >= 4) return base.slice(0, 100);
+    return u.hostname.replace(/^www\./, '');
+  } catch { return purl.slice(0, 60); }
+}
+
+/** True for URLs that are Google-internal shells a logged-out click can't use. */
+function isDeadClickTarget(url: string): boolean {
+  if (!/^https?:\/\//i.test(url)) return true;
+  return /(^|\.)google\.[a-z.]+\/(search|url\?|imgres|advanced_search|preferences|support)|accounts\.google|policies\.google/i.test(url);
+}
+
+export async function bingVisualSearch(imageUrl: string, timeoutMs = 12000, cap = 10): Promise<{ hits: LensHit[]; blocked?: string }> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), Math.max(5000, timeoutMs));
+  try {
+    const u = `https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste:${encodeURIComponent(imageUrl)}&q=imgurl:${encodeURIComponent(imageUrl)}`;
+    const r = await directFetch(u as never, { headers: { 'user-agent': BING_UA, 'accept-language': 'en-US,en' }, signal: ctrl.signal as never } as never) as unknown as globalThis.Response;
+    if (!r.ok) return { hits: [], blocked: `Bing visual search HTTP ${r.status} — blocked, not a real zero` };
+    const html = await (r as unknown as { text(): Promise<string> }).text();
+    const hits: LensHit[] = [];
+    const seen = new Set<string>();
+    const re = /class="iusc"[^>]*?\sm="([^"]+)"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) && hits.length < cap) {
+      let json: string;
+      try { json = m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'); } catch { continue; }
+      let meta: { murl?: string; turl?: string; purl?: string; t?: string } = {};
+      try { meta = JSON.parse(json) as typeof meta; } catch { continue; }
+      let purl = (meta.purl || '').trim();
+      const murl = (meta.murl || '').trim();
+      const turl = (meta.turl || '').trim();
+      if (!purl && !murl) continue;
+      // Google-internal shells can't be used logged-out — fall back to the image itself as the click target
+      if (isDeadClickTarget(purl)) purl = '';
+      const click = purl || (murl && /^https?:\/\//i.test(murl) ? murl : '');
+      if (!click) continue;
+      if (seen.has(click)) continue;
+      seen.add(click);
+      hits.push({
+        title: (meta.t || '').trim().slice(0, 120) || titleFromPurl(purl || murl),
+        url: click,
+        thumbUrl: turl || undefined,
+        imageUrl: murl || turl || undefined,
+        source: 'bing-visual',
+      });
+    }
+    if (!hits.length) {
+      // A 200 with zero iusc anchors is usually a consent/JS wall — an honest UNMEASURED, not a zero
+      const finalUrl = String((r as unknown as { url?: string }).url || '');
+      if (!/bing\.com\/images/i.test(finalUrl)) return { hits: [], blocked: 'Bing served an interstitial (redirected off /images) — UNMEASURED' };
+    }
+    return { hits };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { hits: [], blocked: `Bing visual search failed: ${msg.slice(0, 120)}` };
+  }
+  finally { clearTimeout(t); }
+}
+
+/** Fetch small thumbs server-side and inline them as data: URLs so preview cannot be hotlink-blocked. */
+async function inlineThumbs(hits: LensHit[], budgetMs = 9000): Promise<void> {
+  const targets = hits.filter((h) => (h.thumbUrl || h.imageUrl) && !h.thumbDataUrl).slice(0, 8);
+  await Promise.allSettled(targets.map(async (h) => {
+    const fetched = await fetchImageAsBase64(h.thumbUrl || (h.imageUrl as string), budgetMs);
+    if (fetched && fetched.b64.length < 700_000) h.thumbDataUrl = `data:${fetched.mime};base64,${fetched.b64}`;
+  }));
 }
 
 async function fetchImageAsBase64(url: string, timeoutMs = 8000): Promise<{ b64: string; mime: string } | null> {
@@ -955,85 +912,63 @@ async function fetchImageAsBase64(url: string, timeoutMs = 8000): Promise<{ b64:
 export async function lensReverseSearch(
   imageBase64: string,
   mime = 'image/jpeg',
-  opts: { timeoutMs?: number; refineWithVision?: boolean; visionModel?: string; visionTimeoutMs?: number; context?: string; guess?: string; apiKey?: string } = {},
+  opts: { timeoutMs?: number; refineWithVision?: boolean; visionModel?: string; visionTimeoutMs?: number; context?: string; guess?: string; apiKey?: string; publicImageUrl?: string } = {},
 ): Promise<LensResult> {
+  // Machine-readable reverse-image results come from Bing Visual (by URL). Google Lens upload still
+  // runs best-effort to capture the vsrid URL as an open-in-your-browser hand-off (its result page is
+  // a pure JS shell to scripts and CAPTCHAs headless renders — measured 2026-10-29).
   const clean = (imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
-  if (!clean || clean.length < 200) return { queryHint: '', hits: [], note: 'empty image' };
-  const buf = Buffer.from(clean, 'base64');
-  if (buf.length < 512) return { queryHint: '', hits: [], note: 'image too small' };
   const timeoutMs = Math.max(8000, Math.min(45000, opts.timeoutMs ?? 18000));
+  const publicUrl = (opts.publicImageUrl || '').trim();
+  let hits: LensHit[] = [];
+  let note: string | undefined;
+  let lensHandoff: string | undefined;
 
-  // Build multipart upload like the browser Lens form (field name: encoded_image)
-  const boundary = '----T3mpF0rm' + Math.random().toString(16).slice(2);
-  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : mime.includes('heic') ? 'heic' : 'jpg';
-  const header =
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="encoded_image"; filename="geospy.${ext}"\r\n` +
-    `Content-Type: ${mime}\r\n\r\n`;
-  const footer = `\r\n--${boundary}--\r\n`;
-  const body = Buffer.concat([Buffer.from(header), buf, Buffer.from(footer)]);
+  // 1) Bing visual by URL — the real hit source
+  if (publicUrl && /^https?:\/\//i.test(publicUrl)) {
+    const bing = await bingVisualSearch(publicUrl, Math.min(14000, timeoutMs), 10);
+    hits = bing.hits;
+    if (bing.blocked) note = bing.blocked;
+    else if (!hits.length) note = 'Bing visual search returned no usable matches for this image URL';
+  } else {
+    note = 'Uploaded file has no public URL — machine reverse-search unavailable. Open the Lens link to see matches in your browser.';
+  }
 
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  let html = '';
-  let lastUrl = '';
-  try {
-    const r = await directFetch('https://lens.google.com/v3/upload' as never, {
-      method: 'POST',
-      headers: {
-        'content-type': `multipart/form-data; boundary=${boundary}`,
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
-        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-      body: body as unknown as never,
-      redirect: 'follow',
-      signal: ctrl.signal as never,
-    } as never) as unknown as globalThis.Response;
-    html = await (r as unknown as { text(): Promise<string> }).text();
-    try { lastUrl = String((r as unknown as { url?: string }).url || ''); } catch {}
-    if (!r.ok && html.length < 500) {
-      return { queryHint: lastUrl, hits: [], note: `Lens upload HTTP ${r.status}` };
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { queryHint: '', hits: [], note: `Lens upload failed: ${msg.slice(0, 160)}` };
-  } finally { clearTimeout(t); }
-
-  let hits = extractLensHitsFromHtml(html, 10);
-  // Lens v3 interstitial is JS-rendered — when the interstitial yields few hits or no thumbnails
-  // (e.g. "click here"/"feedback" generic anchors), synthesize a valid Lens result pivot so the
-  // card's preview logic has a real link + a fetchable thumb, and clicks work.
-  if ((hits.length < 2 || !hits.some((h) => h.thumbUrl || h.imageUrl)) && lastUrl) {
-    const hasLensPivot = hits.some((h) => /google\.com\/search.*vsrid/i.test(h.url) || /sca_esv|lns_surface|udm=26/i.test(h.url) || h.url === lastUrl);
-    // Normalize generic anchor titles on vsrid hits so the card reads sensibly
-    hits.forEach((h) => {
-      if (/^(click here|feedback)$/i.test(h.title.trim()) && /sca_esv|udm=26|vsrid/i.test(h.url)) {
-        h.title = 'Open Lens result in Google';
-      }
-    });
-    if (!hasLensPivot) {
-      hits.unshift({ title: 'Open Lens result in Google', url: lastUrl, source: 'lens' });
-    } else if (!hits[0].thumbUrl && !hits[0].imageUrl) {
-      // Pivot exists but thumb-less — ensure first hit is the vsrid pivot with thumb
-      const pivot = hits.find((h) => /google\.com\/search.*vsrid/i.test(h.url) || /sca_esv|udm=26/i.test(h.url) || h.url === lastUrl);
-      if (pivot && hits[0] !== pivot) { hits = [pivot, ...hits.filter((h) => h !== pivot)]; }
-    }
-    // If still thumb-less, synthesize one thumb from the vsrid interstitial's own encrypted-tbn or gstatic
-    // so the preview <img> has something to render.
-    if (!hits.some((h) => h.thumbUrl || h.imageUrl)) {
-      const tbn = html.match(/https:\/\/encrypted-tbn[^"'\s]+/);
-      if (tbn) hits[0].thumbUrl = tbn[0].replace(/&amp;/g, '&');
-      else {
-        const gstatic = html.match(/https:\/\/[^"'\s]*gstatic\.com\/images[^"'\s]*/);
-        if (gstatic) hits[0].thumbUrl = gstatic[0].replace(/&amp;/g, '&');
-      }
+  // 2) Lens upload best-effort — capture the vsrid hand-off URL only (never parsed for hits: JS shell).
+  // Skipped when Bing already produced hits: a 15s budget for a hand-off button is not worth the latency.
+  if (!hits.length && clean.length >= 500) {
+    const buf = Buffer.from(clean, 'base64');
+    if (buf.length >= 512) {
+      const boundary = '----T3mpF0rm' + Math.random().toString(16).slice(2);
+      const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+      const header = `--${boundary}\r\nContent-Disposition: form-data; name="encoded_image"; filename="geospy.${ext}"\r\nContent-Type: ${mime}\r\n\r\n`;
+      const footer = `\r\n--${boundary}--\r\n`;
+      const body = Buffer.concat([Buffer.from(header), buf, Buffer.from(footer)]);
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), Math.min(15000, timeoutMs));
+      try {
+        const r = await directFetch('https://lens.google.com/v3/upload' as never, {
+          method: 'POST',
+          headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, 'user-agent': BING_UA, accept: 'text/html,*/*;q=0.8' },
+          body: body as unknown as never,
+          redirect: 'follow',
+          signal: ctrl.signal as never,
+        } as never) as unknown as globalThis.Response;
+        await (r as unknown as { text(): Promise<string> }).text().catch(() => '');
+        const finalUrl = String((r as unknown as { url?: string }).url || '');
+        if (r.ok && /vsrid=/.test(finalUrl)) {
+          lensHandoff = finalUrl;
+        }
+      } catch { /* hand-off is best-effort */ }
+      finally { clearTimeout(t); }
     }
   }
-  if (!hits.length) return { queryHint: lastUrl, hits, note: 'Lens returned no parseable image results (page shape changed or blocked)' };
-  // Hydrate: ensure every hit has a valid absolute url and no bare "#" links
-  hits = hits.map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : (h.url ? normalizeLensUrl(h.url) : lastUrl || h.imageUrl || h.url) }));
 
-  if (opts.refineWithVision !== false) {
+  // 3) Inline thumbs as data: URLs — preview cannot be referrer-blocked
+  if (hits.length) await inlineThumbs(hits, Math.min(9000, timeoutMs));
+
+  // 4) Second-opinion: re-run vision on the best hit's actual image
+  if (opts.refineWithVision !== false && hits.length) {
     const pick = pickBestLensHitForRefine(hits);
     if (pick?.imageUrl) {
       const fetched = await fetchImageAsBase64(pick.imageUrl, Math.min(9000, timeoutMs));
@@ -1046,20 +981,17 @@ export async function lensReverseSearch(
             guess: opts.guess,
             apiKey: opts.apiKey,
           });
-          // Only keep the refine when it actually produced a location — otherwise the
-          // primary verdict stays authoritative and we don't pollute it with noise.
           const hasLoc = Number.isFinite(refined.lat as number) && Number.isFinite(refined.lon as number);
           const hasPlace = !!(refined.place || refined.city || refined.country);
           if (hasLoc || hasPlace || refined.confidence !== 'none') {
-            return { queryHint: lastUrl, hits, refinedVision: refined, refinedFrom: pick };
+            return { queryHint: publicUrl || lensHandoff || '', hits, refinedVision: refined, refinedFrom: pick, note, lensHandoff };
           }
         } catch { /* keep hits, drop refine */ }
       }
     }
   }
-  return { queryHint: lastUrl, hits };
+  return { queryHint: publicUrl || lensHandoff || '', hits, note, lensHandoff };
 }
-
 export async function googleGroundingSearch(query: string): Promise<GoogleGrounding> {
   const q = query.trim().slice(0, 200);
   if (!q) return { query: q, hits: [], note: 'empty query' };
@@ -1125,7 +1057,7 @@ export async function fetchImageUrlAsBase64(imageUrl: string): Promise<{ b64: st
 export async function analyzeGeospyImage(
   imageBase64: string,
   mime: string,
-  opts: { doVision?: boolean; visionTimeoutMs?: number; context?: string; guess?: string; model?: string; doGoogle?: boolean; doLens?: boolean; lensRefineTimeoutMs?: number; apiKey?: string; exifImageBase64?: string } = {},
+  opts: { doVision?: boolean; visionTimeoutMs?: number; context?: string; guess?: string; model?: string; doGoogle?: boolean; doLens?: boolean; lensRefineTimeoutMs?: number; apiKey?: string; exifImageBase64?: string; publicImageUrl?: string } = {},
 ): Promise<GeospyVerdict> {
   const cleanB64 = (imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
   // EXIF comes from the ORIGINAL upload when the caller downscaled for the vision call (canvas re-encoding strips metadata)
@@ -1192,7 +1124,7 @@ export async function analyzeGeospyImage(
 
   // Lens reverse-image + second vision pass — the image hits get fed back to the main model for assessment
   let lens: LensResult | null = null;
-  if (opts.doLens !== false && cleanB64 && cleanB64.length >= 500) {
+  if (opts.doLens !== false && (cleanB64.length >= 500 || (opts.publicImageUrl || '').length > 10)) {
     try {
       lens = await lensReverseSearch(cleanB64, mime || 'image/jpeg', {
         refineWithVision: true,
@@ -1201,6 +1133,7 @@ export async function analyzeGeospyImage(
         context: opts.context,
         guess: opts.guess,
         apiKey: opts.apiKey,
+        publicImageUrl: opts.publicImageUrl,
       });
     } catch { /* Lens is best-effort — never fails the primary verdict */ }
   }

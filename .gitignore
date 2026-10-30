@@ -119,3 +119,14 @@ trinidad.json
 
 # Cairn upstream reference material (AGPL — local only, techniques reimplemented in src/search/)
 .cairn-ref/
+
+# session scratch — probe captures & throwaway builders (never publish, may contain scraped third-party keys)
+.scratch/
+.scratch/**
+# throwaway probe dumps
+deep-curated.json
+deep-live2.json
+docs/settings.html.pre-egress.bak
+switch_tor*.mjs
+test_any.mjs
+test_jp.mjs

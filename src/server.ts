@@ -9216,7 +9216,7 @@ app.post('/api/geospy/analyze', async (req: Request, res: Response): Promise<voi
   const t0 = Date.now();
   try {
     console.log(`[T3MP3ST][GEOSPY] analyze: ${mime}, ${Math.round(b64.length / 1024)} KB b64, vision=${doVision}${context ? ' +context' : ''}${guess ? ' +guess' : ''}${visionModel ? ' model='+visionModel : ''} google=${doGoogle} lens=${doLens}${urlInput ? ' viaUrl' : ''}${apiKey ? ' +apiKey' : ''}`);
-    const verdict = await analyzeGeospyImage(b64, mime, { doVision, visionTimeoutMs, context, guess, model: visionModel, doGoogle, doLens, apiKey, exifImageBase64: exifOverride || undefined });
+    const verdict = await analyzeGeospyImage(b64, mime, { doVision, visionTimeoutMs, context, guess, model: visionModel, doGoogle, doLens, apiKey, exifImageBase64: exifOverride || undefined, publicImageUrl: urlInput || undefined });
     const ms = Date.now() - t0;
     // Ledger entry for the Evidence Vault
     if (verdict.lat != null && verdict.lon != null) {
@@ -9282,17 +9282,18 @@ app.post('/api/geospy/google-search', async (req: Request, res: Response): Promi
 app.post('/api/geospy/lens', async (req: Request, res: Response): Promise<void> => {
   const b64 = String(req.body?.imageBase64 ?? req.body?.image ?? '').trim();
   const mime = String(req.body?.mime || 'image/jpeg').trim() || 'image/jpeg';
+  const publicImageUrl = String(req.body?.imageUrl ?? req.body?.publicImageUrl ?? req.body?.url ?? '').trim().slice(0, 800) || undefined;
   const doRefine = req.body?.doRefine !== false;
   const model = String(req.body?.model || req.body?.visionModel || '').trim().slice(0, 120) || undefined;
   const context = String(req.body?.context || '').trim().slice(0, 600) || undefined;
   const guess = String(req.body?.guess || '').trim().slice(0, 300) || undefined;
   const refineImageUrl = String(req.body?.refineImageUrl || '').trim().slice(0, 800) || undefined;
   const apiKey = String((req.headers as Record<string,string>)['x-api-key'] || (req.headers as Record<string,string>)['x-gemini-key'] || req.body?.apiKey || req.body?.api_key || '').trim().slice(0, 300) || undefined;
-  if (!b64 || b64.length < 100) { res.status(400).json({ error: 'imageBase64 required' }); return; }
+  if ((!b64 || b64.length < 100) && !publicImageUrl) { res.status(400).json({ error: 'imageBase64 or imageUrl required' }); return; }
   if (b64.replace(/^data:[^;]+;base64,/, '').length > 10_000_000) { res.status(413).json({ error: 'image too large — max ~7.5 MB' }); return; }
   const t0 = Date.now();
   try {
-    console.log(`[T3MP3ST][GEOSPY][LENS] upload ${mime}, ${Math.round(b64.length/1024)} KB, refine=${doRefine}${model ? ' model='+model : ''}${apiKey ? ' +apiKey' : ''}`);
+    console.log(`[T3MP3ST][GEOSPY][LENS] ${mime}, ${Math.round(b64.length/1024)} KB, publicUrl=${publicImageUrl ? 'yes' : 'no'}, refine=${doRefine}${model ? ' model='+model : ''}${apiKey ? ' +apiKey' : ''}`);
     const r = await lensReverseSearch(b64, mime, {
       refineWithVision: doRefine,
       visionModel: model,
@@ -9300,6 +9301,7 @@ app.post('/api/geospy/lens', async (req: Request, res: Response): Promise<void> 
       context,
       guess,
       apiKey,
+      publicImageUrl,
     });
     // Per-hit loop: fetch that Lens hit image and run it through the main vision model for location assessment
     if (refineImageUrl && /^https?:\/\//i.test(refineImageUrl)) {
