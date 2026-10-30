@@ -184,7 +184,7 @@ const DEFAULT_SETTINGS: TempestSettings = {
   // requests hit /v1beta/chat/completions, which is not a valid Gemini endpoint.
   gemini: {
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    defaultModel: 'gemini-2.5-flash',
+    defaultModel: 'gemini-3.1-pro-preview',
   },
 
   deepseek: {
@@ -767,12 +767,20 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
   // Distinct from the `google/gemini-*` ids under `openrouter`, which route through OpenRouter.
   gemini: [
     {
-      id: 'gemini-2.5-flash',
-      name: 'Gemini 2.5 Flash (native)',
+      id: 'gemini-3.1-pro-preview',
+      name: 'Gemini 3.1 Pro (native · highest accuracy)',
+      provider: 'Google',
+      contextWindow: 1000000,
+      maxOutput: 32768,
+      capabilities: ['reasoning', 'code', 'analysis', 'vision', 'multimodal', 'tools', 'grounding', 'thinking'],
+    },
+    {
+      id: 'gemini-3-flash-preview',
+      name: 'Gemini 3 Flash (native · fast)',
       provider: 'Google',
       contextWindow: 1000000,
       maxOutput: 8192,
-      capabilities: ['reasoning', 'code', 'analysis', 'vision', 'fast', 'tools'],
+      capabilities: ['reasoning', 'code', 'analysis', 'vision', 'fast', 'tools', 'grounding'],
     },
     {
       id: 'gemini-2.5-pro',
@@ -781,6 +789,14 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
       contextWindow: 1000000,
       maxOutput: 8192,
       capabilities: ['reasoning', 'code', 'analysis', 'vision', 'multimodal', 'tools'],
+    },
+    {
+      id: 'gemini-2.5-flash',
+      name: 'Gemini 2.5 Flash (native)',
+      provider: 'Google',
+      contextWindow: 1000000,
+      maxOutput: 8192,
+      capabilities: ['reasoning', 'code', 'analysis', 'vision', 'fast', 'tools'],
     },
     {
       id: 'gemini-2.0-flash',

@@ -444,9 +444,9 @@ export function resolveBin(bin: string): string | undefined {
  * containing them still arrive as literals.
  */
 export function spawnAgent(resolvedBin: string, args: string[], options: import('child_process').SpawnOptions): import('child_process').ChildProcess {
-  if (!needsShell(resolvedBin)) return spawn(resolvedBin, args, { ...options, shell: false });
+  if (!needsShell(resolvedBin)) return spawn(resolvedBin, args, { ...options, shell: false, windowsHide: true } as any);
   const command = [resolvedBin, ...args].map(quoteWindowsArg).join(' ');
-  return spawn(command, { ...options, shell: true });
+  return spawn(command, { ...options, shell: true, windowsHide: true } as any);
 }
 
 /**

@@ -36,8 +36,6 @@ const GEOSPY_CONTENT = `
              background: rgba(47,255,210,0.04); cursor:pointer; transition: all .18s; }
   .gs-drop.drag { border-color:#2fffd2; background: rgba(47,255,210,0.10); transform: scale(1.01); }
   .gs-drop small{color:#6f8794; font-size:12px;}
-  .gs-preview { display:none; margin-top:12px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); max-height:420px; background:#050b10; }
-  .gs-preview img, .gs-preview video { width:100%; height:auto; display:block; max-height:420px; object-fit:contain; }
   .gs-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   .gs-btn { appearance:none; border:1px solid rgba(47,255,210,0.35); background: linear-gradient(135deg, #0e2a22, #123a30); color:#2fffd2;
             padding:9px 16px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; letter-spacing:0.3px; }
@@ -55,7 +53,7 @@ const GEOSPY_CONTENT = `
   .gs-pill.med{ border-color: rgba(255,177,66,0.45); color:#ffb142; background: rgba(255,177,66,0.10); }
   .gs-pill.low{ border-color: rgba(112,161,255,0.45); color:#70a1ff; background: rgba(112,161,255,0.10); }
   .gs-pill.none{ border-color: rgba(255,71,87,0.35); color:#ff6b78; background: rgba(255,71,87,0.08); }
-  .gs-map { height: 360px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:#0a141d; position:relative; }
+  .gs-map { height: 360px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:#0a141d; position:relative; isolation: isolate; z-index: 1; }  /* map must not paint above sticky header/nav: leaflet panes sit at 200-700 but header is 50 in the shell — pin header/sidebar above */  .header { z-index: 900 !important; }  .sidebar { z-index: 901 !important; }  .gs-ws { isolation: isolate; }  #gsMapWrap { isolation: isolate; }
   .gs-clue { font-size:12.5px; color:#9baeb8; padding:6px 10px; border-left:2px solid rgba(47,255,210,0.35); background: rgba(47,255,210,0.04); margin:6px 0; border-radius:0 8px 8px 0; }
   .gs-source { font-size:11px; letter-spacing:0.7px; text-transform:uppercase; padding:3px 8px; border-radius:6px; font-weight:700; }
   .gs-source.exif{ background: rgba(46,213,115,0.14); color:#2ed573; border:1px solid rgba(46,213,115,0.35); }
@@ -70,11 +68,12 @@ const GEOSPY_CONTENT = `
   @keyframes gsDropPin { 0%{ transform: translateY(-40px); opacity:0; } 60%{ transform: translateY(6px); opacity:1; } 80%{ transform: translateY(-4px);} 100%{ transform: translateY(0); opacity:1; } }
   .gs-pin-drop { animation: gsDropPin 0.55s cubic-bezier(0.34,1.56,0.64,1) forwards; }
   /* ---- workspace: image lines up with map ---- */
-  .gs-ws { height: 380px; }
-  .gs-preview { display:none; height: 344px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:
+  .gs-ws { min-height: 380px; display:flex; flex-direction:column; }
+  .gs-preview { display:none; flex:1; min-height:344px; height:344px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:
     repeating-conic-gradient(rgba(255,255,255,0.03) 0% 25%, transparent 0% 50%) 50% / 22px 22px, #050b10; align-items:center; justify-content:center; }
   .gs-preview img, .gs-preview video { width:100%; height:100%; display:block; object-fit:contain; background:transparent; }
-  .gs-empty { height: 344px; border:1px dashed rgba(255,255,255,0.10); border-radius:10px; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:6px; color:#5f7582; font-size:12.5px; background: rgba(255,255,255,0.02); }
+  .gs-empty { height: 344px; min-height:344px; flex:1; border:1px dashed rgba(255,255,255,0.10); border-radius:10px; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:6px; color:#5f7582; font-size:12.5px; background: rgba(255,255,255,0.02); }
+  .gs-heic { display:none; text-align:center; padding:24px; color:#ffb142; font-size:13px; line-height:1.7; }
   /* ---- decluttered results: collapsible sections ---- */
   .gs-details { background: rgba(0,0,0,0.32); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:0; margin-top:12px; overflow:hidden; }
   .gs-details > summary { cursor:pointer; list-style:none; padding:11px 16px; font-size:12px; letter-spacing:0.8px; text-transform:uppercase; color:#8ba3b0; font-weight:700; display:flex; align-items:center; gap:8px; user-select:none; }
@@ -121,6 +120,7 @@ const GEOSPY_CONTENT = `
         <img id="gsImg" alt="preview" style="display:none;" />
         <video id="gsVid" controls muted playsinline style="display:none;"></video>
         <canvas id="gsCanvas" style="display:none;"></canvas>
+        <div id="gsHeicMsg" class="gs-heic"></div>
       </div>
       <div id="gsExifPreview" class="gs-exif-preview"></div>
       <div id="gsFrameHint" class="gs-meta" style="margin-top:6px; display:none;">Video: seek to the most telling frame, then hit LOCATE â the current frame will be sent.</div>
@@ -129,13 +129,24 @@ const GEOSPY_CONTENT = `
     <!-- WORKSPACE RIGHT: the map -->
     <div class="gs-card gs-ws" style="display:flex; flex-direction:column;">
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span class="gs-h" style="margin:0; border:none; padding:0; flex:1;">Map</span><button class="gs-btn secondary" id="gsSatToggle" style="font-size:11px; padding:4px 10px;">SATELLITE</button> <button class="gs-btn secondary" id="gs3dToggle" style="font-size:11px; padding:4px 10px;">3D</button></div>
-      <div id="gsMap" style="flex:1; min-height:344px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:#0a141d; position:relative;"></div>
-      <div class="gs-map-hint">Click the map &rarr; that point in <b>Google Maps 3D</b> &middot; Right-click &rarr; <b>Street View</b></div>
+      <div id="gsMapWrap" style="flex:1; position:relative; min-height:344px;">
+        <div id="gsMap" style="position:absolute; inset:0; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:#0a141d;"></div>
+        <div id="gsFrameWrap" style="display:none; position:absolute; inset:0; border-radius:10px; overflow:hidden; border:1px solid rgba(47,255,210,0.22); background:#010a12; z-index:5; flex-direction:column;">
+          <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; background:rgba(0,0,0,0.72); border-bottom:1px solid rgba(47,255,210,0.18); flex-shrink:0;">
+            <button id="gsBackMap" class="gs-btn secondary" style="font-size:11px; padding:4px 8px;">&larr; Map</button>
+            <span id="gsFrameLabel" class="gs-meta" style="flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></span>
+            <a id="gsFramePop" href="#" target="_blank" rel="noopener" class="gs-meta" style="color:#2fffd2; text-decoration:none; font-size:11px;">Pop out &nearr;</a>
+            <button id="gsFrameClose" class="gs-btn secondary" style="font-size:11px; padding:4px 8px;">&times;</button>
+          </div>
+          <iframe id="gsFrame" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" style="width:100%; flex:1; border:0; background:#0a141d;"></iframe>
+        </div>
+      </div>
+      <div class="gs-map-hint">Click map &rarr; <b>Maps 3D</b> in this window &middot; Right-click &rarr; <b>Street View</b> in this window &middot; Buttons stay in-window</div>
       <div class="gs-row" style="margin-top:6px;">
-        <a id="gsOsmLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; text-decoration:none; display:none;">OSM</a>
-        <a id="gsGmapsLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; text-decoration:none; display:none;">Google Maps</a>
-        <a id="gsEarthLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; text-decoration:none; display:none;">Earth</a>
-        <a id="gsStreetLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; text-decoration:none; display:none;">Street View</a>
+        <button id="gsOsmBtn" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; display:none;">OSM</button>
+        <button id="gsGmapsBtn" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; display:none;">Google Maps</button>
+        <button id="gsEarthBtn" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; display:none;">Earth</button>
+        <button id="gsStreetBtn" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; display:none;">Street View</button>
         <span id="gsCoordLabel" class="gs-meta"></span>
       </div>
     </div>
@@ -255,6 +266,7 @@ const GEOSPY_CONTENT = `
     img: document.getElementById('gsImg'),
     vid: document.getElementById('gsVid'),
     canvas: document.getElementById('gsCanvas'),
+    heicMsg: document.getElementById('gsHeicMsg'),
     exifPreview: document.getElementById('gsExifPreview'),
     analyze: document.getElementById('gsAnalyze'),
     clear: document.getElementById('gsClear'),
@@ -269,10 +281,10 @@ const GEOSPY_CONTENT = `
     satToggle: document.getElementById('gsSatToggle'),
     btn3d: document.getElementById('gs3dToggle'),
     coordLabel: document.getElementById('gsCoordLabel'),
-    osm: document.getElementById('gsOsmLink'),
-    gmaps: document.getElementById('gsGmapsLink'),
-    earth: document.getElementById('gsEarthLink'),
-    street: document.getElementById('gsStreetLink'),
+    osm: document.getElementById('gsOsmBtn') || document.getElementById('gsOsmLink'),
+    gmaps: document.getElementById('gsGmapsBtn') || document.getElementById('gsGmapsLink'),
+    earth: document.getElementById('gsEarthBtn') || document.getElementById('gsEarthLink'),
+    street: document.getElementById('gsStreetBtn') || document.getElementById('gsStreetLink'),
     coordChip: document.getElementById('gsCoordChip'),
     actions: document.getElementById('gsActions'),
     dAnalysis: document.getElementById('gsDAnalysis'),
@@ -356,6 +368,8 @@ const GEOSPY_CONTENT = `
   if(els.satToggle){
     els.satToggle.addEventListener('click', function(){
       if(!map){ ensureMap(); if(!map) return; }
+      // any embedded viewer goes away when toggling map layer
+      try{ const w=document.getElementById('gsFrameWrap'); if(w) w.style.display='none'; }catch(e){}
       satOn = !satOn;
       try{
         if(satOn){ map.removeLayer(osmLayer); satLayer.addTo(map); els.satToggle.textContent = 'STREET'; els.satToggle.classList.add('active'); }
@@ -364,9 +378,60 @@ const GEOSPY_CONTENT = `
     });
   }
 
-  // Google Maps deep links
-  function openGmaps3D(lat, lon){ window.open('https://www.google.com/maps/@'+Number(lat).toFixed(6)+','+Number(lon).toFixed(6)+',250a,35y,0h,45t/data=!3m1!1e3','_blank','noopener'); }
-  function openStreetView(lat, lon){ window.open('https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+Number(lat).toFixed(6)+','+Number(lon).toFixed(6),'_blank','noopener'); }
+  // Map viewer — same-window embeds inside #gsMapWrap (no external tabs)
+  function showMapLeaflet(){
+    const w=document.getElementById('gsFrameWrap'), f=document.getElementById('gsFrame');
+    if(w) w.style.display='none';
+    if(f) f.removeAttribute('src');
+    setTimeout(function(){ try{ map && map.invalidateSize(); }catch(e){} }, 120);
+  }
+  function showMapFrame(url, label){
+    const w=document.getElementById('gsFrameWrap'), f=document.getElementById('gsFrame'), lb=document.getElementById('gsFrameLabel'), pop=document.getElementById('gsFramePop');
+    if(!w||!f) { window.open(url,'_blank','noopener'); return; }
+    const href = String(url||'#');
+    f.src = href;
+    if(lb) lb.textContent = label||href;
+    if(pop) pop.href = href;
+    w.style.display='flex'; w.style.flexDirection='column';
+  }
+  function osmEmbedUrl(lat, lon){ const la=Number(lat).toFixed(5), lo=Number(lon).toFixed(5); return 'https://www.openstreetmap.org/export/embed.html#map=16/'+la+'/'+lo; }
+  function gmapsEmbedUrl(lat, lon){ const la=Number(lat).toFixed(6), lo=Number(lon).toFixed(6); return 'https://maps.google.com/maps?q='+la+','+lo+'&z=16&output=embed'; }
+  function earthEmbedUrl(lat, lon){ const la=Number(lat).toFixed(6), lo=Number(lon).toFixed(6); return 'https://earth.google.com/web/@'+la+','+lo+',0a,1000d,35y,0h,0t,0r'; }
+  function streetEmbedUrl(lat, lon){ const la=Number(lat).toFixed(6), lo=Number(lon).toFixed(6); return 'https://maps.google.com/maps?layer=c&cbll='+la+','+lo+'&cbp=12,0,0,0,1&output=svembed'; }
+  function gmaps3dEmbedUrl(lat, lon){ const la=Number(lat).toFixed(6), lo=Number(lon).toFixed(6); return 'https://www.google.com/maps/@'+la+','+lo+',250a,35y,0h,45t/data=!3m1!1e3'; }
+  function streetViewUrl(lat, lon){ const la=Number(lat).toFixed(6), lo=Number(lon).toFixed(6); return 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+la+','+lo; }
+  function openGmaps3D(lat, lon){ showMapFrame(gmapsEmbedUrl(lat, lon), 'Google Maps — '+Number(lat).toFixed(5)+', '+Number(lon).toFixed(5)); }
+  function openStreetView(lat, lon){ showMapFrame(streetEmbedUrl(lat, lon), 'Street View — '+Number(lat).toFixed(5)+', '+Number(lon).toFixed(5)); }
+  function curLatLon(){ try{ if(!lastVerdict||!lastVerdict.candidates||!lastVerdict.candidates[0]) return null; const c=lastVerdict.candidates[0]; if(!Number.isFinite(c.lat)||!Number.isFinite(c.lon)) return null; return {lat:Number(c.lat), lon:Number(c.lon)}; }catch(e){ return null; } }
+  // In-window delegations: verdict actions + locations cards (3D/Street View) and gs-pin (center map)
+  (function bindFrameDelegations(){
+    document.addEventListener('click', function(ev){
+      const t = ev.target && ev.target.closest ? ev.target.closest('[data-act]') : null;
+      if(!t) return;
+      const act = String(t.getAttribute('data-act')||'').trim();
+      const lat = parseFloat(t.getAttribute('data-lat')); const lon = parseFloat(t.getAttribute('data-lon'));
+      const hasLL = Number.isFinite(lat) && Number.isFinite(lon);
+      if(act==='Maps 3D' && hasLL){ ev.preventDefault(); showMapFrame(gmaps3dEmbedUrl(lat,lon), 'Maps 3D — '+lat.toFixed(5)+', '+lon.toFixed(5)); return; }
+      if(act==='Street View' && hasLL){ ev.preventDefault(); showMapFrame(streetEmbedUrl(lat,lon), 'Street View — '+lat.toFixed(5)+', '+lon.toFixed(5)); return; }
+      if(act==='OpenStreetMap true-center' && hasLL){ ev.preventDefault(); showMapFrame(osmEmbedUrl(lat,lon), 'OSM — '+lat.toFixed(5)+', '+lon.toFixed(5)); return; }
+      if(act==='Google Earth true-center' && hasLL){ ev.preventDefault(); showMapFrame(earthEmbedUrl(lat,lon), 'Earth — '+lat.toFixed(5)+', '+lon.toFixed(5)); return; }
+      if(act==='Lens reverse image (in-page)'){ // verdict lens link stacked with other docs — open url in frame if available
+        const href = t.getAttribute('data-href') || t.getAttribute('href'); // buttons carry data-href
+        if(href && /^https?:/i.test(href)){ ev.preventDefault(); showMapFrame(href, 'Lens'); return; }
+        return;
+      }
+    });
+    document.addEventListener('click', function(ev){
+      const b = ev.target && ev.target.closest ? ev.target.closest('.gs-pin-btn') : null;
+      if(!b) return; ev.preventDefault(); const la=parseFloat(b.getAttribute('data-lat')), lo=parseFloat(b.getAttribute('data-lon')); if(Number.isFinite(la)&&Number.isFinite(lo)) setMap(la,lo,(b.textContent||'').trim()||'Pinned');
+    });
+  })();
+  (function bindTopFrameBtns(){
+    function cur(){ return curLatLon(); }
+    const ids = [['gsOsmBtn', function(p){ return p ? osmEmbedUrl(p.lat,p.lon) : '#'; }, 'OSM'], ['gsGmapsBtn', function(p){ return p ? gmapsEmbedUrl(p.lat,p.lon) : '#'; }, 'Google Maps'], ['gsEarthBtn', function(p){ return p ? earthEmbedUrl(p.lat,p.lon) : '#'; }, 'Earth'], ['gsStreetBtn', function(p){ return p ? streetEmbedUrl(p.lat,p.lon) : '#'; }, 'Street View']];
+    ids.forEach(function(row){ const el=document.getElementById(row[0]); if(!el) return; el.addEventListener('click', function(ev){ ev.preventDefault(); const p=cur(); if(!p){ return; } const url=row[1](p); const lab=row[2]+' — '+p.lat.toFixed(5)+', '+p.lon.toFixed(5); showMapFrame(url,lab); }); });
+    const back=document.getElementById('gsBackMap'), close=document.getElementById('gsFrameClose'); if(back) back.addEventListener('click', function(){ showMapLeaflet(); }); if(close) close.addEventListener('click', function(){ showMapLeaflet(); });
+  })();
 
   function setMap(lat, lon, label){
     if(!ensureMap()) return;
@@ -393,11 +458,12 @@ const GEOSPY_CONTENT = `
     setTimeout(function(){ try{ map.invalidateSize(); }catch(e){} }, 400);
     els.coordLabel.textContent = lat.toFixed(5) + ', ' + lon.toFixed(5);
     const la = lat.toFixed(5), lo = lon.toFixed(5);
-    els.osm.href = 'https://www.openstreetmap.org/#map=16/' + la + '/' + lo;
-    els.gmaps.href = 'https://www.google.com/maps/search/?api=1&query=' + la + ',' + lo;
-    els.earth.href = 'https://earth.google.com/web/search/' + la + ',' + lo;
-    if(els.street){ els.street.href = 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=' + la + ',' + lo; els.street.style.display='inline-flex'; }
-    [els.osm, els.gmaps, els.earth].forEach(function(a){ a.style.display='inline-flex'; });
+    // keep legacy hrefs on els if present (compat), but new buttons drive the in-window viewer
+    try{ if(els.osm) els.osm.href = 'https://www.openstreetmap.org/#map=16/' + la + '/' + lo; }catch(e){}
+    try{ if(els.gmaps) els.gmaps.href = 'https://www.google.com/maps/search/?api=1&query=' + la + ',' + lo; }catch(e){}
+    try{ if(els.earth) els.earth.href = 'https://earth.google.com/web/search/' + la + ',' + lo; }catch(e){}
+    try{ if(els.street) els.street.href = 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=' + la + ',' + lo; }catch(e){}
+    ['gsOsmBtn','gsGmapsBtn','gsEarthBtn','gsStreetBtn'].forEach(function(id){ const b=document.getElementById(id); if(b) b.style.display='inline-flex'; });
   }
 
   async function checkStatus(){
@@ -435,12 +501,16 @@ const GEOSPY_CONTENT = `
   checkStatus();
 
   function resetPreview(){
-    els.img.style.display=\'none\'; els.img.src='';
-    els.vid.style.display=\'none\'; els.vid.src=''; try{ els.vid.load(); }catch(e){}
-    els.preview.style.display=\'none\';
-    if(els.empty) els.empty.style.display=\'flex\';
-    els.frameHint.style.display=\'none\';
-    els.exifPreview.style.display=\'none\'; els.exifPreview.textContent='';
+    if(current.objectUrl){ try{ URL.revokeObjectURL(current.objectUrl); }catch(e){} current.objectUrl = null; }
+    if(els.file) els.file.value = '';
+    try{ els.vid.pause(); }catch(e){}
+    els.img.style.display='none'; try{ els.img.removeAttribute('src'); }catch(e){} els.img.src='';
+    els.vid.style.display='none'; try{ els.vid.removeAttribute('src'); els.vid.load(); }catch(e){}
+    if(els.heicMsg){ els.heicMsg.style.display='none'; els.heicMsg.textContent=''; els.heicMsg.innerHTML=''; }
+    els.preview.style.display='none';
+    if(els.empty) els.empty.style.display='flex';
+    els.frameHint.style.display='none';
+    els.exifPreview.style.display='none'; els.exifPreview.textContent='';
     current = { b64:'', mime:'image/jpeg', kind:'image', w:0, h:0, bytes:0 };
     els.analyze.disabled = true;
     els.meta.textContent='';
@@ -462,11 +532,11 @@ const GEOSPY_CONTENT = `
   }
 
   function canvasFromVideo(video){
-    const c = els.canvas;
     const w = video.videoWidth || 1280, h = video.videoHeight || 720;
     const maxW = 1280;
     let cw = w, ch = h;
     if(cw > maxW){ ch = Math.round(ch * maxW / cw); cw = maxW; }
+    const c = document.createElement('canvas');
     c.width = cw; c.height = ch;
     const ctx = c.getContext('2d');
     ctx.drawImage(video, 0, 0, cw, ch);
@@ -508,55 +578,66 @@ const GEOSPY_CONTENT = `
   }
 
   async function handleFile(file){
-    clearError(); els.results.style.display=\'none\';
+    // clean previous video objectUrl
+    if(current.objectUrl){ try{ URL.revokeObjectURL(current.objectUrl); }catch(e){} current.objectUrl = null; }
+    if(els.heicMsg){ els.heicMsg.style.display='none'; els.heicMsg.innerHTML=''; }
+    clearError(); els.results.style.display='none';
     if(!file){ return; }
     const t = (file.type||'').toLowerCase();
     const name = (file.name||'').toLowerCase();
-    const extImage = /\.(jpe?g|png|webp|heic|heif|bmp|gif|avif)$/i.test(name);
+    const extImage = /\\.(jpe?g|png|webp|heic|heif|bmp|gif|avif)$/i.test(name);
     const extVideo = /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(name);
     const isVideo = t.startsWith('video/') || (!t && extVideo);
     const isImage = t.startsWith('image/') || (!t && extImage) || (!isVideo && extImage);
-    if(!isVideo && !isImage){ showError('Unsupported file â use an image (JPEG/PNG/WEBP) or video (MP4/MOV/WEBM).'); return; }
-    if(file.size > 25*1024*1024){ showError('File too large â max 25 MB. Trim or compress and retry.'); return; }
-    // HEIC/HEIF: Windows browsers cannot decode it in <img> â say so instead of a blank tile
+    if(!isVideo && !isImage){ showError('Unsupported file -- use an image (JPEG/PNG/WEBP) or video (MP4/MOV/WEBM).'); return; }
+    if(file.size > 25*1024*1024){ showError('File too large -- max 25 MB. Trim or compress and retry.'); return; }
+    // HEIC/HEIF: Windows browsers cannot decode it in <img> -- use dedicated overlay, never destroy preview DOM
     const isHeic = t === 'image/heic' || t === 'image/heif' || /\.hei[cf]$/.test(name);
     if(isImage && isHeic){
-      if(els.empty) els.empty.style.display=\'none\';
-      els.preview.style.display=\'flex\';
-      els.img.style.display=\'none\'; els.img.removeAttribute(\'src\');
-      els.preview.innerHTML = '<div style="text-align:center; padding:24px; color:#ffb142; font-size:13px; line-height:1.7;"><div style="font-size:26px;">&#128247;</div><b>HEIC/HEIF photo â Windows browsers cannot display it.</b><br/>The location work still cannot read it either. Convert first:<br/><span style="color:#9baeb8;">iPhone: Settings &rarr; Camera &rarr; Formats &rarr; Most Compatible</span><br/><span style="color:#9baeb8;">or open the file in Paint / Photos and Save As JPEG, then drop it here</span></div>';
+      if(els.empty) els.empty.style.display='none';
+      els.preview.style.display='flex';
+      els.img.style.display='none'; try{ els.img.removeAttribute('src'); }catch(e){}
+      els.vid.style.display='none'; try{ els.vid.pause(); els.vid.removeAttribute('src'); els.vid.load(); }catch(e){}
+      if(els.heicMsg){
+        els.heicMsg.innerHTML = '<div style="font-size:26px;">&#128247;</div><b>HEIC/HEIF photo -- Windows browsers cannot display it.</b><br/>The location work still cannot read it either. Convert first:<br/><span style="color:#9baeb8;">iPhone: Settings -> Camera -> Formats -> Most Compatible</span><br/><span style="color:#9baeb8;">or open the file in Paint / Photos and Save As JPEG, then drop it here</span>';
+        els.heicMsg.style.display='block';
+      }
       els.analyze.disabled = true;
-      els.meta.textContent = file.name + ' â HEIC â convert to JPEG to analyze';
-      showError('HEIC photo dropped â convert to JPEG (or switch your camera to "Most Compatible") and drop it again.');
+      els.meta.textContent = file.name + ' -- HEIC -- convert to JPEG to analyze';
+      showError('HEIC photo dropped -- convert to JPEG (or switch your camera to "Most Compatible") and drop it again.');
       return;
     }
 
     if(isImage){
+      if(els.heicMsg) els.heicMsg.style.display='none';
       const data = await fileToB64(file);
       const b64 = data.b64, mime = data.mime, bytes = data.bytes;
       current = { b64: b64, mime: mime, kind:'image', w:0, h:0, bytes: bytes };
       // onload BEFORE src to avoid race on data: URLs; hide video, show image
-      els.vid.style.display=\'none\'; try{ els.vid.pause(); els.vid.removeAttribute(\'src\'); els.vid.load(); }catch(e){}
-      els.img.onload = function(){ current.w = els.img.naturalWidth; current.h = els.img.naturalHeight; els.meta.textContent += ' â ' + current.w + 'x' + current.h; };
-      els.img.onerror = function(){ els.meta.textContent += ' â preview failed to render'; };
+      els.vid.style.display='none'; try{ els.vid.pause(); els.vid.removeAttribute('src'); els.vid.load(); }catch(e){}
+      els.img.onload = function(){ current.w = els.img.naturalWidth; current.h = els.img.naturalHeight; els.meta.textContent += ' -- ' + current.w + 'x' + current.h; };
+      els.img.onerror = function(){ showError('Preview failed to render -- try another file.'); els.meta.textContent += ' -- preview failed'; };
       els.img.src = 'data:' + mime + ';base64,' + b64;
-      els.img.style.display=\'block\';
+      els.img.style.display='block';
       showPreviewImage();
       els.analyze.disabled = false;
-      els.meta.textContent = file.name + ' â ' + Math.round(bytes/1024) + ' KB â ' + mime;
-      // immediate EXIF probe â this is the "not reading exif" fix: surface it on intake, not just after LOCATE
+      els.meta.textContent = file.name + ' -- ' + Math.round(bytes/1024) + ' KB -- ' + mime;
+      // immediate EXIF probe -- this is the "not reading exif" fix: surface it on intake, not just after LOCATE
       probeExif(b64);
     } else {
-      const url = URL.createObjectURL(file);
-      els.img.style.display=\'none\'; els.img.removeAttribute(\'src\');
-      els.vid.src = url;
-      els.vid.style.display=\'block\';
-      showPreviewImage();
-      els.frameHint.style.display=\'block\';
-      els.analyze.disabled = false;
-      els.meta.textContent = file.name + ' â ' + Math.round(file.size/1024) + ' KB â video (seek to best frame, then LOCATE)';
-      current = { b64:'', mime:'video/mp4', kind:'video', w:0, h:0, bytes: file.size, videoFile: file, objectUrl: url };
+      if(els.heicMsg) els.heicMsg.style.display='none';
+      els.img.style.display='none'; try{ els.img.removeAttribute('src'); }catch(e){}
+      // wire events BEFORE src
       els.vid.onloadedmetadata = function(){ current.w = els.vid.videoWidth; current.h = els.vid.videoHeight; };
+      els.vid.onerror = function(){ showError('Video failed to load -- try MP4/MOV.'); if(current.objectUrl){ try{ URL.revokeObjectURL(current.objectUrl);}catch(e){} current.objectUrl=null; } };
+      const url = URL.createObjectURL(file);
+      els.vid.src = url;
+      els.vid.style.display='block';
+      showPreviewImage();
+      els.frameHint.style.display='block';
+      els.analyze.disabled = false;
+      els.meta.textContent = file.name + ' -- ' + Math.round(file.size/1024) + ' KB -- video (seek to best frame, then LOCATE)';
+      current = { b64:'', mime:'video/mp4', kind:'video', w:0, h:0, bytes: file.size, videoFile: file, objectUrl: url };
     }
   }
 
@@ -567,8 +648,8 @@ const GEOSPY_CONTENT = `
   }
   els.drop.addEventListener('click', function(){ els.file.click(); });
   els.drop.addEventListener('keydown', function(e){ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); els.file.click(); }});
-  els.file.addEventListener('change', function(){ const f=els.file.files && els.file.files[0]; if(f) handleFile(f); });
-  // document-wide drag & drop â drop anywhere on the page
+  els.file.addEventListener('change', function(){ const f=els.file.files && els.file.files[0]; if(f) handleFile(f); els.file.value=''; });
+  // document-wide drag & drop -- drop anywhere on the page
   let dragDepth = 0;
   document.addEventListener('dragenter', function(e){ e.preventDefault(); dragDepth++; els.drop.classList.add('drag'); if(els.empty) els.empty.style.borderColor='rgba(47,255,210,0.5)'; });
   document.addEventListener('dragover', function(e){ e.preventDefault(); });
@@ -576,13 +657,25 @@ const GEOSPY_CONTENT = `
   document.addEventListener('drop', function(e){
     e.preventDefault(); dragDepth=0; els.drop.classList.remove('drag');
     if(els.empty) els.empty.style.borderColor='';
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if(f) handleFile(f);
+    const dt = e.dataTransfer;
+    const f = dt && dt.files && dt.files[0];
+    if(f){ handleFile(f); return; }
+    // URL drop (e.g., dragging image from another tab)
+    const uri = dt && (dt.getData('text/uri-list') || dt.getData('text/plain') || '');
+    const u = (uri||'').trim().split(/\\s+/)[0] || '';
+    if(u && /^https?:\/\/i.test(u)){ els.url.value = u; els.url.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'})); }
   });
   document.addEventListener('paste', async function(e){
-    const item = [...(e.clipboardData && e.clipboardData.items || [])].find(function(i){ return i.type.startsWith('image/'); });
-    if(!item) return;
-    const f = item.getAsFile(); if(f) { e.preventDefault(); await handleFile(f); }
+    // Win copied file lives in clipboardData.files, not items
+    if(e.clipboardData && e.clipboardData.files && e.clipboardData.files.length){
+      const pf = [...e.clipboardData.files].find(function(f){ return /^image\\//.test(f.type) || /^video\\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif|bmp|gif|mp4|mov|webm)$/i.test(f.name||''); });
+      if(pf){ e.preventDefault(); await handleFile(pf); return; }
+    }
+    const items = [...(e.clipboardData && e.clipboardData.items || [])];
+    const imgItem = items.find(function(i){ return i.type.startsWith('image/'); });
+    if(imgItem){ const f = imgItem.getAsFile(); if(f) { e.preventDefault(); await handleFile(f); return; } }
+    const vidItem = items.find(function(i){ return i.type.startsWith('video/'); });
+    if(vidItem){ const f = vidItem.getAsFile(); if(f) { e.preventDefault(); await handleFile(f); return; } }
   });
   els.url.addEventListener('keydown', async function(e){
     if(e.key !== 'Enter') return;
@@ -608,6 +701,7 @@ const GEOSPY_CONTENT = `
     finally{ els.url.disabled=false; }
   });
   els.clear.addEventListener('click', function(){
+    try{ const w=document.getElementById('gsFrameWrap'),f=document.getElementById('gsFrame'); if(w) w.style.display='none'; if(f) f.removeAttribute('src'); }catch(e){}
     resetPreview(); els.results.style.display=\'none\'; clearError(); els.url.value='';
     if(els.ctx) els.ctx.value=''; if(els.guess) els.guess.value='';
     els.exportBtn.style.display=\'none\'; lastVerdict=null;
@@ -773,7 +867,7 @@ const GEOSPY_CONTENT = `
           const coord = hasLL ? (Number(l.lat).toFixed(5)+', '+Number(l.lon).toFixed(5)) : 'no coord';
           const conf = String(l.confidence||'low');
           const expl = l.explanation ? String(l.explanation).replace(/</g,'&lt;').slice(0,220) : '';
-          const gmaps = hasLL ? ('<a href="https://www.google.com/maps/@'+Number(l.lat).toFixed(5)+','+Number(l.lon).toFixed(5)+',250a,35y,0h,45t/data=!3m1!1e3" target="_blank" rel="noopener" style="font-size:11px; color:#2fffd2; text-decoration:none; margin-left:6px;">3D &#8599;</a> <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+Number(l.lat).toFixed(5)+','+Number(l.lon).toFixed(5)+'" target="_blank" rel="noopener" style="font-size:11px; color:#70a1ff; text-decoration:none; margin-left:4px;">Street View</a> <button class="gs-btn secondary gs-pin-btn" data-lat="'+l.lat+'" data-lon="'+l.lon+'" style="font-size:10px; padding:3px 7px; margin-left:6px; cursor:pointer;">Pin</button>') : '';
+          const gmaps = hasLL ? ('<button type="button" class="gs-btn secondary" data-act="Maps 3D" data-lat="'+Number(l.lat).toFixed(5)+'" data-lon="'+Number(l.lon).toFixed(5)+'" style="font-size:11px; padding:3px 7px; margin-left:6px; cursor:pointer;">3D</button> <button type="button" class="gs-btn secondary" data-act="Street View" data-lat="'+Number(l.lat).toFixed(5)+'" data-lon="'+Number(l.lon).toFixed(5)+'" style="font-size:11px; padding:3px 7px; margin-left:4px; cursor:pointer;">Street View</button> <button class="gs-btn secondary gs-pin-btn" data-lat="'+l.lat+'" data-lon="'+l.lon+'" style="font-size:10px; padding:3px 7px; margin-left:6px; cursor:pointer;">Pin</button>') : '';
           return '<div style="display:flex; gap:8px; align-items:flex-start; padding:7px 0; border-top:1px solid rgba(255,255,255,0.06);"><span class="gs-pill '+(conf==='high'?'high':conf==='medium'?'med':'low')+'" style="flex-shrink:0;">#'+(i+1)+' '+conf.toUpperCase()+'</span><div style="min-width:0; flex:1;"><div style="font-size:12.5px; color:#cbd8e0; font-weight:600;">'+ label.replace(/</g,'&lt;') +' <span style="font-weight:400; color:#6f8794;">'+ coord +'</span>'+ gmaps +'</div>'+ (expl ? '<div style="font-size:11.5px; color:#7a8a94; margin-top:3px; line-height:1.45;">'+ expl +'</div>' : '') +'</div></div>';
         }).join('');
         const title = locs.length===1 ? 'Top candidate \u2014 GeoIntel-style' : 'Ranked candidates \u2014 GeoIntel-style ('+locs.length+')';
@@ -845,7 +939,7 @@ const GEOSPY_CONTENT = `
             html += '<div style="font-size:11px; letter-spacing:0.6px; text-transform:uppercase; color:#2fffd2; font-weight:700;">Match re-analyzed via ' + esc(rv.model||'vision') + '</div>';
             if(rv.place) html += '<div style="font-size:14px; color:#e0e0e0; font-weight:700; margin-top:4px;">' + esc(rv.place) + '</div>';
             if(hasLL) html += '<div class="gs-meta" style="margin-top:2px;">' + Number(rv.lat).toFixed(5) + ', ' + Number(rv.lon).toFixed(5) + ' &nbsp;' + pillFor(rv.confidence) + '</div>';
-            else html += '<div class="gs-meta" style="margin-top:2px;">' + pillFor(rv.confidence) + (rv.city||rv.country ? ' — ' + esc([rv.city, rv.state, rv.country].filter(Boolean).join(', ')) : '') + '</div>';
+            else html += '<div class="gs-meta" style="margin-top:2px;">' + pillFor(rv.confidence) + (rv.city||rv.country ? ' -- ' + esc([rv.city, rv.state, rv.country].filter(Boolean).join(', ')) : '') + '</div>';
             if(rv.reasoning) html += '<div style="font-size:12.5px; color:#9baeb8; margin-top:6px; line-height:1.55;">' + esc(rv.reasoning).slice(0,620) + '</div>';
             if(hasLL) html += '<button class="gs-btn" data-lens-use style="margin-top:8px; font-size:12px; padding:6px 12px;" data-lat="'+rv.lat+'" data-lon="'+rv.lon+'" data-label="'+esc(rv.place||rv.city||'Lens hit')+'">Use Lens pin on map &#9673;</button>';
             const fromUrl = (lens.refinedFrom && (lens.refinedFrom.url||lens.refinedFrom.imageUrl)) || '';
@@ -858,18 +952,21 @@ const GEOSPY_CONTENT = `
             html += '<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap:8px;">';
             hits.forEach(function(h){
               const tit = esc((h.title||'Match').slice(0,110));
-              // Click target: validated page URL only — google-internal shells become display-only cards
+              // Click target: validated page URL only -- google-internal shells become display-only cards
               let href = String(h.url||'').trim();
               if(!isHttp(href) || /(^|\\\.)google\\\.[a-z.]+\\\/(search|url\\\?|imgres)/i.test(href)) href = String(h.imageUrl||'').trim();
               if(!isHttp(href)) href = '';
               const linkAttrs = href ? (' href="'+esc(href)+'" target="_blank" rel="noopener"') : '';
               // Thumb: server-fetched data URL first (cannot be blocked), then Bing-hosted turl (hotlink-safe)
-              const src = String(h.thumbDataUrl || h.thumbUrl || '').trim();
+              var rawSrc = String(h.thumbDataUrl || h.thumbUrl || h.imageUrl || '').trim();
+              var src = rawSrc;
+              if(src && /^https?:/i.test(src) && src.slice(0,7).toLowerCase()==='http://'){ src = 'https://' + src.slice(7); }
+              var iu = String(h.imageUrl||'').trim(); var fbRaw = (iu && iu.toLowerCase().startsWith('http://')) ? ('https://' + iu.slice(7)) : iu; var fb = (iu && !src.startsWith('data:') && iu !== String(src).trim()) ? fbRaw : ''; var fbAttr = fb ? (' data-fallback="' + esc(fb) + '"') : '';
               let imgTag;
               if(src){
-                imgTag = '<img src="'+esc(src)+'" alt="" referrerpolicy="no-referrer" style="width:100%; height:132px; object-fit:cover; border-radius:6px 6px 0 0; background:#050b10; display:block;" loading="lazy" onerror="this.onerror=null;this.style.display=\\'none\\'" />';
+                imgTag = '<img src="'+esc(src)+'"' + fbAttr + ' alt="" referrerpolicy="no-referrer" style="width:100%; height:132px; object-fit:cover; border-radius:6px 6px 0 0; background:#050b10; display:block;" loading="lazy" onerror="if(this.dataset.fallback&&this.src!==this.dataset.fallback){this.src=this.dataset.fallback;return;}this.onerror=null;this.style.display=\\'none\\';var t=this.nextElementSibling;if(t&&t.classList.contains(\\'gs-fb\\'))t.style.display=\\'flex\\';" />' + '<div class="gs-fb" style="display:none; align-items:center; justify-content:center; height:132px; font-size:11px; color:rgba(255,255,255,0.52); background:#07121a; border-radius:6px 6px 0 0; text-align:center; padding:0 10px; overflow:hidden;">preview unavailable &#8212; <a href="' + esc(String(h.imageUrl||h.pageUrl||'#')) + '" target="_blank" rel="noopener" style="color:#2fffd2; margin-left:4px;">open</a></div>';
               } else {
-                imgTag = '<div style="height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; display:flex; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview' + (href ? ' — <a'+linkAttrs+' style="color:#70a1ff; margin-left:4px;">open</a>' : '') + '</div>';
+                imgTag = '<div style="height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; display:flex; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview' + (href ? ' -- <a'+linkAttrs+' style="color:#70a1ff; margin-left:4px;">open</a>' : '') + '</div>';
               }
               const wrapOpen = href ? '<a'+linkAttrs+' style="display:block; line-height:0;">' : '';
               const wrapClose = href ? '</a>' : '';
@@ -882,7 +979,7 @@ const GEOSPY_CONTENT = `
             });
             html += '</div>';
           }
-          html += '<div class="gs-meta" style="margin-top:8px;">Matches via Bing Visual (server-side, keyless) — hit <b>Re-analyze</b> to run any match back through the vision model. Machine reverse-image needs a public URL; uploads get the Lens hand-off above.</div>';
+          html += '<div class="gs-meta" style="margin-top:8px;">Matches via Bing Visual (server-side, keyless) -- hit <b>Re-analyze</b> to run any match back through the vision model. Machine reverse-image needs a public URL; uploads get the Lens hand-off above.</div>';
           els.lens.innerHTML = html;
           // wire re-analyze
           els.lens.querySelectorAll('.lens-reanalyze').forEach(function(btn){

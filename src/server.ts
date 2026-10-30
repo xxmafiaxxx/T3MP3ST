@@ -5962,7 +5962,7 @@ app.post('/api/net/tor/start', async (_req: Request, res: Response): Promise<voi
   try {
     // Detached + unref: the cmd script launches tor.exe via WMI (outside any job tree),
     // and the server outlives this spawn anyway — the daemon must not die with a request.
-    const child = spawn('cmd.exe', ['/d', '/c', script], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true });
+    const child = spawn('cmd.exe', ['/d', '/c', script], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true, windowsHide: true } as any);
     child.unref();
   } catch (e) {
     res.status(500).json({ error: `failed to spawn start-tor.cmd: ${String((e as Error)?.message || e)}` });
@@ -7490,6 +7490,7 @@ app.post('/api/selfimprove/run', async (req: Request, res: Response): Promise<vo
     const proc = spawn(process.execPath, v.args, {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
       // The evolve chain fetches the range spec from OBSIDIVM_URL — serve it
       // from THIS server (GET /api/spec maps our running CTF containers).
       env: { ...process.env, OBSIDIVM_URL: 'http://127.0.0.1:3333', T3MP3ST_API_URL: 'http://127.0.0.1:3333' },
@@ -7510,7 +7511,7 @@ app.post('/api/selfimprove/run', async (req: Request, res: Response): Promise<vo
 app.post('/api/selfimprove/run/stop', (_req: Request, res: Response): void => {
   if (!siRun || siRun.proc.exitCode !== null) { res.status(404).json({ success: false, error: 'No running pass' }); return; }
   try {
-    if (process.platform === 'win32') spawn('taskkill', ['/pid', String(siRun.proc.pid), '/T', '/F']);
+    if (process.platform === 'win32') spawn('taskkill', ['/pid', String(siRun.proc.pid), '/T', '/F'], { windowsHide: true } as any);
     else siRun.proc.kill('SIGTERM');
     res.json({ success: true, stopped: true });
   } catch (err: any) {
@@ -7525,7 +7526,7 @@ app.post('/api/selfimprove/reset', async (_req: Request, res: Response): Promise
   }
   try {
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn(process.execPath, ['scripts/obsidivm-evolve.mjs', '--reset'], { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+      const proc = spawn(process.execPath, ['scripts/obsidivm-evolve.mjs', '--reset'], { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true } as any);
       let tail = '';
       proc.stdout?.on('data', (c) => { tail = (tail + c).slice(-2000); });
       proc.stderr?.on('data', (c) => { tail = (tail + c).slice(-2000); });
@@ -9101,7 +9102,7 @@ app.get('/api/geospy/status', (_req: Request, res: Response): void => {
     if (gemKey) return 'gemini';
     return 'none';
   })();
-  const VISION_DEFAULTS = ['google/gemini-2.5-flash', 'google/gemini-3-flash-preview', 'openai/gpt-4o', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.8', 'x-ai/grok-4.3'] as const;
+  const VISION_DEFAULTS = ['google/gemini-3.1-pro-preview', 'google/gemini-3-flash-preview', 'openai/gpt-4o', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.8', 'x-ai/grok-4.3'] as const;
   const isVisionId = (id: string): boolean => {
     const m = (AVAILABLE_MODELS as unknown as Record<string, Array<{id:string;capabilities?:string[];supportsVision?:boolean}>>)?.openrouter?.find(x => x.id === id);
     if (!m) return /^(openai\/gpt-4o|anthropic\/claude|google\/gemini|x-ai\/grok)/.test(id);
@@ -9109,16 +9110,20 @@ app.get('/api/geospy/status', (_req: Request, res: Response): void => {
     return caps.includes('vision') || caps.includes('multimodal') || !!(m as unknown as {supportsVision?:boolean}).supportsVision;
   };
   const visionDefault = (() => {
-    // For gemini provider the default must be vision-safe; otherwise mirror the provider's configured default when it's vision
     if (provider === 'gemini') {
       const gcur = (config.get('gemini')?.defaultModel || '') as string;
-      if (gcur && (isVisionId(gcur) || isGeminiModelId(gcur))) return gcur.includes('/') ? gcur : `google/${gcur}`;
-      return 'google/gemini-2.5-flash';
+      // Force Gemini 3.1 Pro as the accuracy default — don't honor a stale 2.5 cached in settings
+      if (gcur && (isVisionId(gcur) || isGeminiModelId(gcur))) {
+        const norm = gcur.includes('/') ? gcur : `google/${gcur}`;
+        if (/gemini-2\.5-flash/i.test(norm)) return 'google/gemini-3.1-pro-preview';
+        return norm;
+      }
+      return 'google/gemini-3.1-pro-preview';
     }
     const cur = (orKey ? config.get('openrouter')?.defaultModel : oaKey ? config.get('openai')?.defaultModel : gemKey ? config.get('gemini')?.defaultModel : null) as string | null;
     if (cur && isVisionId(cur)) return cur;
     for (const v of VISION_DEFAULTS) if (orKey) return v;
-    if ((provider as string) === 'gemini') return 'google/gemini-2.5-flash';
+    if ((provider as string) === 'gemini') return 'google/gemini-3.1-pro-preview';
     return cur;
   })() as string | null;
   const model = visionDefault;
@@ -9133,7 +9138,7 @@ app.get('/api/geospy/status', (_req: Request, res: Response): void => {
         if (caps.includes('vision') || caps.includes('multimodal')) pushOnce(m.id, m.name, 'openrouter');
       }
       // Gemini via OpenRouter is vision even though the static list may lag — ensure they're present
-      for (const gid of ['google/gemini-2.5-flash','google/gemini-3-flash-preview','google/gemini-3.1-pro-preview'] as const) pushOnce(gid, gid, 'openrouter');
+      for (const gid of ['google/gemini-3.1-pro-preview','google/gemini-3-flash-preview','google/gemini-2.5-flash'] as const) pushOnce(gid, gid, 'openrouter');
       // Also surface gpt-4o variants if missing
       for (const oid of ['openai/gpt-4o','openai/gpt-4o-mini'] as const) pushOnce(oid, oid, 'openrouter');
     }
@@ -9152,7 +9157,7 @@ app.get('/api/geospy/status', (_req: Request, res: Response): void => {
       // Hermes on OpenRouter is TEXT-ONLY (measured live 2026-10-29: input_modalities ["text"]) — deliberately NOT in the vision selector; local Hermes rides the Ollama branch
     }
     if (!out.length) {
-      const fallback = ['google/gemini-2.5-flash','openai/gpt-4o','anthropic/claude-sonnet-4.5','google/gemini-3-flash-preview'] as const;
+      const fallback = ['google/gemini-3.1-pro-preview','openai/gpt-4o','anthropic/claude-sonnet-4.5','google/gemini-3-flash-preview'] as const;
       for (const id of fallback) pushOnce(id, id, 'openrouter');
     }
     return out;
@@ -11384,7 +11389,7 @@ app.post('/api/mission/kill-all', (_req: Request, res: Response) => {
   }
   if (siRun && siRun.proc.exitCode === null && !siRun.proc.killed) {
     try {
-      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(siRun.proc.pid), '/T', '/F']);
+      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(siRun.proc.pid), '/T', '/F'], { windowsHide: true } as any);
       else siRun.proc.kill('SIGTERM');
       killedSelfImprove = true;
     } catch { /* ignore */ }
@@ -13374,7 +13379,7 @@ function startCtfRangeAction(action: string, args: string[]): boolean {
   ctfRangeAction.action = action;
   ctfRangeAction.startedAt = Date.now();
   ctfRangeAction.output = [];
-  const child = spawn('docker', ['compose', ...args], { cwd: dir });
+  const child = spawn('docker', ['compose', ...args], { cwd: dir, windowsHide: true } as any);
   const push = (buf: Buffer): void => {
     const lines = buf.toString().split(/\r?\n/).filter(Boolean);
     ctfRangeAction.output.push(...lines);

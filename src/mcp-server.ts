@@ -123,6 +123,72 @@ Requires: checkId from the probe catalog and a target URL. External targets requ
       },
       required: ['checkId', 'target']
     }
+  },
+  {
+    name: 'learning_distill',
+    description: `Distill facts from recent runs into inspectable memory proposals (T3MP3ST Agent Memory).
+
+Runs POST /api/learning/run-review on the platform — it scans evidence/findings/retests and mints proposal(s) you must explicitly accept before they become memory. Human-gated by design; proposals are inspectable before promotion. Also callable by humans as the "Run a review pass" button in Self-Improve → no new process window is spawned (in-process, windowsHide:true on any child).
+
+Use when: A run produced evidence/findings and you want durable lessons. Safe to call repeatedly — duplicate content reinforces observationCount instead of creating new pending proposals.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        missionId: { type: 'string', description: 'Optional scope: only distill this mission' },
+        operationId: { type: 'string', description: 'Optional scope: only distill this operation' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'learning_proposals',
+    description: `List T3MP3ST memory proposals (pending/accepted/rejected) or a single capsule entry.
+
+Use when: You need to inspect what learning_distill proposed before accepting, or audit the accepted memory capsule.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['pending', 'accepted', 'rejected', ''], description: 'Filter by status; empty = all' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'memory_capsule',
+    description: `Read the accepted T3MP3ST memory capsule — durable facts already promoted from proposals.
+
+Use when: You need context from previously accepted lessons.`,
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'memory_accept',
+    description: `Accept (promote) a single memory proposal into the capsule. Human-gated; records provenance.
+
+Use when: You have inspected a proposal and want to promote it. Requires proposal id.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        proposalId: { type: 'string', description: 'Proposal id, e.g. memprop_abc123' }
+      },
+      required: ['proposalId']
+    }
+  },
+  {
+    name: 'memory_reject',
+    description: `Reject a single memory proposal (does not delete, marks rejected and auditable).
+
+Use when: A proposal is inaccurate or premature. Requires proposal id.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        proposalId: { type: 'string', description: 'Proposal id' }
+      },
+      required: ['proposalId']
+    }
   }
 ];
 
@@ -294,6 +360,36 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
       }
       const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || 8000, 1000), 20000);
       return platformApi('POST', '/api/tools/rapid-response/check', { checkId, target, timeoutMs });
+    }
+
+    // =========================================================================
+    // LEARNING / MEMORY (bot can trigger the same "Run a review pass" as the UI button — in-process, no window)
+    // =========================================================================
+    case 'learning_distill': {
+      const missionId = String((args as any).missionId || '').trim() || undefined;
+      const operationId = String((args as any).operationId || '').trim() || undefined;
+      const body: any = {};
+      if (missionId) body.missionId = missionId;
+      if (operationId) body.operationId = operationId;
+      return platformApi('POST', '/api/learning/run-review', body);
+    }
+    case 'learning_proposals': {
+      const status = String((args as any).status || '').trim();
+      const q = status ? `?status=${encodeURIComponent(status)}` : '';
+      return platformApi('GET', `/api/memory/proposals${q}`);
+    }
+    case 'memory_capsule': {
+      return platformApi('GET', '/api/memory/capsule');
+    }
+    case 'memory_accept': {
+      const proposalId = String((args as any).proposalId || '').trim();
+      if (!proposalId) return JSON.stringify({ error: 'proposalId is required' }, null, 2);
+      return platformApi('POST', `/api/memory/proposals/${encodeURIComponent(proposalId)}/accept`, {});
+    }
+    case 'memory_reject': {
+      const proposalId = String((args as any).proposalId || '').trim();
+      if (!proposalId) return JSON.stringify({ error: 'proposalId is required' }, null, 2);
+      return platformApi('POST', `/api/memory/proposals/${encodeURIComponent(proposalId)}/reject`, {});
     }
 
     default:

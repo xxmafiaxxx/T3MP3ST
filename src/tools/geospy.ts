@@ -285,30 +285,30 @@ CRITICAL RULES: NEVER refuse to guess — always provide at least one location w
 
 const VISION_SYSTEM = getGeointelBasePrompt() + `
 
-Return ONLY valid JSON with this exact shape:
+Return ONLY valid JSON with this exact shape (no markdown, no preamble):
 {
-  "interpretation": "3-5 sentence summary: what you see, what it tells you, and your conclusion (GeoIntel interpretation)",
-  "lat": number | null,
-  "lon": number | null,
-  "place": "human place name or null",
-  "city": "city or null",
-  "state": "state/region or null",
-  "country": "country or null",
-  "confidence": "high|medium|low|none",
+  "interpretation": "3-5 sentence summary: what you see, what it tells you, and your conclusion",
+  "lat": number,
+  "lon": number,
+  "place": "specific human place name — never null, best guess required",
+  "city": "city — best guess, never null if you have a country",
+  "state": "state/region — best guess",
+  "country": "country — mandatory, never null",
+  "confidence": "high|medium|low",
   "landmarks": ["landmark1", ...],
   "clues": ["clue1: what you saw and why it matters", ...],
   "reasoning": "2-4 sentences explaining the deduction chain — vegetation, architecture, signage language, license plates, skyline, sun/shadows, terrain, infrastructure",
   "locations": [
-    { "city": "city", "state": "state", "country": "country", "coordinates": { "latitude": 12.34, "longitude": 56.78 }, "confidence": "High|Medium|Low", "explanation": "why" }
+    { "city": "city", "state": "state", "country": "country", "coordinates": { "latitude": 12.34, "longitude": 56.78 }, "confidence": "High|Medium|Low", "explanation": "2-3 sentences why this candidate" }
   ]
 }
 
-Rules:
-- If you cannot locate, set lat/lon null and confidence "none" — never hallucinate coordinates.
-- high = landmark-identified or multiple converging signals. medium = strong regional signal. low = broad guess.
-- clues must be grounded in visible evidence, not generic.
-- Keep reasoning concise but specific.
-- locations array: up to 3 candidates ranked by confidence (GeoIntel style). First entry matches top lat/lon.`;
+MANDATORY RULES:
+- You MUST provide lat/lon as numbers on EVERY response — never null. If uncertain, give your best estimate at low confidence. A description without coordinates is a FAILURE.
+- confidence "none" is FORBIDDEN — use low/medium/high. low = educated guess, medium = strong regional signal, high = landmark or 4+ converging signals.
+- You have Google Search available — verify signage, architecture, vegetation against what you see. Use it to refine, but always return the JSON above as your final output.
+- clues must be grounded in visible pixels, not generic. Each clue: "what you saw : why it narrows location".
+- locations: 1-3 candidates ranked. First entry MUST match top-level lat/lon. Even a generic landscape gets a country-level guess.`;
 
 function buildVisionPayload(imageBase64: string, mime: string, opts: { context?: string; guess?: string; model?: string } = {}): unknown {
   const extra: string[] = [];
@@ -316,7 +316,7 @@ function buildVisionPayload(imageBase64: string, mime: string, opts: { context?:
   if (opts.guess?.trim()) extra.push(`Operator guess (validate or refute): "${opts.guess.trim().slice(0, 200)}"`);
   const suffix = extra.length ? '\n\n' + extra.join('\n') : '';
   // Never fall back to a text-only default — payload model is overridden by pickVisionProvider anyway, but keep a vision-safe default here too
-  const VISION_FALLBACK = 'google/gemini-2.5-flash';
+  const VISION_FALLBACK = 'google/gemini-3.1-pro-preview';
   return {
     model: opts.model || VISION_FALLBACK,
     messages: [
@@ -338,7 +338,7 @@ function pickVisionProvider(modelOverride?: string, perRequestKey?: string): { p
   const pick = (modelOverride || '').trim();
   const overrideKey = (perRequestKey || '').trim();
   // Auto must pick a VISION model — the global openrouter default (z-ai/glm-5.3-flash) is text-only and ignores images
-  const VISION_DEFAULT = 'google/gemini-2.5-flash';
+  const VISION_DEFAULT = 'google/gemini-3.1-pro-preview';
   const NON_VISION = new Set(['z-ai/glm-5.3-flash','z-ai/glm-5.3','z-ai/glm-5.2:free','deepseek/deepseek-v4-pro','deepseek/deepseek-v4-flash','qwen/qwen3.8-max','qwen/qwen3.8-flash','moonshotai/kimi-k3','minimax/minimax-m3','minimax/minimax-m3:free','tencent/hy4-preview','z-ai/glm-4.7','inclusionai/ling-3.0-flash-fin:free','google/gemma-4-31b-it:free','nvidia/nemotron-3-super-120b-a12b:free','qwen/qwen3.8-27b','mistralai/mistral-large']);
   const resolvedPick = (!pick || NON_VISION.has(pick)) ? VISION_DEFAULT : pick;
   // Dead-id aliases — measured against the live OpenRouter catalog 2026-10-29: grok-4/4.1/4-fast/4.1-fast all 404; current vision grok is 4.3+
@@ -352,7 +352,7 @@ function pickVisionProvider(modelOverride?: string, perRequestKey?: string): { p
     'qwen/qwen-2-vl-72b-instruct': 'qwen/qwen3-vl-235b-a22b-instruct',
     'meta-llama/llama-3.2-90b-vision-instruct': 'meta-llama/llama-4-maverick',
     'meta-llama/llama-3.2-11b-vision-instruct': 'meta-llama/llama-4-scout',
-    'google/gemini-2.0-flash': 'google/gemini-2.5-flash',
+    'google/gemini-2.0-flash': 'google/gemini-3.1-pro-preview',
     'anthropic/claude-3.5-sonnet': 'anthropic/claude-haiku-5.5',
   };
   const effectivePick = deprecationAlias[resolvedPick] || resolvedPick;
@@ -519,10 +519,21 @@ export async function visionLocate(
     // Gemini uses a different wire (generateContent) — handle separately
     if (pick.provider === 'gemini') {
       const b64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
-      const isThinking = /gemini-3/i.test(pick.model);
+      const isPro = /gemini-3\.1-pro|gemini-3-pro|gemini-2\.5-pro/i.test(pick.model);
+      const isThinking = /gemini-(3|2\.5)/i.test(pick.model);
+      // Full Gemini capabilities: Search Grounding lets it verify against Google's index,
+      // thinking budget lets Pro reason through the 8-phase methodology.
+      // We do NOT set responseMimeType when tools are present — it conflicts and caused the
+      // b688c52 Unparseable bug (tool+JSON mime returns citations, not JSON). Prompt is strict instead.
       const gemBody: Record<string, unknown> = {
-        contents: [{ role: 'user', parts: [{ text: VISION_SYSTEM + '\n\nLocate this image. Return the JSON only.' + (opts.context ? `\nContext: ${opts.context}` : '') + (opts.guess ? `\nGuess: ${opts.guess}` : '') }, { inline_data: { mime_type: mime || 'image/jpeg', data: b64 } }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: isThinking ? 1800 : 1100, responseMimeType: 'application/json' } as unknown as Record<string, unknown>,
+        contents: [{ role: 'user', parts: [{ text: VISION_SYSTEM + '\n\nLocate this image. Return ONLY the JSON object above — no preamble, no markdown.' + (opts.context ? `\nContext: ${opts.context}` : '') + (opts.guess ? `\nGuess: ${opts.guess}` : '') }, { inline_data: { mime_type: mime || 'image/jpeg', data: b64 } }] }],
+        generationConfig: {
+          temperature: 0.18,
+          maxOutputTokens: isPro ? 8192 : isThinking ? 4096 : 2048,
+          ...(isThinking ? { thinkingConfig: { thinkingBudget: isPro ? 12000 : 8000, includeThoughts: false } } : {}),
+        } as unknown as Record<string, unknown>,
+        tools: [{ google_search: {} }],
+        toolConfig: { functionCallingConfig: { mode: 'AUTO' } } as unknown as Record<string, unknown>,
       };
       // Native generateContent lives at /v1beta/models/...  but config gemini baseUrl is the
       // OpenAI-compat path /v1beta/openai — strip the /openai segment for the native call.
@@ -591,9 +602,18 @@ export async function visionLocate(
         else if (!msg || /Unexpected end|empty/i.test(msg)) friendly = `Gemini egress blocked or empty reply (HTTP ${r.status}) — lab tried local fallback. If Tor is active, set TEMPEST_PROXY_BYPASS or retry with DO_NOT_PROXY.`;
         return { confidence: 'none', reasoning: `Gemini error: ${friendly}`, clues: [], model: pick.model, note: friendly.slice(0, 280) };
       }
-      const gemText = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+      const gemText = j.candidates?.[0]?.content?.parts?.map((p) => (p as Record<string, unknown>)['thought'] ? '' : (p as { text?: string }).text || '').join('').trim()
+        || j.candidates?.[0]?.content?.parts?.map((p) => (p as { text?: string }).text || '').join('').trim() || '';
+      // Grounding with google_search returns citations; JSON is still in the text part — extract the JSON block
       const gemParsed = extractJson(gemText) as Record<string, unknown> | null;
-      if (!gemParsed) return { confidence: 'none', reasoning: gemText.slice(0, 400) || 'Gemini returned no parseable JSON', clues: [], model: pick.model, note: 'Unparseable' };
+      if (!gemParsed){
+        // Last resort: try to salvage a truncated JSON (thinking models sometimes emit very long reasoning before JSON)
+        const brace = gemText.match(/\{[\s\S]*"lat"[\s\S]*\}/);
+        if(brace){
+          try{ const salvage = JSON.parse(brace[0]) as Record<string, unknown>; if(salvage && typeof salvage['lat']==='number') return { lat: salvage['lat'] as number, lon: salvage['lon'] as number, place: typeof salvage['place']==='string'?salvage['place']:undefined, city: typeof salvage['city']==='string'?salvage['city']:undefined, state: typeof salvage['state']==='string'?salvage['state']:undefined, country: typeof salvage['country']==='string'?salvage['country']:undefined, confidence: 'low' as GeospyConfidence, reasoning: typeof salvage['reasoning']==='string'?salvage['reasoning']:gemText.slice(0,400), interpretation: typeof salvage['interpretation']==='string'?salvage['interpretation']:undefined, clues: [], landmarks: [], model: pick.model }; }catch{}
+        }
+        return { confidence: 'none', reasoning: gemText.slice(0, 600) || 'Gemini returned no parseable JSON — grounding/thinking text filled the output. Retrying with conservative model may help.', clues: [], model: pick.model, note: 'Unparseable — raw: ' + gemText.slice(0, 200) };
+      }
       const glat = typeof gemParsed['lat'] === 'number' ? gemParsed['lat'] : (typeof (gemParsed['coordinates'] as Record<string, unknown>)?.['latitude'] === 'number' ? (gemParsed['coordinates'] as Record<string, unknown>)['latitude'] as number : undefined);
       const glon = typeof gemParsed['lon'] === 'number' ? gemParsed['lon'] : (typeof (gemParsed['coordinates'] as Record<string, unknown>)?.['longitude'] === 'number' ? (gemParsed['coordinates'] as Record<string, unknown>)['longitude'] as number : undefined);
       const gconf = (['high', 'medium', 'low', 'none'] as const).includes(String(gemParsed['confidence']).toLowerCase() as GeospyConfidence) ? String(gemParsed['confidence']).toLowerCase() as GeospyConfidence : (glat != null && glon != null ? 'low' : 'none');
@@ -652,11 +672,11 @@ export async function visionLocate(
       }
       let friendly = msg;
       if (/hermes/i.test(pick.model) && (/image input/i.test(msg) || r.status === 404)) friendly = `${msg} — Hermes on OpenRouter is TEXT-ONLY (no image input; measured live 2026-10-29). Pick Qwen VL / Gemini / Grok 4.3 for cloud vision, or a local llava/qwen2-vl via the Ollama options.`;
-      else if (/deprecated/i.test(msg) && /grok/i.test(msg)) friendly = msg + ' — Grok version deprecated. Auto-retrying as x-ai/grok-4.3; pick Grok 4.3 or Auto → gemini-2.5-flash next time.';
-      else if (r.status === 404 || /not[ _-]?found/i.test(msg)) friendly = `${msg} (HTTP 404 — model not found on ${pick.provider}). ${pick.provider === 'openrouter' ? 'Try Auto → gemini-2.5-flash or set GEMINI_API_KEY; lab tried local gemma4:e4b.' : 'Try Auto or a vision-capable tag on this provider.'}`;
+      else if (/deprecated/i.test(msg) && /grok/i.test(msg)) friendly = msg + ' — Grok version deprecated. Auto-retrying as x-ai/grok-4.3; pick Grok 4.3 or Auto → google/gemini-3.1-pro-preview next time.';
+      else if (r.status === 404 || /not[ _-]?found/i.test(msg)) friendly = `${msg} (HTTP 404 — model not found on ${pick.provider}). ${pick.provider === 'openrouter' ? 'Try Auto → google/gemini-3.1-pro-preview or set GEMINI_API_KEY; lab tried local gemma4:e4b.' : 'Try Auto or a vision-capable tag on this provider.'}`;
       else if (/User not found/i.test(msg) || r.status === 401) friendly = `OpenRouter key invalid or revoked — vision calls return 401. Add a valid key in Settings → API Keys (or keep using local gemma4:e4b fallback). Original: ${msg}`;
       else if (/credit/i.test(msg) || /quota/i.test(msg) || /insufficient/i.test(msg) || /RESOURCE_EXHAUSTED/i.test(msg)) friendly = msg + ' — remote credits depleted. Local gemma4:e4b attempted; add billing or rotate key to restore cloud. EXIF still works.';
-      else if (/invalid model/i.test(msg)) friendly = msg + ' — model not available on this provider. Try Auto (google/gemini-2.5-flash) or set GEMINI_API_KEY.';
+      else if (/invalid model/i.test(msg)) friendly = msg + ' — model not available on this provider. Try Auto (google/gemini-3.1-pro-preview) or set GEMINI_API_KEY.';
       // auto-retry deprecated/renamed grok once as grok-4.3
       if (!/hermes/i.test(pick.model) && /deprecated|not a valid model/i.test(msg) && /grok/i.test(msg) && !pick.model.includes('4.3')) {
         try {
