@@ -1125,13 +1125,15 @@ export async function fetchImageUrlAsBase64(imageUrl: string): Promise<{ b64: st
 export async function analyzeGeospyImage(
   imageBase64: string,
   mime: string,
-  opts: { doVision?: boolean; visionTimeoutMs?: number; context?: string; guess?: string; model?: string; doGoogle?: boolean; doLens?: boolean; lensRefineTimeoutMs?: number; apiKey?: string } = {},
+  opts: { doVision?: boolean; visionTimeoutMs?: number; context?: string; guess?: string; model?: string; doGoogle?: boolean; doLens?: boolean; lensRefineTimeoutMs?: number; apiKey?: string; exifImageBase64?: string } = {},
 ): Promise<GeospyVerdict> {
   const cleanB64 = (imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+  // EXIF comes from the ORIGINAL upload when the caller downscaled for the vision call (canvas re-encoding strips metadata)
+  const exifB64 = (opts.exifImageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim() || cleanB64;
   let exif: GeospyExifResult = { hasGps: false };
   try {
-    if (cleanB64) {
-      const buf = Buffer.from(cleanB64, 'base64');
+    if (exifB64) {
+      const buf = Buffer.from(exifB64, 'base64');
       exif = parseExifGps(new Uint8Array(buf));
     }
   } catch {

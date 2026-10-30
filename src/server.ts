@@ -9182,6 +9182,12 @@ app.post('/api/geospy/analyze', async (req: Request, res: Response): Promise<voi
   const doGoogle = req.body?.doGoogle !== false;
   const doLens = req.body?.doLens !== false;
   const apiKey = String((req.headers as Record<string,string>)['x-api-key'] || (req.headers as Record<string,string>)['x-gemini-key'] || req.body?.apiKey || req.body?.api_key || req.body?.geminiKey || '').trim().slice(0, 300) || undefined;
+  // EXIF source override: caller may downscale imageBase64 for the vision call; the ORIGINAL rides here so GPS metadata survives
+  const exifOverride = String(req.body?.exifImageBase64 || '').trim();
+  if (exifOverride.length > 10_000_000) {
+    res.status(413).json({ error: 'exifImageBase64 too large — max ~7.5 MB decoded.' });
+    return;
+  }
 
   // GeoIntel-style server-side image URL fetch (bypasses browser CORS)
   if ((!b64 || b64.length < 100) && urlInput && /^https?:\/\//i.test(urlInput)) {
@@ -9210,7 +9216,7 @@ app.post('/api/geospy/analyze', async (req: Request, res: Response): Promise<voi
   const t0 = Date.now();
   try {
     console.log(`[T3MP3ST][GEOSPY] analyze: ${mime}, ${Math.round(b64.length / 1024)} KB b64, vision=${doVision}${context ? ' +context' : ''}${guess ? ' +guess' : ''}${visionModel ? ' model='+visionModel : ''} google=${doGoogle} lens=${doLens}${urlInput ? ' viaUrl' : ''}${apiKey ? ' +apiKey' : ''}`);
-    const verdict = await analyzeGeospyImage(b64, mime, { doVision, visionTimeoutMs, context, guess, model: visionModel, doGoogle, doLens, apiKey });
+    const verdict = await analyzeGeospyImage(b64, mime, { doVision, visionTimeoutMs, context, guess, model: visionModel, doGoogle, doLens, apiKey, exifImageBase64: exifOverride || undefined });
     const ms = Date.now() - t0;
     // Ledger entry for the Evidence Vault
     if (verdict.lat != null && verdict.lon != null) {

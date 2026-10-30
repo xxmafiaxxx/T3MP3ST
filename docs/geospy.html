@@ -3690,7 +3690,21 @@
   .gs-exif-preview { margin-top:10px; font-size:12.5px; border:1px solid rgba(255,255,255,0.06); border-radius:8px; padding:10px 12px; background: rgba(255,255,255,0.03); display:none; }
   @keyframes gsDropPin { 0%{ transform: translateY(-40px); opacity:0; } 60%{ transform: translateY(6px); opacity:1; } 80%{ transform: translateY(-4px);} 100%{ transform: translateY(0); opacity:1; } }
   .gs-pin-drop { animation: gsDropPin 0.55s cubic-bezier(0.34,1.56,0.64,1) forwards; }
-  /* ---- results layout (clean sections) ---- */
+  /* ---- workspace: image lines up with map ---- */
+  .gs-ws { height: 380px; }
+  .gs-preview { display:none; height: 344px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:
+    repeating-conic-gradient(rgba(255,255,255,0.03) 0% 25%, transparent 0% 50%) 50% / 22px 22px, #050b10; align-items:center; justify-content:center; }
+  .gs-preview img, .gs-preview video { width:100%; height:100%; display:block; object-fit:contain; background:transparent; }
+  .gs-empty { height: 344px; border:1px dashed rgba(255,255,255,0.10); border-radius:10px; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:6px; color:#5f7582; font-size:12.5px; background: rgba(255,255,255,0.02); }
+  /* ---- decluttered results: collapsible sections ---- */
+  .gs-details { background: rgba(0,0,0,0.32); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:0; margin-top:12px; overflow:hidden; }
+  .gs-details > summary { cursor:pointer; list-style:none; padding:11px 16px; font-size:12px; letter-spacing:0.8px; text-transform:uppercase; color:#8ba3b0; font-weight:700; display:flex; align-items:center; gap:8px; user-select:none; }
+  .gs-details > summary::-webkit-details-marker { display:none; }
+  .gs-details > summary::before { content:'+'; color:#2fffd2; font-size:14px; width:14px; }
+  .gs-details[open] > summary::before { content:'â'; }
+  .gs-details[open] > summary { border-bottom:1px solid rgba(255,255,255,0.06); color:#cbd8e0; }
+  .gs-details > .gs-details-body { padding:14px 16px; }
+  .gs-badge-count { font-size:10.5px; padding:1px 7px; border-radius:9px; background: rgba(47,255,210,0.12); color:#2fffd2; border:1px solid rgba(47,255,210,0.30); }
   .gs-verdict { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
   .gs-place-big { font-size:20px; font-weight:800; color:#e8f6f0; letter-spacing:0.2px; line-height:1.25; }
   .gs-coord-chip { font-family: ui-monospace,Consolas,monospace; font-size:12.5px; color:#2fffd2; background:rgba(47,255,210,0.08); border:1px solid rgba(47,255,210,0.30); padding:3px 9px; border-radius:7px; white-space:nowrap; }
@@ -3716,72 +3730,65 @@
   </div>
 
   <div class="gs-grid">
-    <!-- LEFT: intake -->
-    <div class="gs-card">
-      <h3><span class="accent">&#9673;</span> INTAKE</h3>
-
-      <div id="gsDrop" class="gs-drop" tabindex="0" role="button" aria-label="Drop image or video here">
-        <div style="font-size:28px; margin-bottom:6px;">&#128247; &#127910;</div>
-        <div style="font-size:14px; color:#cbd8e0; font-weight:600;">Drop image or video here</div>
-        <div style="font-size:12.5px; color:#7a8a94; margin-top:4px;">JPEG / PNG / WEBP / HEIC &mdash; MP4 / MOV / WEBM (frame extracted locally)</div>
-        <small>or click to browse &middot; paste from clipboard (Ctrl+V) &middot; or paste an image URL below</small>
+    <!-- WORKSPACE LEFT: the upload, lined up with the map -->
+    <div class="gs-card gs-ws" style="display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span class="gs-h" style="margin:0; border:none; padding:0; flex:1;">Upload</span><span id="gsMeta" class="gs-meta"></span></div>
+      <div id="gsEmpty" class="gs-empty" role="button" tabindex="0" title="Drop an image or video anywhere on this card">
+        <div style="font-size:24px;">&#128247;</div>
+        <div>Your image lines up here with the map</div>
+        <div style="font-size:11px;">drop, paste (Ctrl+V), browse, or use the URL field below</div>
       </div>
-      <input id="gsFile" type="file" accept="image/*,video/*" hidden />
-
-      <div class="gs-url-row">
-        <input id="gsUrl" placeholder="https://... image URL (optional) — fetched server-side (no CORS)" />
-        <button class="gs-btn secondary" id="gsUrlBtn">Load URL</button>
-      </div>
-
-      <div class="gs-url-row">
-        <input id="gsContext" placeholder="Context (optional) — e.g. 'taken near a souk in Marrakech, afternoon light'" />
-      </div>
-      <div class="gs-url-row">
-        <input id="gsGuess" placeholder="Guess to validate (optional) — e.g. 'Paris?'" style="flex:0.6;" />
-        <select id="gsModelSelect" title="Vision model override — leave on Auto to use Settings default"><option value="">Auto (Settings default)</option></select>
-      </div>
-      <div class="gs-url-row">
-        <input id="gsApiKey" type="password" placeholder="Gemini API key (optional) — overrides Settings for this run, stored locally" autocomplete="off" spellcheck="false" />
-        <button class="gs-btn secondary" id="gsApiKeySave" title="Save key in this browser only">Save</button>
-        <button class="gs-btn secondary" id="gsApiKeyClear" title="Clear stored key">Clear</button>
-      </div>
-
       <div id="gsPreview" class="gs-preview">
         <img id="gsImg" alt="preview" style="display:none;" />
         <video id="gsVid" controls muted playsinline style="display:none;"></video>
         <canvas id="gsCanvas" style="display:none;"></canvas>
       </div>
-
       <div id="gsExifPreview" class="gs-exif-preview"></div>
-
-      <div class="gs-row" style="margin-top:12px;">
-        <button class="gs-btn" id="gsAnalyze" disabled>&#9889; LOCATE</button>
-        <button class="gs-btn secondary" id="gsClear">Clear</button>
-        <button class="gs-btn secondary" id="gsExport" style="display:none;">Export JSON</button>
-        <label class="gs-meta" style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="gsVisionToggle" checked /> Vision AI</label>
-        <span id="gsMeta" class="gs-meta"></span>
-      </div>
-      <div id="gsFrameHint" class="gs-meta" style="margin-top:6px; display:none;">Video: seek to the most telling frame, then hit LOCATE — the current frame will be sent.</div>
+      <div id="gsFrameHint" class="gs-meta" style="margin-top:6px; display:none;">Video: seek to the most telling frame, then hit LOCATE â the current frame will be sent.</div>
     </div>
 
-    <!-- RIGHT: map -->
-    <div class="gs-card">
-      <h3><span class="accent">&#9673;</span> MAP <button class="gs-btn secondary" id="gsSatToggle" style="font-size:11px; padding:4px 10px; margin-left:auto;">SATELLITE</button> <button class="gs-btn secondary" id="gs3dToggle" style="font-size:11px; padding:4px 10px;">3D</button></h3>
-      <div id="gsMap" class="gs-map"></div>
-      <div class="gs-map-hint">Click the map &rarr; opens that point in <b>Google Maps 3D</b> &middot; Right-click &rarr; <b>Street View</b></div>
-      <div class="gs-row" style="margin-top:8px;">
-        <a id="gsOsmLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:6px 10px; text-decoration:none; display:none;">OSM</a>
-        <a id="gsGmapsLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:6px 10px; text-decoration:none; display:none;">Google Maps</a>
-        <a id="gsEarthLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:6px 10px; text-decoration:none; display:none;">Google Earth</a>
-        <a id="gsStreetLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:6px 10px; text-decoration:none; display:none;">Street View</a>
+    <!-- WORKSPACE RIGHT: the map -->
+    <div class="gs-card gs-ws" style="display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span class="gs-h" style="margin:0; border:none; padding:0; flex:1;">Map</span><button class="gs-btn secondary" id="gsSatToggle" style="font-size:11px; padding:4px 10px;">SATELLITE</button> <button class="gs-btn secondary" id="gs3dToggle" style="font-size:11px; padding:4px 10px;">3D</button></div>
+      <div id="gsMap" style="flex:1; min-height:344px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:#0a141d; position:relative;"></div>
+      <div class="gs-map-hint">Click the map &rarr; that point in <b>Google Maps 3D</b> &middot; Right-click &rarr; <b>Street View</b></div>
+      <div class="gs-row" style="margin-top:6px;">
+        <a id="gsOsmLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; text-decoration:none; display:none;">OSM</a>
+        <a id="gsGmapsLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; text-decoration:none; display:none;">Google Maps</a>
+        <a id="gsEarthLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; text-decoration:none; display:none;">Earth</a>
+        <a id="gsStreetLink" href="#" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:12px; padding:5px 9px; text-decoration:none; display:none;">Street View</a>
         <span id="gsCoordLabel" class="gs-meta"></span>
       </div>
     </div>
   </div>
 
-  <!-- RESULTS: verdict band, then analysis|forensics, then full-width cross-check -->
+  <!-- INTAKE controls -->
+  <div class="gs-card" style="margin-top:14px;">
+    <div id="gsDrop" class="gs-drop" style="display:none;" tabindex="0" role="button" aria-label="Drop image or video here"></div>
+    <input id="gsFile" type="file" accept="image/*,video/*" hidden />
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+      <div class="gs-url-row" style="margin-top:0;"><input id="gsUrl" placeholder="https://... image URL (optional) â fetched server-side" /></div>
+      <div class="gs-url-row" style="margin-top:0;"><input id="gsContext" placeholder="Context (optional) â 'souk in Marrakech, afternoon'" /></div>
+      <div class="gs-url-row" style="margin-top:0;"><input id="gsGuess" placeholder="Guess to validate (optional) â 'Paris?'" /></div>
+      <div class="gs-url-row" style="margin-top:0;"><select id="gsModelSelect" title="Vision model override â Auto uses Settings default"><option value="">Auto (Settings default)</option></select></div>
+      <div class="gs-url-row" style="margin-top:0;">
+        <input id="gsApiKey" type="password" placeholder="Gemini API key (optional, this browser only)" autocomplete="off" spellcheck="false" />
+        <button class="gs-btn secondary" id="gsApiKeySave" title="Save key in this browser only">Save</button>
+        <button class="gs-btn secondary" id="gsApiKeyClear" title="Clear stored key">Clear</button>
+      </div>
+      <div class="gs-url-row" style="margin-top:0;">
+        <button class="gs-btn" id="gsAnalyze" disabled style="flex:0 0 auto;">&#9889; LOCATE</button>
+        <button class="gs-btn secondary" id="gsClear">Clear</button>
+        <button class="gs-btn secondary" id="gsExport" style="display:none;">Export JSON</button>
+        <label class="gs-meta" style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="gsVisionToggle" checked /> Vision</label>
+      </div>
+    </div>
+    <div class="gs-foot" style="margin-top:8px;">Drop / paste a photo or video anywhere on this page &middot; EXIF GPS is parsed locally &middot; big photos are auto-compressed before the vision call (original kept for EXIF)</div>
+  </div>
+
+  <!-- RESULTS: verdict band + collapsible sections -->
   <div id="gsResults" style="display:none; margin-top:14px;">
-    <div class="gs-card" style="margin-bottom:14px;">
+    <div class="gs-card">
       <div class="gs-verdict">
         <div style="min-width:220px; flex:1;">
           <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;"><span class="gs-meta" style="letter-spacing:1px;">VERDICT</span><span id="gsSourcePill"></span><span id="gsConfPill"></span></div>
@@ -3794,9 +3801,10 @@
         </div>
       </div>
     </div>
-    <div class="gs-grid">
-      <div class="gs-card">
-        <div class="gs-h">AI Analysis</div>
+
+    <details id="gsDAnalysis" class="gs-details" open>
+      <summary>AI Analysis <span id="gsAnaCount" class="badge-count gs-badge-count" style="display:none;"></span></summary>
+      <div class="gs-details-body">
         <div id="gsInterpretation" style="font-size:12.5px; color:#9baeb8; font-style:italic; background: rgba(255,255,255,0.03); border-left:2px solid rgba(100,150,255,0.35); padding:8px 10px; border-radius:0 8px 8px 0; margin-bottom:10px; display:none;"></div>
         <div id="gsVisionReason" style="font-size:13px; color:#cbd8e0; line-height:1.6; margin-bottom:4px;"></div>
         <div id="gsClues"></div>
@@ -3804,33 +3812,39 @@
         <div id="gsCandidates" style="margin-top:10px; display:none;"></div>
         <div id="gsVisionModel" class="gs-meta" style="margin-top:8px;"></div>
       </div>
-      <div class="gs-card">
-        <div class="gs-h">Forensics &mdash; EXIF</div>
+    </details>
+
+    <details id="gsDForensics" class="gs-details">
+      <summary>Forensics &amp; Pivots <span id="gsForCount" class="badge-count gs-badge-count" style="display:none;"></span></summary>
+      <div class="gs-details-body">
         <div id="gsExifBox"></div>
         <div id="gsDeviceIntel" style="margin-top:10px;"></div>
         <div class="gs-h">Pivots</div>
         <div id="gsPivots" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
         <div id="gsHooksNote" class="gs-foot" style="margin-top:8px;"></div>
       </div>
-    </div>
-    <div class="gs-card" style="margin-top:14px;">
-      <div class="gs-h">Google Cross-Check &mdash; Lens + Grounding</div>
-      <div id="gsGrounding" style="display:none; margin-bottom:6px;"></div>
-      <div id="gsLens" class="gs-lens-full" style="display:none;"></div>
-      <div class="gs-warn" style="margin-top:10px;">&#9888; Lab use only — tracking links, cloned pages, and device hooks are receipted techniques for authorized assessments. Do not deploy against non-consenting targets.</div>
-    </div>
+    </details>
+
+    <details id="gsDXcheck" class="gs-details">
+      <summary>Google Cross-Check &mdash; Lens + Grounding <span id="gsXcCount" class="badge-count gs-badge-count" style="display:none;"></span></summary>
+      <div class="gs-details-body">
+        <div id="gsGrounding" style="display:none; margin-bottom:6px;"></div>
+        <div id="gsLens" class="gs-lens-full" style="display:none;"></div>
+        <div class="gs-warn" style="margin-top:10px;">&#9888; Lab use only â tracking links, cloned pages, and device hooks are receipted techniques for authorized assessments. Do not deploy against non-consenting targets.</div>
+      </div>
+    </details>
   </div>
 
   <div id="gsError" class="gs-warn" style="display:none; margin-top:14px;"></div>
 
   <div class="gs-foot" style="margin-top:14px; border-top:1px solid rgba(255,255,255,0.06); padding-top:10px;">
-    How it works: <b>EXIF GPS</b> is parsed locally from JPEG APP1/TIFF (no upload needed for that check). <b>Vision AI</b> sends a compressed JPEG to your configured provider (OpenRouter / OpenAI / Gemini) with a geolocation prompt and optional context/guess — the image is not stored server-side. Results are logged to the Evidence Vault when a coordinate is produced. Inspired by the classic <b>Geospy</b> toolkit (Entynetproject) and <b>GeoIntel</b> (Gemini-powered multi-candidate analysis) — rebuilt here as a defensive lab.
+    How it works: <b>EXIF GPS</b> is parsed locally from JPEG APP1/TIFF (no upload needed for that check). <b>Vision AI</b> sends a compressed JPEG to your configured provider (OpenRouter / OpenAI / Gemini) with a geolocation prompt and optional context/guess â the image is not stored server-side. Results are logged to the Evidence Vault when a coordinate is produced. Inspired by the classic <b>Geospy</b> toolkit (Entynetproject) and <b>GeoIntel</b> (Gemini-powered multi-candidate analysis) â rebuilt here as a defensive lab.
   </div>
 </div>
 
 <script>
 (function(){
-  // Lazy API resolver — embed.js boots async, so T3MP3ST_API may not exist on first run.
+  // Lazy API resolver â embed.js boots async, so T3MP3ST_API may not exist on first run.
   // Every call re-resolves; first success is cached.
   let _apiBase = null;
   function apiBase(){
@@ -3844,14 +3858,14 @@
   function api(p){ const b = apiBase(); return (b ? b : '') + p; }
   // If embed.js loads late, pick up its baseUrl once
   window.addEventListener('t3mp3st:ready', function(){ try{ if(window.T3MP3ST_API && window.T3MP3ST_API.baseUrl){ const br=String(window.T3MP3ST_API.baseUrl); _apiBase = br.endsWith('/')?br.slice(0,-1):br; } }catch(e){} });
-  // also poll briefly at boot — some shells set baseUrl after DOMContentLoaded
+  // also poll briefly at boot â some shells set baseUrl after DOMContentLoaded
   let _poll = 0; const _int = setInterval(function(){ try{ if(window.T3MP3ST_API && window.T3MP3ST_API.baseUrl){ const br2=String(window.T3MP3ST_API.baseUrl); _apiBase = br2.endsWith('/')?br2.slice(0,-1):br2; clearInterval(_int);} }catch(e){} if(++_poll>20) clearInterval(_int); }, 250);
 
   const els = {
     drop: document.getElementById('gsDrop'),
+    empty: document.getElementById('gsEmpty'),
     file: document.getElementById('gsFile'),
     url: document.getElementById('gsUrl'),
-    urlBtn: document.getElementById('gsUrlBtn'),
     ctx: document.getElementById('gsContext'),
     guess: document.getElementById('gsGuess'),
     modelSelect: document.getElementById('gsModelSelect'),
@@ -3882,6 +3896,12 @@
     street: document.getElementById('gsStreetLink'),
     coordChip: document.getElementById('gsCoordChip'),
     actions: document.getElementById('gsActions'),
+    dAnalysis: document.getElementById('gsDAnalysis'),
+    dForensics: document.getElementById('gsDForensics'),
+    dXcheck: document.getElementById('gsDXcheck'),
+    anaCount: document.getElementById('gsAnaCount'),
+    forCount: document.getElementById('gsForCount'),
+    xcCount: document.getElementById('gsXcCount'),
     sourcePill: document.getElementById('gsSourcePill'),
     confPill: document.getElementById('gsConfPill'),
     place: document.getElementById('gsPlace'),
@@ -3919,11 +3939,11 @@
   function ensureMap(){
     if(map) return true;
     if(typeof L === 'undefined'){
-      // Leaflet CDN may still be loading — poll briefly
+      // Leaflet CDN may still be loading â poll briefly
       let tries = 0;
       const iv = setInterval(function(){
         if(typeof L !== 'undefined'){ clearInterval(iv); leafletReady = true; ensureMap(); }
-        if(++tries > 20){ clearInterval(iv); els.mapEl.innerHTML = '<div style="padding:40px; text-align:center; color:#6f8794; font-size:13px;">Map unavailable — Leaflet failed to load.<br/>Coordinates and links still work below.</div>'; }
+        if(++tries > 20){ clearInterval(iv); els.mapEl.innerHTML = '<div style="padding:40px; text-align:center; color:#6f8794; font-size:13px;">Map unavailable â Leaflet failed to load.<br/>Coordinates and links still work below.</div>'; }
       }, 300);
       return false;
     }
@@ -3935,7 +3955,7 @@
       // Click map -> that point in Google Maps 3D; right-click -> Street View
       map.on('click', function(e){ openGmaps3D(e.latlng.lat, e.latlng.lng); });
       map.on('contextmenu', function(e){ openStreetView(e.latlng.lat, e.latlng.lng); });
-      // invalidate after paint — container may have been hidden during init
+      // invalidate after paint â container may have been hidden during init
       setTimeout(function(){ try{ map.invalidateSize(); }catch(e){} }, 250);
       return true;
     } catch(e){
@@ -3989,7 +4009,7 @@
       }catch(e){}
     }, 30);
     if(label) try{ marker.bindPopup(String(label).slice(0,160)).openPopup(); }catch(e){}
-    // flyTo with animation — the "dropdown pin" effect
+    // flyTo with animation â the "dropdown pin" effect
     try{ map.flyTo(ll, 14, { duration: 1.1, easeLinearity: 0.2 }); }catch{ map.setView(ll, 14); }
     setTimeout(function(){ try{ map.invalidateSize(); }catch(e){} }, 400);
     els.coordLabel.textContent = lat.toFixed(5) + ', ' + lon.toFixed(5);
@@ -4031,7 +4051,7 @@
         // default to server's model when present
         if(!cur && j.model && seen.has(j.model)) els.modelSelect.value = j.model;
       }
-    }catch{ els.visionBadge.textContent = 'Status unavailable — server not reachable?'; }
+    }catch{ els.visionBadge.textContent = 'Status unavailable â server not reachable?'; }
   }
   checkStatus();
 
@@ -4039,6 +4059,7 @@
     els.img.style.display='none'; els.img.src='';
     els.vid.style.display='none'; els.vid.src=''; try{ els.vid.load(); }catch(e){}
     els.preview.style.display='none';
+    if(els.empty) els.empty.style.display='flex';
     els.frameHint.style.display='none';
     els.exifPreview.style.display='none'; els.exifPreview.textContent='';
     current = { b64:'', mime:'image/jpeg', kind:'image', w:0, h:0, bytes:0 };
@@ -4102,6 +4123,11 @@
     }catch(e){}
   }
 
+  function showPreviewImage(){
+    if(els.empty) els.empty.style.display='none';
+    els.preview.style.display='flex';
+  }
+
   async function handleFile(file){
     clearError(); els.results.style.display='none';
     if(!file){ return; }
@@ -4111,8 +4137,20 @@
     const extVideo = /.(mp4|mov|webm|m4v|avi|mkv)$/i.test(name);
     const isVideo = t.startsWith('video/') || (!t && extVideo);
     const isImage = t.startsWith('image/') || (!t && extImage) || (!isVideo && extImage);
-    if(!isVideo && !isImage){ showError('Unsupported file — use an image (JPEG/PNG/WEBP) or video (MP4/MOV/WEBM).'); return; }
-    if(file.size > 25*1024*1024){ showError('File too large — max 25 MB. Trim or compress and retry.'); return; }
+    if(!isVideo && !isImage){ showError('Unsupported file â use an image (JPEG/PNG/WEBP) or video (MP4/MOV/WEBM).'); return; }
+    if(file.size > 25*1024*1024){ showError('File too large â max 25 MB. Trim or compress and retry.'); return; }
+    // HEIC/HEIF: Windows browsers cannot decode it in <img> â say so instead of a blank tile
+    const isHeic = t === 'image/heic' || t === 'image/heif' || /.hei[cf]$/.test(name);
+    if(isImage && isHeic){
+      if(els.empty) els.empty.style.display='none';
+      els.preview.style.display='flex';
+      els.img.style.display='none'; els.img.removeAttribute('src');
+      els.preview.innerHTML = '<div style="text-align:center; padding:24px; color:#ffb142; font-size:13px; line-height:1.7;"><div style="font-size:26px;">&#128247;</div><b>HEIC/HEIF photo â Windows browsers cannot display it.</b><br/>The location work still cannot read it either. Convert first:<br/><span style="color:#9baeb8;">iPhone: Settings &rarr; Camera &rarr; Formats &rarr; Most Compatible</span><br/><span style="color:#9baeb8;">or open the file in Paint / Photos and Save As JPEG, then drop it here</span></div>';
+      els.analyze.disabled = true;
+      els.meta.textContent = file.name + ' â HEIC â convert to JPEG to analyze';
+      showError('HEIC photo dropped â convert to JPEG (or switch your camera to "Most Compatible") and drop it again.');
+      return;
+    }
 
     if(isImage){
       const data = await fileToB64(file);
@@ -4120,36 +4158,45 @@
       current = { b64: b64, mime: mime, kind:'image', w:0, h:0, bytes: bytes };
       // onload BEFORE src to avoid race on data: URLs; hide video, show image
       els.vid.style.display='none'; try{ els.vid.pause(); els.vid.removeAttribute('src'); els.vid.load(); }catch(e){}
-      els.img.onload = function(){ current.w = els.img.naturalWidth; current.h = els.img.naturalHeight; els.meta.textContent += ' — ' + current.w + 'x' + current.h; };
-      els.img.onerror = function(){ els.meta.textContent += ' — preview failed to render'; };
+      els.img.onload = function(){ current.w = els.img.naturalWidth; current.h = els.img.naturalHeight; els.meta.textContent += ' â ' + current.w + 'x' + current.h; };
+      els.img.onerror = function(){ els.meta.textContent += ' â preview failed to render'; };
       els.img.src = 'data:' + mime + ';base64,' + b64;
       els.img.style.display='block';
-      els.preview.style.display='block';
+      showPreviewImage();
       els.analyze.disabled = false;
-      els.meta.textContent = file.name + ' — ' + Math.round(bytes/1024) + ' KB — ' + mime;
-      // immediate EXIF probe — this is the "not reading exif" fix: surface it on intake, not just after LOCATE
+      els.meta.textContent = file.name + ' â ' + Math.round(bytes/1024) + ' KB â ' + mime;
+      // immediate EXIF probe â this is the "not reading exif" fix: surface it on intake, not just after LOCATE
       probeExif(b64);
     } else {
       const url = URL.createObjectURL(file);
       els.img.style.display='none'; els.img.removeAttribute('src');
       els.vid.src = url;
       els.vid.style.display='block';
-      els.preview.style.display='block';
+      showPreviewImage();
       els.frameHint.style.display='block';
       els.analyze.disabled = false;
-      els.meta.textContent = file.name + ' — ' + Math.round(file.size/1024) + ' KB — video (seek to best frame, then LOCATE)';
+      els.meta.textContent = file.name + ' â ' + Math.round(file.size/1024) + ' KB â video (seek to best frame, then LOCATE)';
       current = { b64:'', mime:'video/mp4', kind:'video', w:0, h:0, bytes: file.size, videoFile: file, objectUrl: url };
       els.vid.onloadedmetadata = function(){ current.w = els.vid.videoWidth; current.h = els.vid.videoHeight; };
     }
   }
 
   // intake events
+  if(els.empty){
+    els.empty.addEventListener('click', function(){ els.file.click(); });
+    els.empty.addEventListener('keydown', function(e){ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); els.file.click(); }});
+  }
   els.drop.addEventListener('click', function(){ els.file.click(); });
   els.drop.addEventListener('keydown', function(e){ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); els.file.click(); }});
   els.file.addEventListener('change', function(){ const f=els.file.files && els.file.files[0]; if(f) handleFile(f); });
-  ['dragenter','dragover'].forEach(function(ev){ els.drop.addEventListener(ev, function(e){ e.preventDefault(); els.drop.classList.add('drag'); }); });
-  ['dragleave','drop'].forEach(function(ev){ els.drop.addEventListener(ev, function(e){ e.preventDefault(); els.drop.classList.remove('drag'); }); });
-  els.drop.addEventListener('drop', function(e){
+  // document-wide drag & drop â drop anywhere on the page
+  let dragDepth = 0;
+  document.addEventListener('dragenter', function(e){ e.preventDefault(); dragDepth++; els.drop.classList.add('drag'); if(els.empty) els.empty.style.borderColor='rgba(47,255,210,0.5)'; });
+  document.addEventListener('dragover', function(e){ e.preventDefault(); });
+  document.addEventListener('dragleave', function(e){ e.preventDefault(); if(--dragDepth<=0){ dragDepth=0; els.drop.classList.remove('drag'); if(els.empty) els.empty.style.borderColor=''; } });
+  document.addEventListener('drop', function(e){
+    e.preventDefault(); dragDepth=0; els.drop.classList.remove('drag');
+    if(els.empty) els.empty.style.borderColor='';
     const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if(f) handleFile(f);
   });
@@ -4158,27 +4205,28 @@
     if(!item) return;
     const f = item.getAsFile(); if(f) { e.preventDefault(); await handleFile(f); }
   });
-  els.urlBtn.addEventListener('click', async function(){
+  els.url.addEventListener('keydown', async function(e){
+    if(e.key !== 'Enter') return;
     const u = els.url.value.trim(); if(!u) return;
     if(!(u.toLowerCase().startsWith('https://')||u.toLowerCase().startsWith('http://'))){ showError('Enter a valid http(s) image URL'); return; }
     clearError();
     try{
-      els.urlBtn.textContent='Loading...'; els.urlBtn.disabled=true;
+      els.url.disabled=true;
       const rr = await fetch(api('/api/geospy/fetch-image'), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ imageUrl: u }) });
       const jj = await rr.json();
       if(!rr.ok) throw new Error(jj.error || ('HTTP '+rr.status));
       const b64 = jj.b64 || jj.imageBase64; const mime = jj.mime || 'image/jpeg';
       if(!b64) throw new Error('Server returned no image data');
       current = { b64: b64, mime: mime, kind:'image', w: jj.w||0, h: jj.h||0, bytes: Math.round(b64.length*0.75) };
-      els.vid.style.display='none'; try{ els.vid.pause(); els.vid.removeAttribute('src'); els.vid.load(); }catch(e){}
-      els.img.onload = function(){ current.w = els.img.naturalWidth; current.h = els.img.naturalHeight; els.meta.textContent += ' — '+current.w+'x'+current.h; };
-      els.img.onerror = function(){ showError('URL image preview failed to render — try downloading and dropping the file.'); };
+      els.vid.style.display='none'; try{ els.vid.pause(); els.vid.removeAttribute('src'); els.vid.load(); }catch(e2){}
+      els.img.onload = function(){ current.w = els.img.naturalWidth; current.h = els.img.naturalHeight; els.meta.textContent += ' â '+current.w+'x'+current.h; };
+      els.img.onerror = function(){ showError('URL image preview failed to render â try downloading and dropping the file.'); };
       els.img.src = 'data:'+mime+';base64,'+b64;
-      els.img.style.display='block'; els.preview.style.display='block'; els.analyze.disabled=false;
-      els.meta.textContent = 'URL image — '+mime+' — '+Math.round(b64.length*0.75/1024)+' KB';
+      els.img.style.display='block'; showPreviewImage(); els.analyze.disabled=false;
+      els.meta.textContent = 'URL image â '+mime+' â '+Math.round(b64.length*0.75/1024)+' KB';
       probeExif(b64);
-    }catch(err){ showError('Could not fetch URL via server: ' + (err.message||String(err)).slice(0,160) + ' — try downloading and dropping the file instead.'); }
-    finally{ els.urlBtn.textContent='Load URL'; els.urlBtn.disabled=false; }
+    }catch(err){ showError('Could not fetch URL via server: ' + (err.message||String(err)).slice(0,160) + ' â try downloading and dropping the file instead.'); }
+    finally{ els.url.disabled=false; }
   });
   els.clear.addEventListener('click', function(){
     resetPreview(); els.results.style.display='none'; clearError(); els.url.value='';
@@ -4193,7 +4241,7 @@
   });
 
   els.exportBtn.addEventListener('click', function(){
-    if(!lastVerdict){ showError('Nothing to export yet — run LOCATE first.'); return; }
+    if(!lastVerdict){ showError('Nothing to export yet â run LOCATE first.'); return; }
     const blob = new Blob([JSON.stringify(lastVerdict, null, 2)], { type:'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -4217,11 +4265,44 @@
     return '<span class="gs-source vision">VISION AI</span>';
   }
 
+  // Downscale big photos client-side before the vision call (10 MB JSON cap, faster upload).
+  // The ORIGINAL b64 stays in current.b64 and rides along as exifImageBase64 â canvas re-encoding strips EXIF.
+  function downscaleImage(b64, mime, maxW){
+    return new Promise(function(res){
+      try{
+        const im = new Image();
+        im.onload = function(){
+          try{
+            if(im.naturalWidth <= maxW && b64.length < 1_400_000){ res(null); return; } // small enough already
+            const sc = Math.min(1, maxW / im.naturalWidth);
+            const c = document.createElement('canvas');
+            c.width = Math.max(1, Math.round(im.naturalWidth * sc));
+            c.height = Math.max(1, Math.round(im.naturalHeight * sc));
+            const ctx = c.getContext('2d');
+            ctx.drawImage(im, 0, 0, c.width, c.height);
+            const du = c.toDataURL('image/jpeg', 0.85);
+            const nb = du.includes(',') ? du.split(',')[1] : du;
+            if(nb && nb.length < b64.length) res({ b64: nb, mime:'image/jpeg', w:c.width, h:c.height });
+            else res(null);
+          }catch(e2){ res(null); }
+        };
+        im.onerror = function(){ res(null); };
+        im.src = 'data:' + mime + ';base64,' + b64;
+      }catch(e){ res(null); }
+    });
+  }
+
+  function setBadge(el, n){
+    if(!el) return;
+    if(n > 0){ el.textContent = String(n); el.style.display='inline-block'; }
+    else { el.style.display='none'; }
+  }
+
   els.analyze.addEventListener('click', async function(){
     clearError();
     let b64 = current.b64, mime = current.mime;
     if(current.kind==='video'){
-      if(!els.vid.videoWidth){ showError('Video not ready — wait for it to load, then seek to a clear frame.'); return; }
+      if(!els.vid.videoWidth){ showError('Video not ready â wait for it to load, then seek to a clear frame.'); return; }
       try{
         if(els.vid.currentTime < 0.2 && els.vid.duration > 1) els.vid.currentTime = Math.min(1, els.vid.duration * 0.15);
         await new Promise(function(r){ setTimeout(r, 120); });
@@ -4229,7 +4310,7 @@
         b64 = fr.b64; mime = fr.mime;
       }catch(err){ showError('Could not extract video frame: ' + (err.message||String(err))); return; }
     }
-    if(!b64 || b64.length < 100){ showError('No image data — drop an image or seek the video to a frame first.'); return; }
+    if(!b64 || b64.length < 100){ showError('No image data â drop an image or seek the video to a frame first.'); return; }
 
     els.analyze.disabled = true;
     els.analyze.textContent = 'Analyzing...';
@@ -4238,8 +4319,16 @@
     try{
       const selModel = (els.modelSelect && els.modelSelect.value.trim()) || undefined;
       const inlineKey = (els.apiKey && els.apiKey.value.trim()) || getStoredKey() || undefined;
-      const _uFallback = els.url ? els.url.value.trim() : ''; const urlFallback = (!b64 || b64.length<100) && (_uFallback.toLowerCase().startsWith('https://')||_uFallback.toLowerCase().startsWith('http://')) ? _uFallback : undefined;
-      const payload = urlFallback ? { imageUrl: urlFallback, mime: mime, doVision: els.visionToggle.checked, visionTimeoutMs: 25000, context: (els.ctx && els.ctx.value.trim()) || undefined, guess: (els.guess && els.guess.value.trim()) || undefined, model: selModel, apiKey: inlineKey } : { imageBase64: b64, mime: mime, doVision: els.visionToggle.checked, visionTimeoutMs: 25000, context: (els.ctx && els.ctx.value.trim()) || undefined, guess: (els.guess && els.guess.value.trim()) || undefined, model: selModel, apiKey: inlineKey };
+      // Vision payload: downscaled when the photo is big; EXIF always from the ORIGINAL
+      let sendB64 = b64, sendMime = mime, exifB64;
+      if(current.kind === 'image'){
+        const ds = await downscaleImage(b64, mime, 1600);
+        if(ds){ sendB64 = ds.b64; sendMime = ds.mime; exifB64 = b64 !== ds.b64 ? b64 : undefined; }
+      }
+      const _uFallback = els.url ? els.url.value.trim() : ''; const urlFallback = (!sendB64 || sendB64.length<100) && (_uFallback.toLowerCase().startsWith('https://')||_uFallback.toLowerCase().startsWith('http://')) ? _uFallback : undefined;
+      const base = urlFallback ? { imageUrl: urlFallback, mime: sendMime } : { imageBase64: sendB64, mime: sendMime };
+      if(exifB64) base.exifImageBase64 = exifB64;
+      const payload = Object.assign(base, { doVision: els.visionToggle.checked, visionTimeoutMs: 25000, context: (els.ctx && els.ctx.value.trim()) || undefined, guess: (els.guess && els.guess.value.trim()) || undefined, model: selModel, apiKey: inlineKey });
       const headers = {'content-type':'application/json'};
       if(inlineKey) headers['x-api-key'] = inlineKey;
       const r = await fetch(api('/api/geospy/analyze'), {
@@ -4252,7 +4341,7 @@
       lastVerdict = j;
       els.exportBtn.style.display='inline-flex';
 
-      els.results.style.display='grid';
+      els.results.style.display='block';
       els.sourcePill.innerHTML = sourcePill(j.source);
       els.confPill.innerHTML = pillFor(j.confidence);
 
@@ -4278,7 +4367,7 @@
         } else { els.actions.innerHTML=''; }
       }
       els.place.textContent = j.vision && j.vision.place ? j.vision.place : (j.reverse && j.reverse.label ? j.reverse.label : (hasCoord ? lat.toFixed(5)+', '+lon.toFixed(5) : 'No location determined'));
-      els.reverse.textContent = j.reverse && j.reverse.label ? j.reverse.label : (hasCoord ? '' : 'No coordinate — see clues and forensics below.');
+      els.reverse.textContent = j.reverse && j.reverse.label ? j.reverse.label : (hasCoord ? '' : 'No coordinate â see clues and forensics below.');
       if(j.vision && j.vision.interpretation){
         els.interpretation.textContent = j.vision.interpretation;
         els.interpretation.style.display='block';
@@ -4294,7 +4383,7 @@
       if(lms.length){
         els.landmarks.innerHTML = '<div class="gs-meta" style="font-weight:600;">Landmarks</div><div style="margin-top:4px;">' + lms.map(function(x){ return '<span class="gs-pill">'+ String(x).replace(/</g,'&lt;') +'</span>'; }).join('') + '</div>';
       }
-      els.visionModel.textContent = j.vision ? ('Vision: ' + (j.vision.model||'unknown') + (j.vision.note ? ' — ' + j.vision.note : '')) : '';
+      els.visionModel.textContent = j.vision ? ('Vision: ' + (j.vision.model||'unknown') + (j.vision.note ? ' â ' + j.vision.note : '')) : '';
 
       els.candidates.innerHTML = '';
       const locs = (j.vision && j.vision.locations) || [];
@@ -4333,7 +4422,7 @@
       if(ex.datetime) exHtml += '<div class="gs-kv"><dt>Captured</dt><dd>' + String(ex.datetime).replace(/</g,'&lt;') + '</dd></div>';
       if(ex.raw && ex.raw.gpsTags) exHtml += '<div style="margin-top:6px; font-size:11px; color:#5f7582;">GPS tags: ' + String(ex.raw.gpsTags).replace(/</g,'&lt;') + '</div>';
       if(ex.raw && ex.raw.ifd0Tags) exHtml += '<div style="margin-top:6px; font-size:11px; color:#5f7582;">IFD0 tags: ' + String(ex.raw.ifd0Tags).replace(/</g,'&lt;').slice(0,200) + '</div>';
-      exHtml += '<div class="gs-meta" style="margin-top:6px;">' + (ex.hasGps ? 'EXIF GPS is forensic truth — vision is not needed.' : 'Tip: original photos from camera roll retain GPS; screenshots and social downloads strip it.') + '</div>';
+      exHtml += '<div class="gs-meta" style="margin-top:6px;">' + (ex.hasGps ? 'EXIF GPS is forensic truth â vision is not needed.' : 'Tip: original photos from camera roll retain GPS; screenshots and social downloads strip it.') + '</div>';
       els.exifBox.innerHTML = exHtml;
 
       // also sync the intake preview
@@ -4350,7 +4439,7 @@
       const gg = j.googleGrounding;
       if(els.grounding){
         if(gg && Array.isArray(gg.hits) && gg.hits.length){
-          els.grounding.innerHTML = '<div class="gs-meta" style="font-weight:600; margin-bottom:4px;">Google grounding — second opinion for "'+ String(gg.query).replace(/</g,'&lt;').slice(0,80) +'"</div>' + gg.hits.map(function(h){ return '<div style="padding:4px 0; border-top:1px solid rgba(255,255,255,0.06);"><a href="'+ String(h.url).replace(/"/g,'&quot;') +'" target="_blank" rel="noopener" style="color:#70a1ff; font-size:12.5px; text-decoration:none;">'+ String(h.title).replace(/</g,'&lt;') +'</a><div style="font-size:11px; color:#5f7582; word-break:break-all;">'+ String(h.url).replace(/</g,'&lt;').slice(0,90) +'</div></div>'; }).join('');
+          els.grounding.innerHTML = '<div class="gs-meta" style="font-weight:600; margin-bottom:4px;">Google grounding â second opinion for "'+ String(gg.query).replace(/</g,'&lt;').slice(0,80) +'"</div>' + gg.hits.map(function(h){ return '<div style="padding:4px 0; border-top:1px solid rgba(255,255,255,0.06);"><a href="'+ String(h.url).replace(/"/g,'&quot;') +'" target="_blank" rel="noopener" style="color:#70a1ff; font-size:12.5px; text-decoration:none;">'+ String(h.title).replace(/</g,'&lt;') +'</a><div style="font-size:11px; color:#5f7582; word-break:break-all;">'+ String(h.url).replace(/</g,'&lt;').slice(0,90) +'</div></div>'; }).join('');
           els.grounding.style.display='block';
         } else if(gg && gg.note){ els.grounding.innerHTML = '<div class="gs-meta">Google grounding: '+ String(gg.note).replace(/</g,'&lt;') +'</div>'; els.grounding.style.display='block'; }
         else { els.grounding.innerHTML=''; els.grounding.style.display='none'; }
@@ -4362,16 +4451,16 @@
           els.lens.innerHTML = '<div class="gs-meta">Lens: no reverse-image results for this image. <a href="https://lens.google.com/upload" target="_blank" rel="noopener" style="color:#2fffd2;">Open in Google Lens &#8599;</a></div>';
           els.lens.style.display='block';
         } else {
-          let html = '<div class="gs-meta" style="font-weight:700; margin-bottom:6px;">Google Lens — reverse image (' + ((lens.hits&&lens.hits.length)||0) + ' hits)</div>';
+          let html = '<div class="gs-meta" style="font-weight:700; margin-bottom:6px;">Google Lens â reverse image (' + ((lens.hits&&lens.hits.length)||0) + ' hits)</div>';
           if(lens.note) html += '<div class="gs-meta" style="color:#ffb142; margin-bottom:6px;">' + esc(lens.note) + '</div>';
           const rv = lens.refinedVision;
           if(rv){
             const hasLL = Number.isFinite(rv.lat) && Number.isFinite(rv.lon);
             html += '<div style="border:1px solid rgba(47,255,210,0.30); border-radius:10px; padding:10px 12px; background: linear-gradient(135deg, rgba(47,255,210,0.08), rgba(100,150,255,0.05)); margin-bottom:10px;">';
-            html += '<div style="font-size:11px; letter-spacing:0.6px; text-transform:uppercase; color:#2fffd2; font-weight:700;">Lens second-opinion — re-analyzed via ' + esc(rv.model||'vision') + '</div>';
+            html += '<div style="font-size:11px; letter-spacing:0.6px; text-transform:uppercase; color:#2fffd2; font-weight:700;">Lens second-opinion â re-analyzed via ' + esc(rv.model||'vision') + '</div>';
             if(rv.place) html += '<div style="font-size:14px; color:#e0e0e0; font-weight:700; margin-top:4px;">' + esc(rv.place) + '</div>';
             if(hasLL) html += '<div class="gs-meta" style="margin-top:2px;">' + Number(rv.lat).toFixed(5) + ', ' + Number(rv.lon).toFixed(5) + ' &nbsp;' + pillFor(rv.confidence) + '</div>';
-            else html += '<div class="gs-meta" style="margin-top:2px;">' + pillFor(rv.confidence) + (rv.city||rv.country ? ' — ' + esc([rv.city, rv.state, rv.country].filter(Boolean).join(', ')) : '') + '</div>';
+            else html += '<div class="gs-meta" style="margin-top:2px;">' + pillFor(rv.confidence) + (rv.city||rv.country ? ' â ' + esc([rv.city, rv.state, rv.country].filter(Boolean).join(', ')) : '') + '</div>';
             if(rv.reasoning) html += '<div style="font-size:12.5px; color:#9baeb8; margin-top:6px; line-height:1.55;">' + esc(rv.reasoning).slice(0,620) + '</div>';
             if(rv.clues && rv.clues.length) html += '<div style="margin-top:6px;">' + rv.clues.slice(0,4).map(function(c){ return '<div class="gs-clue">'+esc(c)+'</div>'; }).join('') + '</div>';
             if(hasLL) html += '<button class="gs-btn" data-lens-use style="margin-top:8px; font-size:12px; padding:6px 12px;" data-lat="'+rv.lat+'" data-lon="'+rv.lon+'" data-label="'+esc(rv.place||rv.city||'Lens hit')+'">Use Lens pin on map &#9673;</button>';
@@ -4413,9 +4502,9 @@
               if(src){
                 const safeSrc = esc(src);
                 const fbId = 'gs-fb-'+Math.random().toString(36).slice(2,7);
-                imgTag = '<a href="'+linkHref+'" target="_blank" rel="noopener" style="display:block; line-height:0;"><img src="'+safeSrc+'" alt="" referrerpolicy="no-referrer" crossorigin="anonymous" style="width:100%; height:132px; object-fit:cover; border-radius:6px 6px 0 0; background:#050b10; display:block;" loading="lazy" onerror="this.style.display=\'none\';var f=document.getElementById(\''+fbId+'\');if(f)f.style.display=\'flex\'" /><div id="'+fbId+'" style="display:none;height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview — <a href="'+linkHref+'" target="_blank" rel="noopener" style="color:#70a1ff; margin-left:4px;">open</a></div></a>';
+                imgTag = '<a href="'+linkHref+'" target="_blank" rel="noopener" style="display:block; line-height:0;"><img src="'+safeSrc+'" alt="" referrerpolicy="no-referrer" crossorigin="anonymous" style="width:100%; height:132px; object-fit:cover; border-radius:6px 6px 0 0; background:#050b10; display:block;" loading="lazy" onerror="this.style.display=\'none\';var f=document.getElementById(\''+fbId+'\');if(f)f.style.display=\'flex\'" /><div id="'+fbId+'" style="display:none;height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview â <a href="'+linkHref+'" target="_blank" rel="noopener" style="color:#70a1ff; margin-left:4px;">open</a></div></a>';
               } else {
-                imgTag = '<div style="height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; display:flex; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview — <a href="'+linkHref+'" target="_blank" rel="noopener" style="color:#70a1ff; margin-left:4px;">open</a></div>';
+                imgTag = '<div style="height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; display:flex; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview â <a href="'+linkHref+'" target="_blank" rel="noopener" style="color:#70a1ff; margin-left:4px;">open</a></div>';
               }
               const reanalyzeUrl = String(h.imageUrl || h.thumbUrl || '').trim();
               html += '<div style="border:1px solid rgba(255,255,255,0.08); border-radius:10px; overflow:hidden; background: rgba(0,0,0,0.22); display:flex; flex-direction:column;">' + imgTag + '<div style="padding:8px 10px; flex:1; display:flex; flex-direction:column; gap:6px;">';
@@ -4427,7 +4516,7 @@
             });
             html += '</div>';
           }
-          html += '<div class="gs-meta" style="margin-top:8px;">Lens images are fed back to the main model for location assessment — hit <b>Re-analyze</b> on any card to run that match through vision again. <a href="https://lens.google.com/upload" target="_blank" rel="noopener" style="color:#2fffd2;">Full Lens ↗</a></div>';
+          html += '<div class="gs-meta" style="margin-top:8px;">Lens images are fed back to the main model for location assessment â hit <b>Re-analyze</b> on any card to run that match through vision again. <a href="https://lens.google.com/upload" target="_blank" rel="noopener" style="color:#2fffd2;">Full Lens â</a></div>';
           els.lens.innerHTML = html;
           // wire re-analyze
           els.lens.querySelectorAll('.lens-reanalyze').forEach(function(btn){
@@ -4445,7 +4534,7 @@
                 const rv2 = jj.refinedVision;
                 if(!rv2){ btn.textContent='No location from this hit'; setTimeout(function(){ btn.textContent=prev; btn.disabled=false; }, 2500); return; }
                 const hasLL2 = Number.isFinite(rv2.lat) && Number.isFinite(rv2.lon);
-                btn.textContent = (rv2.place||rv2.city||'Analyzed') + ' — ' + String(rv2.confidence||'').toUpperCase();
+                btn.textContent = (rv2.place||rv2.city||'Analyzed') + ' â ' + String(rv2.confidence||'').toUpperCase();
                 const card = btn.closest('div');
                 if(card){
                   const resEl = document.createElement('div');
@@ -4474,6 +4563,14 @@
         els.lens.style.display='block';
       }
       els.hooksNote.textContent = (j.hooks && j.hooks.trackingLinkHint) || '';
+
+      // section badges + smart collapse: only open what actually has something to say
+      setBadge(els.anaCount, clues.length + lms.length + locs.length);
+      setBadge(els.forCount, (ex.hasGps ? 1 : 0) + intel.length);
+      const lensHits = (j.lens && j.lens.hits && j.lens.hits.length) || 0;
+      setBadge(els.xcCount, lensHits);
+      if(els.dForensics) els.dForensics.open = !!ex.hasGps;
+      if(els.dXcheck) els.dXcheck.open = !!(j.lens && (j.lens.refinedVision || lensHits > 0));
 
       if(hasCoord) setMap(lat, lon, (j.vision && j.vision.place) || (j.reverse && j.reverse.label) || '');
 
