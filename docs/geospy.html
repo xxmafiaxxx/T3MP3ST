@@ -4141,7 +4141,7 @@
     if(!file){ return; }
     const t = (file.type||'').toLowerCase();
     const name = (file.name||'').toLowerCase();
-    const extImage = /.(jpe?g|png|webp|heic|heif|bmp|gif|avif)$/i.test(name);
+    const extImage = /\.(jpe?g|png|webp|heic|heif|bmp|gif|avif)$/i.test(name);
     const extVideo = /.(mp4|mov|webm|m4v|avi|mkv)$/i.test(name);
     const isVideo = t.startsWith('video/') || (!t && extVideo);
     const isImage = t.startsWith('image/') || (!t && extImage) || (!isVideo && extImage);
@@ -4219,12 +4219,12 @@
     // URL drop (e.g., dragging image from another tab)
     const uri = dt && (dt.getData('text/uri-list') || dt.getData('text/plain') || '');
     const u = (uri||'').trim().split(/\s+/)[0] || '';
-    if(u && /^https?:///i.test(u)){ els.url.value = u; els.url.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'})); }
+    if(u && /^https?://i.test(u)){ els.url.value = u; els.url.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'})); }
   });
   document.addEventListener('paste', async function(e){
     // Win copied file lives in clipboardData.files, not items
     if(e.clipboardData && e.clipboardData.files && e.clipboardData.files.length){
-      const pf = [...e.clipboardData.files].find(function(f){ return /^image//.test(f.type) || /^video//.test(f.type) || /.(jpe?g|png|webp|heic|heif|bmp|gif|mp4|mov|webm)$/i.test(f.name||''); });
+      const pf = [...e.clipboardData.files].find(function(f){ return /^image\//.test(f.type) || /^video\//.test(f.type) || /.(jpe?g|png|webp|heic|heif|bmp|gif|mp4|mov|webm)$/i.test(f.name||''); });
       if(pf){ e.preventDefault(); await handleFile(pf); return; }
     }
     const items = [...(e.clipboardData && e.clipboardData.items || [])];

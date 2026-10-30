@@ -519,12 +519,10 @@ export async function visionLocate(
     // Gemini uses a different wire (generateContent) — handle separately
     if (pick.provider === 'gemini') {
       const b64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
-      // Native groundings: Gemini 2/3 support google_search — letting it browse beats pure hallucination on generic landscapes.
-      const useGrounding = /gemini-(2\.5|3)/i.test(pick.model);
+      const isThinking = /gemini-3/i.test(pick.model);
       const gemBody: Record<string, unknown> = {
         contents: [{ role: 'user', parts: [{ text: VISION_SYSTEM + '\n\nLocate this image. Return the JSON only.' + (opts.context ? `\nContext: ${opts.context}` : '') + (opts.guess ? `\nGuess: ${opts.guess}` : '') }, { inline_data: { mime_type: mime || 'image/jpeg', data: b64 } }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 1100 },
-        ...(useGrounding ? { tools: [{ google_search: {} }] } : {}),
+        generationConfig: { temperature: 0.2, maxOutputTokens: isThinking ? 1800 : 1100, responseMimeType: 'application/json' } as unknown as Record<string, unknown>,
       };
       // Native generateContent lives at /v1beta/models/...  but config gemini baseUrl is the
       // OpenAI-compat path /v1beta/openai — strip the /openai segment for the native call.
