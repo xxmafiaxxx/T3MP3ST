@@ -519,9 +519,12 @@ export async function visionLocate(
     // Gemini uses a different wire (generateContent) — handle separately
     if (pick.provider === 'gemini') {
       const b64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
-      const gemBody = {
+      // Native groundings: Gemini 2/3 support google_search — letting it browse beats pure hallucination on generic landscapes.
+      const useGrounding = /gemini-(2\.5|3)/i.test(pick.model);
+      const gemBody: Record<string, unknown> = {
         contents: [{ role: 'user', parts: [{ text: VISION_SYSTEM + '\n\nLocate this image. Return the JSON only.' + (opts.context ? `\nContext: ${opts.context}` : '') + (opts.guess ? `\nGuess: ${opts.guess}` : '') }, { inline_data: { mime_type: mime || 'image/jpeg', data: b64 } }] }],
         generationConfig: { temperature: 0.2, maxOutputTokens: 1100 },
+        ...(useGrounding ? { tools: [{ google_search: {} }] } : {}),
       };
       // Native generateContent lives at /v1beta/models/...  but config gemini baseUrl is the
       // OpenAI-compat path /v1beta/openai — strip the /openai segment for the native call.
@@ -995,37 +998,67 @@ export async function lensReverseSearch(
 export async function googleGroundingSearch(query: string): Promise<GoogleGrounding> {
   const q = query.trim().slice(0, 200);
   if (!q) return { query: q, hits: [], note: 'empty query' };
-  try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
-    const res = await directFetch(url as never, { headers: { 'user-agent': 'T3MP3ST-Geospy/1.0' } } as never) as unknown as Response;
-    const html = await (res as unknown as { text: () => Promise<string> }).text();
-    const hits: Array<{ title: string; url: string; snippet?: string }> = [];
-    // Very small parser: <a class="result__url" href="..."> and <h2 class="result__title">
+  const UA = BING_UA;
+  const fetchWithTimeout = async (url: string, headers: Record<string,string>, ms=8000): Promise<{ html:string; status:number; finalUrl:string } | null> => {
+    const ctrl = new AbortController(); const t=setTimeout(()=>ctrl.abort(), ms);
+    try{
+      const r = await directFetch(url as never, { headers: headers as never, signal: ctrl.signal as never } as never) as unknown as globalThis.Response;
+      const html = await (r as unknown as { text():Promise<string>}).text();
+      return { html, status: r.status, finalUrl: String((r as unknown as {url?:string}).url||url) };
+    }catch{ return null; }finally{ clearTimeout(t); }
+  };
+  const parseDuck = (html:string): Array<{title:string;url:string}> => {
+    const hits: Array<{title:string;url:string}> = [];
     const re = /<a[^>]+class="result__url"[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) && hits.length < 6) {
-      try {
-        const href = m[1].replace(/&amp;/g, '&');
-        // DuckDuckGo wraps with /l/?uddg=...
-        const u = new URL(href, 'https://duckduckgo.com');
-        const real = u.searchParams.get('uddg') ? decodeURIComponent(u.searchParams.get('uddg')!) : href;
-        hits.push({ title: m[2].trim().slice(0,120), url: real.slice(0,300) });
-      } catch { /* ignore */ }
+    let m: RegExpExecArray|null;
+    while((m=re.exec(html)) && hits.length<6){
+      try{
+        const href=m[1].replace(/&amp;/g,'&');
+        const u=new URL(href,'https://duckduckgo.com');
+        const real=u.searchParams.get('uddg')?decodeURIComponent(u.searchParams.get('uddg')!):href;
+        hits.push({title:m[2].trim().slice(0,120), url: real.slice(0,300)});
+      }catch{/*ignore*/}
     }
-    // Fallback regex for title links if first pattern missed
-    if (!hits.length) {
-      const re2 = /result__title[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-      while ((m = re2.exec(html)) && hits.length < 6) {
-        const href = m[1].replace(/&amp;/g,'&');
-        const title = m[2].replace(/<[^>]+>/g,'').trim().slice(0,120);
-        if (title && href.startsWith('http')) hits.push({ title, url: href.slice(0,300) });
+    if(!hits.length){
+      const re2=/result__title[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+      while((m=re2.exec(html)) && hits.length<6){
+        const href=m[1].replace(/&amp;/g,'&'); const title=m[2].replace(/<[^>]+>/g,'').trim().slice(0,120);
+        if(title && href.startsWith('http')) hits.push({title, url: href.slice(0,300)});
       }
     }
-    return { query: q, hits, note: hits.length ? undefined : 'no hits parsed' };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { query: q, hits: [], note: `search failed: ${msg.slice(0,120)}` };
+    return hits;
+  };
+  const parseBing = (html:string): Array<{title:string;url:string;snippet?:string}> => {
+    const hits: Array<{title:string;url:string;snippet?:string}> = [];
+    // Bing HTML: <li class="b_algo"><h2><a href="URL">title
+    const re = /<li[^>]+class="[^"]*b_algo[^"]*"[\s\S]*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let m: RegExpExecArray|null;
+    while((m=re.exec(html)) && hits.length<6){
+      const href=m[1].replace(/&amp;/g,'&');
+      const title=m[2].replace(/<[^>]+>/g,'').trim().slice(0,120);
+      if(title && href.startsWith('http') && !/bing\.com|microsoft\.com/i.test(href)) hits.push({title, url: href.slice(0,300)});
+    }
+    return hits;
+  };
+  // 1) DuckDuckGo primary (Chrome UA, timeout)
+  const duck = await fetchWithTimeout(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, { 'user-agent': UA, 'accept-language':'en-US,en', accept:'text/html,*/*;q=0.8' }, 8000);
+  if(duck && duck.status===200){
+    const hits = parseDuck(duck.html);
+    if(hits.length) return { query: q, hits };
+    // Duck returns interstitial/captcha if hits 0 but html large — try Bing instead of reporting 0
+    const isInterstitial = /captcha|attention required|blocked/i.test(duck.html.slice(0,2000)) || duck.html.length < 800;
+    if(!isInterstitial && duck.html.includes('result')) return { query: q, hits: [], note: 'no hits parsed' };
   }
+  // 2) Bing fallback (proven server-side pattern already used for visual search)
+  const bing = await fetchWithTimeout(`https://www.bing.com/search?q=${encodeURIComponent(q)}&form=QBRE`, { 'user-agent': UA, 'accept-language':'en-US,en', accept:'text/html,*/*;q=0.8' }, 8000);
+  if(bing && bing.status===200){
+    const hits = parseBing(bing.html);
+    if(hits.length) return { query: q, hits, note: 'via Bing (DuckDuckGo empty/blocked)' };
+    if(/captcha|attention|blocked/i.test(bing.html.slice(0,2000))) return { query: q, hits: [], note: 'search blocked (interstitial) — UNMEASURED' };
+    return { query: q, hits: [], note: 'no hits parsed' };
+  }
+  const errNote = (!duck && !bing) ? 'search failed: network/timeout' : (duck && duck.status!==200 ? `DuckDuckGo HTTP ${duck.status} — UNMEASURED` : (bing && bing.status!==200 ? `Bing HTTP ${bing.status} — UNMEASURED` : 'search blocked — UNMEASURED'));
+  return { query: q, hits: [], note: errNote };
 }
 
 export async function fetchImageUrlAsBase64(imageUrl: string): Promise<{ b64: string; mime: string } | { error: string }> {
@@ -1116,10 +1149,29 @@ export async function analyzeGeospyImage(
   // Google grounding (like Google Images) — web search for vision clues when requested or when vision has a place but no web confirmation
   let googleGrounding: GoogleGrounding | null = null;
   const wantGoogle = opts.doGoogle !== false; // default ON — second opinion via web, operator can disable with doGoogle:false
-  if (wantGoogle && typeof vision.place === 'string' && vision.place.trim()) {
-    try { googleGrounding = await googleGroundingSearch(vision.place.trim() + ' ' + (vision.clues?.[0] ?? '')); } catch { /* ignore */ }
-  } else if (wantGoogle && vision.clues?.length) {
-    try { googleGrounding = await googleGroundingSearch(vision.clues[0].slice(0,120)); } catch { /* ignore */ }
+  function buildGroundingQuery(vision: GeospyVisionResult): string {
+    const parts: string[] = [];
+    const place = (vision.place||'').trim();
+    if(place) parts.push(`"${place}"`);
+    if(vision.city) parts.push(vision.city);
+    if(vision.country) parts.push(vision.country);
+    const lms = (vision.landmarks||[]).slice(0,2).filter(s=>s && s.length>=3 && s.length<50);
+    lms.forEach(l=>parts.push(`"${l}"`));
+    // pick first clue with signal, skip generic sky/shadow/vegetation lines
+    const genericRe = /^(sky|shadow|sun|vegetation|terrain|atmosphere|lighting|haze|cloud)/i;
+    const clue = (vision.clues||[]).find(c=>c && c.length>18 && !genericRe.test(c.trim()));
+    if(clue){
+      const kw = clue.replace(/^[^:]*:\s*/,'').split(/[,.;—]/)[0].trim().slice(0,60);
+      if(kw.length>10 && !/^\d+$/.test(kw)) parts.push(kw);
+    }
+    const q = parts.join(' ').trim().slice(0,200);
+    return q || (vision.clues?.[0]?.slice(0,120) || place || '');
+  }
+  if (wantGoogle) {
+    const q2 = buildGroundingQuery(vision);
+    if(q2 && q2.length>=4){
+      try { googleGrounding = await googleGroundingSearch(q2); } catch { /* ignore */ }
+    }
   }
 
   // Lens reverse-image + second vision pass — the image hits get fed back to the main model for assessment

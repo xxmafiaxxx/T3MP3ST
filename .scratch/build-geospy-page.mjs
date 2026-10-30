@@ -36,8 +36,6 @@ const GEOSPY_CONTENT = `
              background: rgba(47,255,210,0.04); cursor:pointer; transition: all .18s; }
   .gs-drop.drag { border-color:#2fffd2; background: rgba(47,255,210,0.10); transform: scale(1.01); }
   .gs-drop small{color:#6f8794; font-size:12px;}
-  .gs-preview { display:none; margin-top:12px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); max-height:420px; background:#050b10; }
-  .gs-preview img, .gs-preview video { width:100%; height:auto; display:block; max-height:420px; object-fit:contain; }
   .gs-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   .gs-btn { appearance:none; border:1px solid rgba(47,255,210,0.35); background: linear-gradient(135deg, #0e2a22, #123a30); color:#2fffd2;
             padding:9px 16px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; letter-spacing:0.3px; }
@@ -70,11 +68,12 @@ const GEOSPY_CONTENT = `
   @keyframes gsDropPin { 0%{ transform: translateY(-40px); opacity:0; } 60%{ transform: translateY(6px); opacity:1; } 80%{ transform: translateY(-4px);} 100%{ transform: translateY(0); opacity:1; } }
   .gs-pin-drop { animation: gsDropPin 0.55s cubic-bezier(0.34,1.56,0.64,1) forwards; }
   /* ---- workspace: image lines up with map ---- */
-  .gs-ws { height: 380px; }
-  .gs-preview { display:none; height: 344px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:
+  .gs-ws { min-height: 380px; display:flex; flex-direction:column; }
+  .gs-preview { display:none; flex:1; min-height:344px; height:344px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.08); background:
     repeating-conic-gradient(rgba(255,255,255,0.03) 0% 25%, transparent 0% 50%) 50% / 22px 22px, #050b10; align-items:center; justify-content:center; }
   .gs-preview img, .gs-preview video { width:100%; height:100%; display:block; object-fit:contain; background:transparent; }
-  .gs-empty { height: 344px; border:1px dashed rgba(255,255,255,0.10); border-radius:10px; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:6px; color:#5f7582; font-size:12.5px; background: rgba(255,255,255,0.02); }
+  .gs-empty { height: 344px; min-height:344px; flex:1; border:1px dashed rgba(255,255,255,0.10); border-radius:10px; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:6px; color:#5f7582; font-size:12.5px; background: rgba(255,255,255,0.02); }
+  .gs-heic { display:none; text-align:center; padding:24px; color:#ffb142; font-size:13px; line-height:1.7; }
   /* ---- decluttered results: collapsible sections ---- */
   .gs-details { background: rgba(0,0,0,0.32); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:0; margin-top:12px; overflow:hidden; }
   .gs-details > summary { cursor:pointer; list-style:none; padding:11px 16px; font-size:12px; letter-spacing:0.8px; text-transform:uppercase; color:#8ba3b0; font-weight:700; display:flex; align-items:center; gap:8px; user-select:none; }
@@ -121,6 +120,7 @@ const GEOSPY_CONTENT = `
         <img id="gsImg" alt="preview" style="display:none;" />
         <video id="gsVid" controls muted playsinline style="display:none;"></video>
         <canvas id="gsCanvas" style="display:none;"></canvas>
+        <div id="gsHeicMsg" class="gs-heic"></div>
       </div>
       <div id="gsExifPreview" class="gs-exif-preview"></div>
       <div id="gsFrameHint" class="gs-meta" style="margin-top:6px; display:none;">Video: seek to the most telling frame, then hit LOCATE â the current frame will be sent.</div>
@@ -255,6 +255,7 @@ const GEOSPY_CONTENT = `
     img: document.getElementById('gsImg'),
     vid: document.getElementById('gsVid'),
     canvas: document.getElementById('gsCanvas'),
+    heicMsg: document.getElementById('gsHeicMsg'),
     exifPreview: document.getElementById('gsExifPreview'),
     analyze: document.getElementById('gsAnalyze'),
     clear: document.getElementById('gsClear'),
@@ -435,12 +436,16 @@ const GEOSPY_CONTENT = `
   checkStatus();
 
   function resetPreview(){
-    els.img.style.display=\'none\'; els.img.src='';
-    els.vid.style.display=\'none\'; els.vid.src=''; try{ els.vid.load(); }catch(e){}
-    els.preview.style.display=\'none\';
-    if(els.empty) els.empty.style.display=\'flex\';
-    els.frameHint.style.display=\'none\';
-    els.exifPreview.style.display=\'none\'; els.exifPreview.textContent='';
+    if(current.objectUrl){ try{ URL.revokeObjectURL(current.objectUrl); }catch(e){} current.objectUrl = null; }
+    if(els.file) els.file.value = '';
+    try{ els.vid.pause(); }catch(e){}
+    els.img.style.display='none'; try{ els.img.removeAttribute('src'); }catch(e){} els.img.src='';
+    els.vid.style.display='none'; try{ els.vid.removeAttribute('src'); els.vid.load(); }catch(e){}
+    if(els.heicMsg){ els.heicMsg.style.display='none'; els.heicMsg.textContent=''; els.heicMsg.innerHTML=''; }
+    els.preview.style.display='none';
+    if(els.empty) els.empty.style.display='flex';
+    els.frameHint.style.display='none';
+    els.exifPreview.style.display='none'; els.exifPreview.textContent='';
     current = { b64:'', mime:'image/jpeg', kind:'image', w:0, h:0, bytes:0 };
     els.analyze.disabled = true;
     els.meta.textContent='';
@@ -462,11 +467,11 @@ const GEOSPY_CONTENT = `
   }
 
   function canvasFromVideo(video){
-    const c = els.canvas;
     const w = video.videoWidth || 1280, h = video.videoHeight || 720;
     const maxW = 1280;
     let cw = w, ch = h;
     if(cw > maxW){ ch = Math.round(ch * maxW / cw); cw = maxW; }
+    const c = document.createElement('canvas');
     c.width = cw; c.height = ch;
     const ctx = c.getContext('2d');
     ctx.drawImage(video, 0, 0, cw, ch);
@@ -508,55 +513,66 @@ const GEOSPY_CONTENT = `
   }
 
   async function handleFile(file){
-    clearError(); els.results.style.display=\'none\';
+    // clean previous video objectUrl
+    if(current.objectUrl){ try{ URL.revokeObjectURL(current.objectUrl); }catch(e){} current.objectUrl = null; }
+    if(els.heicMsg){ els.heicMsg.style.display='none'; els.heicMsg.innerHTML=''; }
+    clearError(); els.results.style.display='none';
     if(!file){ return; }
     const t = (file.type||'').toLowerCase();
     const name = (file.name||'').toLowerCase();
-    const extImage = /\.(jpe?g|png|webp|heic|heif|bmp|gif|avif)$/i.test(name);
+    const extImage = /\\.(jpe?g|png|webp|heic|heif|bmp|gif|avif)$/i.test(name);
     const extVideo = /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(name);
     const isVideo = t.startsWith('video/') || (!t && extVideo);
     const isImage = t.startsWith('image/') || (!t && extImage) || (!isVideo && extImage);
-    if(!isVideo && !isImage){ showError('Unsupported file â use an image (JPEG/PNG/WEBP) or video (MP4/MOV/WEBM).'); return; }
-    if(file.size > 25*1024*1024){ showError('File too large â max 25 MB. Trim or compress and retry.'); return; }
-    // HEIC/HEIF: Windows browsers cannot decode it in <img> â say so instead of a blank tile
+    if(!isVideo && !isImage){ showError('Unsupported file -- use an image (JPEG/PNG/WEBP) or video (MP4/MOV/WEBM).'); return; }
+    if(file.size > 25*1024*1024){ showError('File too large -- max 25 MB. Trim or compress and retry.'); return; }
+    // HEIC/HEIF: Windows browsers cannot decode it in <img> -- use dedicated overlay, never destroy preview DOM
     const isHeic = t === 'image/heic' || t === 'image/heif' || /\.hei[cf]$/.test(name);
     if(isImage && isHeic){
-      if(els.empty) els.empty.style.display=\'none\';
-      els.preview.style.display=\'flex\';
-      els.img.style.display=\'none\'; els.img.removeAttribute(\'src\');
-      els.preview.innerHTML = '<div style="text-align:center; padding:24px; color:#ffb142; font-size:13px; line-height:1.7;"><div style="font-size:26px;">&#128247;</div><b>HEIC/HEIF photo â Windows browsers cannot display it.</b><br/>The location work still cannot read it either. Convert first:<br/><span style="color:#9baeb8;">iPhone: Settings &rarr; Camera &rarr; Formats &rarr; Most Compatible</span><br/><span style="color:#9baeb8;">or open the file in Paint / Photos and Save As JPEG, then drop it here</span></div>';
+      if(els.empty) els.empty.style.display='none';
+      els.preview.style.display='flex';
+      els.img.style.display='none'; try{ els.img.removeAttribute('src'); }catch(e){}
+      els.vid.style.display='none'; try{ els.vid.pause(); els.vid.removeAttribute('src'); els.vid.load(); }catch(e){}
+      if(els.heicMsg){
+        els.heicMsg.innerHTML = '<div style="font-size:26px;">&#128247;</div><b>HEIC/HEIF photo -- Windows browsers cannot display it.</b><br/>The location work still cannot read it either. Convert first:<br/><span style="color:#9baeb8;">iPhone: Settings -> Camera -> Formats -> Most Compatible</span><br/><span style="color:#9baeb8;">or open the file in Paint / Photos and Save As JPEG, then drop it here</span>';
+        els.heicMsg.style.display='block';
+      }
       els.analyze.disabled = true;
-      els.meta.textContent = file.name + ' â HEIC â convert to JPEG to analyze';
-      showError('HEIC photo dropped â convert to JPEG (or switch your camera to "Most Compatible") and drop it again.');
+      els.meta.textContent = file.name + ' -- HEIC -- convert to JPEG to analyze';
+      showError('HEIC photo dropped -- convert to JPEG (or switch your camera to "Most Compatible") and drop it again.');
       return;
     }
 
     if(isImage){
+      if(els.heicMsg) els.heicMsg.style.display='none';
       const data = await fileToB64(file);
       const b64 = data.b64, mime = data.mime, bytes = data.bytes;
       current = { b64: b64, mime: mime, kind:'image', w:0, h:0, bytes: bytes };
       // onload BEFORE src to avoid race on data: URLs; hide video, show image
-      els.vid.style.display=\'none\'; try{ els.vid.pause(); els.vid.removeAttribute(\'src\'); els.vid.load(); }catch(e){}
-      els.img.onload = function(){ current.w = els.img.naturalWidth; current.h = els.img.naturalHeight; els.meta.textContent += ' â ' + current.w + 'x' + current.h; };
-      els.img.onerror = function(){ els.meta.textContent += ' â preview failed to render'; };
+      els.vid.style.display='none'; try{ els.vid.pause(); els.vid.removeAttribute('src'); els.vid.load(); }catch(e){}
+      els.img.onload = function(){ current.w = els.img.naturalWidth; current.h = els.img.naturalHeight; els.meta.textContent += ' -- ' + current.w + 'x' + current.h; };
+      els.img.onerror = function(){ showError('Preview failed to render -- try another file.'); els.meta.textContent += ' -- preview failed'; };
       els.img.src = 'data:' + mime + ';base64,' + b64;
-      els.img.style.display=\'block\';
+      els.img.style.display='block';
       showPreviewImage();
       els.analyze.disabled = false;
-      els.meta.textContent = file.name + ' â ' + Math.round(bytes/1024) + ' KB â ' + mime;
-      // immediate EXIF probe â this is the "not reading exif" fix: surface it on intake, not just after LOCATE
+      els.meta.textContent = file.name + ' -- ' + Math.round(bytes/1024) + ' KB -- ' + mime;
+      // immediate EXIF probe -- this is the "not reading exif" fix: surface it on intake, not just after LOCATE
       probeExif(b64);
     } else {
-      const url = URL.createObjectURL(file);
-      els.img.style.display=\'none\'; els.img.removeAttribute(\'src\');
-      els.vid.src = url;
-      els.vid.style.display=\'block\';
-      showPreviewImage();
-      els.frameHint.style.display=\'block\';
-      els.analyze.disabled = false;
-      els.meta.textContent = file.name + ' â ' + Math.round(file.size/1024) + ' KB â video (seek to best frame, then LOCATE)';
-      current = { b64:'', mime:'video/mp4', kind:'video', w:0, h:0, bytes: file.size, videoFile: file, objectUrl: url };
+      if(els.heicMsg) els.heicMsg.style.display='none';
+      els.img.style.display='none'; try{ els.img.removeAttribute('src'); }catch(e){}
+      // wire events BEFORE src
       els.vid.onloadedmetadata = function(){ current.w = els.vid.videoWidth; current.h = els.vid.videoHeight; };
+      els.vid.onerror = function(){ showError('Video failed to load -- try MP4/MOV.'); if(current.objectUrl){ try{ URL.revokeObjectURL(current.objectUrl);}catch(e){} current.objectUrl=null; } };
+      const url = URL.createObjectURL(file);
+      els.vid.src = url;
+      els.vid.style.display='block';
+      showPreviewImage();
+      els.frameHint.style.display='block';
+      els.analyze.disabled = false;
+      els.meta.textContent = file.name + ' -- ' + Math.round(file.size/1024) + ' KB -- video (seek to best frame, then LOCATE)';
+      current = { b64:'', mime:'video/mp4', kind:'video', w:0, h:0, bytes: file.size, videoFile: file, objectUrl: url };
     }
   }
 
@@ -567,8 +583,8 @@ const GEOSPY_CONTENT = `
   }
   els.drop.addEventListener('click', function(){ els.file.click(); });
   els.drop.addEventListener('keydown', function(e){ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); els.file.click(); }});
-  els.file.addEventListener('change', function(){ const f=els.file.files && els.file.files[0]; if(f) handleFile(f); });
-  // document-wide drag & drop â drop anywhere on the page
+  els.file.addEventListener('change', function(){ const f=els.file.files && els.file.files[0]; if(f) handleFile(f); els.file.value=''; });
+  // document-wide drag & drop -- drop anywhere on the page
   let dragDepth = 0;
   document.addEventListener('dragenter', function(e){ e.preventDefault(); dragDepth++; els.drop.classList.add('drag'); if(els.empty) els.empty.style.borderColor='rgba(47,255,210,0.5)'; });
   document.addEventListener('dragover', function(e){ e.preventDefault(); });
@@ -576,13 +592,25 @@ const GEOSPY_CONTENT = `
   document.addEventListener('drop', function(e){
     e.preventDefault(); dragDepth=0; els.drop.classList.remove('drag');
     if(els.empty) els.empty.style.borderColor='';
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if(f) handleFile(f);
+    const dt = e.dataTransfer;
+    const f = dt && dt.files && dt.files[0];
+    if(f){ handleFile(f); return; }
+    // URL drop (e.g., dragging image from another tab)
+    const uri = dt && (dt.getData('text/uri-list') || dt.getData('text/plain') || '');
+    const u = (uri||'').trim().split(/\\s+/)[0] || '';
+    if(u && /^https?:\/\/i.test(u)){ els.url.value = u; els.url.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'})); }
   });
   document.addEventListener('paste', async function(e){
-    const item = [...(e.clipboardData && e.clipboardData.items || [])].find(function(i){ return i.type.startsWith('image/'); });
-    if(!item) return;
-    const f = item.getAsFile(); if(f) { e.preventDefault(); await handleFile(f); }
+    // Win copied file lives in clipboardData.files, not items
+    if(e.clipboardData && e.clipboardData.files && e.clipboardData.files.length){
+      const pf = [...e.clipboardData.files].find(function(f){ return /^image\\//.test(f.type) || /^video\\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif|bmp|gif|mp4|mov|webm)$/i.test(f.name||''); });
+      if(pf){ e.preventDefault(); await handleFile(pf); return; }
+    }
+    const items = [...(e.clipboardData && e.clipboardData.items || [])];
+    const imgItem = items.find(function(i){ return i.type.startsWith('image/'); });
+    if(imgItem){ const f = imgItem.getAsFile(); if(f) { e.preventDefault(); await handleFile(f); return; } }
+    const vidItem = items.find(function(i){ return i.type.startsWith('video/'); });
+    if(vidItem){ const f = vidItem.getAsFile(); if(f) { e.preventDefault(); await handleFile(f); return; } }
   });
   els.url.addEventListener('keydown', async function(e){
     if(e.key !== 'Enter') return;
@@ -825,77 +853,64 @@ const GEOSPY_CONTENT = `
       }
       if(els.lens){
         const lens = j.lens;
-        const esc = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); };
-        if(!lens || (!Array.isArray(lens.hits) || lens.hits.length===0) && !lens.note && !lens.refinedVision){
-          els.lens.innerHTML = '<div class="gs-meta">Lens: no reverse-image results for this image. <a href="https://lens.google.com/upload" target="_blank" rel="noopener" style="color:#2fffd2;">Open in Google Lens &#8599;</a></div>';
+        const esc = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+        const isHttp = function(u){ u = String(u||'').trim().toLowerCase(); return u.startsWith('https://') || u.startsWith('http://'); };
+        const hitCount = (lens && Array.isArray(lens.hits) && lens.hits.length) || 0;
+        const handoff = ((lens && (lens.lensHandoff || lens.queryHint)) || '');
+        if(!lens || (hitCount===0 && !lens.refinedVision && !(handoff && isHttp(handoff)))){
+          els.lens.innerHTML = '<div class="gs-meta">Reverse image: no matches for this image. <a href="https://lens.google.com/upload" target="_blank" rel="noopener" style="color:#2fffd2;">Try Google Lens manually &#8599;</a></div>';
           els.lens.style.display='block';
         } else {
-          let html = '<div class="gs-meta" style="font-weight:700; margin-bottom:6px;">Google Lens â reverse image (' + ((lens.hits&&lens.hits.length)||0) + ' hits)</div>';
+          let html = '';
+          if(handoff && isHttp(handoff)){
+            html += '<a class="gs-btn" href="'+esc(handoff)+'" target="_blank" rel="noopener" style="font-size:12px; padding:6px 12px; text-decoration:none; margin-bottom:10px; display:inline-flex;">Open full results in Google Lens &#8599;</a>';
+          }
           if(lens.note) html += '<div class="gs-meta" style="color:#ffb142; margin-bottom:6px;">' + esc(lens.note) + '</div>';
           const rv = lens.refinedVision;
           if(rv){
             const hasLL = Number.isFinite(rv.lat) && Number.isFinite(rv.lon);
             html += '<div style="border:1px solid rgba(47,255,210,0.30); border-radius:10px; padding:10px 12px; background: linear-gradient(135deg, rgba(47,255,210,0.08), rgba(100,150,255,0.05)); margin-bottom:10px;">';
-            html += '<div style="font-size:11px; letter-spacing:0.6px; text-transform:uppercase; color:#2fffd2; font-weight:700;">Lens second-opinion â re-analyzed via ' + esc(rv.model||'vision') + '</div>';
+            html += '<div style="font-size:11px; letter-spacing:0.6px; text-transform:uppercase; color:#2fffd2; font-weight:700;">Match re-analyzed via ' + esc(rv.model||'vision') + '</div>';
             if(rv.place) html += '<div style="font-size:14px; color:#e0e0e0; font-weight:700; margin-top:4px;">' + esc(rv.place) + '</div>';
             if(hasLL) html += '<div class="gs-meta" style="margin-top:2px;">' + Number(rv.lat).toFixed(5) + ', ' + Number(rv.lon).toFixed(5) + ' &nbsp;' + pillFor(rv.confidence) + '</div>';
-            else html += '<div class="gs-meta" style="margin-top:2px;">' + pillFor(rv.confidence) + (rv.city||rv.country ? ' â ' + esc([rv.city, rv.state, rv.country].filter(Boolean).join(', ')) : '') + '</div>';
+            else html += '<div class="gs-meta" style="margin-top:2px;">' + pillFor(rv.confidence) + (rv.city||rv.country ? ' -- ' + esc([rv.city, rv.state, rv.country].filter(Boolean).join(', ')) : '') + '</div>';
             if(rv.reasoning) html += '<div style="font-size:12.5px; color:#9baeb8; margin-top:6px; line-height:1.55;">' + esc(rv.reasoning).slice(0,620) + '</div>';
-            if(rv.clues && rv.clues.length) html += '<div style="margin-top:6px;">' + rv.clues.slice(0,4).map(function(c){ return '<div class="gs-clue">'+esc(c)+'</div>'; }).join('') + '</div>';
             if(hasLL) html += '<button class="gs-btn" data-lens-use style="margin-top:8px; font-size:12px; padding:6px 12px;" data-lat="'+rv.lat+'" data-lon="'+rv.lon+'" data-label="'+esc(rv.place||rv.city||'Lens hit')+'">Use Lens pin on map &#9673;</button>';
             const fromUrl = (lens.refinedFrom && (lens.refinedFrom.url||lens.refinedFrom.imageUrl)) || '';
-            const fromTitle = (lens.refinedFrom && lens.refinedFrom.title) || 'top Lens hit';
-            if(fromUrl) html += '<div class="gs-meta" style="margin-top:6px;">from: <a href="'+esc(fromUrl)+'" target="_blank" rel="noopener" style="color:#70a1ff; word-break:break-all;">' + esc(fromTitle).slice(0,90) + '</a></div>';
+            const fromTitle = (lens.refinedFrom && lens.refinedFrom.title) || 'top match';
+            if(fromUrl && isHttp(fromUrl)) html += '<div class="gs-meta" style="margin-top:6px;">from: <a href="'+esc(fromUrl)+'" target="_blank" rel="noopener" style="color:#70a1ff; word-break:break-all;">' + esc(fromTitle).slice(0,90) + '</a></div>';
             html += '</div>';
           }
-          const hits = Array.isArray(lens.hits) ? lens.hits.slice(0,8) : [];
+          const hits = Array.isArray(lens.hits) ? lens.hits.slice(0,10) : [];
           if(hits.length){
             html += '<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap:8px;">';
             hits.forEach(function(h){
-              const tit = esc((h.title||'Lens result').slice(0,110));
-              // Normalize click-through: unwrap /url?q=, make relative absolute, never "#"
-              let href = String(h.url||h.imageUrl||'').trim();
-              if(href.startsWith('//')) href = 'https:' + href;
-              else if(href.startsWith('/url?') || href.startsWith('/search')) href = 'https://www.google.com' + href;
-              else if(href.startsWith('/')) href = 'https://www.google.com' + href;
-              if((href.toLowerCase().startsWith('https://')||href.toLowerCase().startsWith('http://')) && href.toLowerCase().includes('google.com/url?')){
-                try{ const u=new URL(href); const q=u.searchParams.get('q')||u.searchParams.get('url'); if(q) href=decodeURIComponent(q);}catch(e){}
-              }
-              // If still bare or blocked, fall back to Lens vsrid page or generic Lens
-              if(!href || href==='#' || !(href.toLowerCase().startsWith('https://')||href.toLowerCase().startsWith('http://'))){
-                href = (lens.queryHint && (lens.queryHint.toLowerCase().startsWith('https://')||lens.queryHint.toLowerCase().startsWith('http://'))) ? lens.queryHint : 'https://lens.google.com/upload';
-              }
-              const linkHref = esc(href);
-              const displayUrl = esc(href.slice(0,92));
-              const rawSrc = String(h.thumbUrl || h.imageUrl || '').trim();
-              let src = rawSrc;
+              const tit = esc((h.title||'Match').slice(0,110));
+              // Click target: validated page URL only -- google-internal shells become display-only cards
+              let href = String(h.url||'').trim();
+              if(!isHttp(href) || /(^|\\\.)google\\\.[a-z.]+\\\/(search|url\\\?|imgres)/i.test(href)) href = String(h.imageUrl||'').trim();
+              if(!isHttp(href)) href = '';
+              const linkAttrs = href ? (' href="'+esc(href)+'" target="_blank" rel="noopener"') : '';
+              // Thumb: server-fetched data URL first (cannot be blocked), then Bing-hosted turl (hotlink-safe)
+              const src = String(h.thumbDataUrl || h.thumbUrl || '').trim();
+              let imgTag;
               if(src){
-                src = src.replace(/&amp;/g,'&');
-                if(src.startsWith('//')) src = 'https:' + src;
-                else if(src.startsWith('/')) src = 'https://www.google.com' + src;
-                // Keep data: and http(s) only
-                if(!(src.toLowerCase().startsWith('https://')||src.toLowerCase().startsWith('http://')) && !src.toLowerCase().startsWith('data:image/')) src='';
-              }
-              // Preview: prefer thumb, else image. Encrypted-tbn needs referrerpolicy=no-referrer; fallback to placeholder on error
-              let imgTag = '';
-              if(src){
-                const safeSrc = esc(src);
-                const fbId = 'gs-fb-'+Math.random().toString(36).slice(2,7);
-                imgTag = '<a href="'+linkHref+'" target="_blank" rel="noopener" style="display:block; line-height:0;"><img src="'+safeSrc+'" alt="" referrerpolicy="no-referrer" crossorigin="anonymous" style="width:100%; height:132px; object-fit:cover; border-radius:6px 6px 0 0; background:#050b10; display:block;" loading="lazy" onerror="this.style.display=\\\'none\\\';var f=document.getElementById(\\\''+fbId+'\\\');if(f)f.style.display=\\\'flex\\\'" /><div id="'+fbId+'" style="display:none;height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview â <a href="'+linkHref+'" target="_blank" rel="noopener" style="color:#70a1ff; margin-left:4px;">open</a></div></a>';
+                imgTag = '<img src="'+esc(src)+'" alt="" referrerpolicy="no-referrer" style="width:100%; height:132px; object-fit:cover; border-radius:6px 6px 0 0; background:#050b10; display:block;" loading="lazy" onerror="this.onerror=null;this.style.display=\\'none\\'" />';
               } else {
-                imgTag = '<div style="height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; display:flex; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview â <a href="'+linkHref+'" target="_blank" rel="noopener" style="color:#70a1ff; margin-left:4px;">open</a></div>';
+                imgTag = '<div style="height:132px; background: rgba(255,255,255,0.04); border-radius:6px 6px 0 0; display:flex; align-items:center; justify-content:center; color:#5f7582; font-size:11px;">no preview' + (href ? ' -- <a'+linkAttrs+' style="color:#70a1ff; margin-left:4px;">open</a>' : '') + '</div>';
               }
+              const wrapOpen = href ? '<a'+linkAttrs+' style="display:block; line-height:0;">' : '';
+              const wrapClose = href ? '</a>' : '';
               const reanalyzeUrl = String(h.imageUrl || h.thumbUrl || '').trim();
-              html += '<div style="border:1px solid rgba(255,255,255,0.08); border-radius:10px; overflow:hidden; background: rgba(0,0,0,0.22); display:flex; flex-direction:column;">' + imgTag + '<div style="padding:8px 10px; flex:1; display:flex; flex-direction:column; gap:6px;">';
+              html += '<div style="border:1px solid rgba(255,255,255,0.08); border-radius:10px; overflow:hidden; background: rgba(0,0,0,0.22); display:flex; flex-direction:column;">' + wrapOpen + imgTag + wrapClose + '<div style="padding:8px 10px; flex:1; display:flex; flex-direction:column; gap:6px;">';
               html += '<div style="font-size:12px; color:#cbd8e0; font-weight:600; line-height:1.35;">' + tit + '</div>';
-              html += '<a href="'+linkHref+'" target="_blank" rel="noopener" style="font-size:11px; color:#70a1ff; word-break:break-all; cursor:pointer;">' + displayUrl + '</a>';
-              if(reanalyzeUrl) html += '<button class="gs-btn secondary lens-reanalyze" data-img="'+esc(reanalyzeUrl)+'" style="font-size:11px; padding:5px 8px; margin-top:auto; cursor:pointer;">Re-analyze via vision &#8635;</button>';
-              else html += '<a href="'+linkHref+'" target="_blank" rel="noopener" class="gs-btn secondary" style="font-size:11px; padding:5px 8px; margin-top:auto; text-align:center; text-decoration:none;">Open link &#8599;</a>';
+              if(href) html += '<a'+linkAttrs+' style="font-size:11px; color:#70a1ff; word-break:break-all;">' + esc(href.replace(/^https?:\\\/\\\//,'').slice(0,80)) + '</a>';
+              if(reanalyzeUrl && isHttp(reanalyzeUrl)) html += '<button class="gs-btn secondary lens-reanalyze" data-img="'+esc(reanalyzeUrl)+'" style="font-size:11px; padding:5px 8px; margin-top:auto; cursor:pointer;">Re-analyze via vision &#8635;</button>';
               html += '</div></div>';
             });
             html += '</div>';
           }
-          html += '<div class="gs-meta" style="margin-top:8px;">Lens images are fed back to the main model for location assessment â hit <b>Re-analyze</b> on any card to run that match through vision again. <a href="https://lens.google.com/upload" target="_blank" rel="noopener" style="color:#2fffd2;">Full Lens â</a></div>';
+          html += '<div class="gs-meta" style="margin-top:8px;">Matches via Bing Visual (server-side, keyless) -- hit <b>Re-analyze</b> to run any match back through the vision model. Machine reverse-image needs a public URL; uploads get the Lens hand-off above.</div>';
           els.lens.innerHTML = html;
           // wire re-analyze
           els.lens.querySelectorAll('.lens-reanalyze').forEach(function(btn){
