@@ -3836,14 +3836,16 @@
       </div>
     </details>
 
-    <details id="gsDXcheck" class="gs-details">
-      <summary>Google Cross-Check &mdash; Lens + Grounding <span id="gsXcCount" class="badge-count gs-badge-count" style="display:none;"></span></summary>
-      <div class="gs-details-body">
-        <div id="gsGrounding" style="display:none; margin-bottom:6px;"></div>
-        <div id="gsLens" class="gs-lens-full" style="display:none;"></div>
-        <div class="gs-warn" style="margin-top:10px;">&#9888; Lab use only â tracking links, cloned pages, and device hooks are receipted techniques for authorized assessments. Do not deploy against non-consenting targets.</div>
+    <div id="gsLensSection" style="margin-top:14px; border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:12px 12px 10px; background: rgba(0,0,0,0.22);">
+      <div style="font-size:11px; letter-spacing:0.6px; text-transform:uppercase; color:#7a8a94; font-weight:700; display:flex; align-items:center; gap:8px;">
+        Reverse Image &#8212; Google Lens / Bing Visual
+        <span id="gsXcCount" class="badge-count gs-badge-count" style="display:none;"></span>
+        <span class="gs-ws-warn" style="margin-left:auto; font-size:10.5px; text-transform:none; font-weight:400; color:#5f7582;">server-side reverse image, previews inline so hotlink blocks cannot blank them</span>
       </div>
-    </details>
+      <div id="gsLens" class="gs-lens-full" style="display:none; margin-top:10px;"></div>
+      <div id="gsGrounding" style="display:none; margin-top:10px;"></div>
+      <div class="gs-warn" style="margin-top:10px;">&#9888; Lab use only &#8212; tracking links, cloned pages, and device hooks are receipted techniques for authorized assessments. Do not deploy against non-consenting targets.</div>
+    </div>
   </div>
 
   <div id="gsError" class="gs-warn" style="display:none; margin-top:14px;"></div>
@@ -3910,7 +3912,7 @@
     actions: document.getElementById('gsActions'),
     dAnalysis: document.getElementById('gsDAnalysis'),
     dForensics: document.getElementById('gsDForensics'),
-    dXcheck: document.getElementById('gsDXcheck'),
+    lensSection: document.getElementById('gsLensSection'),
     anaCount: document.getElementById('gsAnaCount'),
     forCount: document.getElementById('gsForCount'),
     xcCount: document.getElementById('gsXcCount'),
@@ -4654,7 +4656,7 @@
       const lensHits = (j.lens && j.lens.hits && j.lens.hits.length) || 0;
       setBadge(els.xcCount, lensHits);
       if(els.dForensics) els.dForensics.open = !!ex.hasGps;
-      if(els.dXcheck) els.dXcheck.open = !!(j.lens && (j.lens.refinedVision || lensHits > 0));
+      if(els.lensSection) els.lensSection.style.display = 'block';
 
       if(hasCoord) setMap(lat, lon, (j.vision && j.vision.place) || (j.reverse && j.reverse.label) || '');
 

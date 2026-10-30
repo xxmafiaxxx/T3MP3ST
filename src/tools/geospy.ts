@@ -905,6 +905,46 @@ async function inlineThumbs(hits: LensHit[], budgetMs = 9000): Promise<void> {
   }));
 }
 
+/** Upload a base64 image to a public host so Bing Visual can fetch it (uploads otherwise have no public URL for reverse search). */
+async function hostBase64ForBing(b64: string, mime: string, timeoutMs = 12000): Promise<string | null> {
+  const clean = (b64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+  if (clean.length < 500) return null;
+  const buf = Buffer.from(clean, 'base64');
+  if (buf.length < 512 || buf.length > 18 * 1024 * 1024) return null;
+  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+  const hosts: Array<{ url: string; makeBody: () => { body: Buffer | Blob; headers: Record<string,string> } }> = [
+    {
+      url: 'https://catbox.moe/user/api.php',
+      makeBody: () => {
+        const boundary = '----T3mpHost' + Math.random().toString(16).slice(2);
+        const header = `--${boundary}\r\nContent-Disposition: form-data; name="reqtype"\r\n\r\nfileupload\r\n--${boundary}\r\nContent-Disposition: form-data; name="fileToUpload"; filename="geospy.${ext}"\r\nContent-Type: ${mime}\r\n\r\n`;
+        const footer = `\r\n--${boundary}--\r\n`;
+        const body = Buffer.concat([Buffer.from(header), buf, Buffer.from(footer)]);
+        return { body, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` } };
+      },
+    },
+  ];
+  for (const host of hosts) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const { body, headers } = host.makeBody();
+      const r = await directFetch(host.url as never, {
+        method: 'POST',
+        headers: { 'user-agent': BING_UA, accept: 'text/plain,*/*;q=0.8', ...headers } as never,
+        body: body as unknown as never,
+        signal: ctrl.signal as never,
+      } as never) as unknown as globalThis.Response;
+      const text = await (r as unknown as { text(): Promise<string> }).text().catch(() => '');
+      const url = text.trim();
+      if (r.ok && /^https?:\/\/[^\/]+\//.test(url) && /\.(png|jpe?g|webp|gif)$/i.test(url)) return url;
+      if (r.ok && /^https?:\/\//.test(url)) return url;
+    } catch { /* try next host */ }
+    finally { clearTimeout(t); }
+  }
+  return null;
+}
+
 async function fetchImageAsBase64(url: string, timeoutMs = 8000): Promise<{ b64: string; mime: string } | null> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -944,13 +984,20 @@ export async function lensReverseSearch(
   let hits: LensHit[] = [];
   let note: string | undefined;
   let lensHandoff: string | undefined;
+  let autoHostedUrl: string | null = null;
 
-  // 1) Bing visual by URL — the real hit source
-  if (publicUrl && /^https?:\/\//i.test(publicUrl)) {
-    const bing = await bingVisualSearch(publicUrl, Math.min(14000, timeoutMs), 10);
+  // 1) Bing visual by URL — the real hit source. For base64 uploads (no publicUrl) auto-host to catbox so Bing can fetch.
+  let bingUrl = (publicUrl && /^https?:\/\//i.test(publicUrl)) ? publicUrl : '';
+  if (!bingUrl && clean.length >= 500) {
+    try { autoHostedUrl = await hostBase64ForBing(clean, mime, Math.min(14000, timeoutMs)); } catch { autoHostedUrl = null; }
+    if (autoHostedUrl) bingUrl = autoHostedUrl;
+  }
+  if (bingUrl) {
+    const bing = await bingVisualSearch(bingUrl, Math.min(14000, timeoutMs), 10);
     hits = bing.hits;
-    if (bing.blocked) note = bing.blocked;
-    else if (!hits.length) note = 'Bing visual search returned no usable matches for this image URL';
+    if (bing.blocked) note = bing.blocked + (autoHostedUrl ? ' (via auto-hosted URL)' : '');
+    else if (!hits.length) note = autoHostedUrl ? 'Bing visual search found no matches for this image (auto-hosted via catbox)' : 'Bing visual search returned no usable matches for this image URL';
+    else if (autoHostedUrl) note = 'Reverse image via auto-hosted public URL (catbox) — temporary link';
   } else {
     note = 'Uploaded file has no public URL — machine reverse-search unavailable. Open the Lens link to see matches in your browser.';
   }
@@ -1005,13 +1052,13 @@ export async function lensReverseSearch(
           const hasLoc = Number.isFinite(refined.lat as number) && Number.isFinite(refined.lon as number);
           const hasPlace = !!(refined.place || refined.city || refined.country);
           if (hasLoc || hasPlace || refined.confidence !== 'none') {
-            return { queryHint: publicUrl || lensHandoff || '', hits, refinedVision: refined, refinedFrom: pick, note, lensHandoff };
+            return { queryHint: publicUrl || autoHostedUrl || lensHandoff || '', hits, refinedVision: refined, refinedFrom: pick, note, lensHandoff };
           }
         } catch { /* keep hits, drop refine */ }
       }
     }
   }
-  return { queryHint: publicUrl || lensHandoff || '', hits, note, lensHandoff };
+  return { queryHint: publicUrl || autoHostedUrl || lensHandoff || '', hits, note, lensHandoff };
 }
 export async function googleGroundingSearch(query: string): Promise<GoogleGrounding> {
   const q = query.trim().slice(0, 200);
