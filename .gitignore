@@ -123,10 +123,12 @@ trinidad.json
 # session scratch — probe captures & throwaway builders (never publish, may contain scraped third-party keys)
 .scratch/
 .scratch/**
-# throwaway probe dumps
+# throwaway probe dumps (accidentally committed in 171b9aa — never publish)
 deep-curated.json
 deep-live2.json
 docs/settings.html.pre-egress.bak
 switch_tor*.mjs
 test_any.mjs
 test_jp.mjs
+scripts/scrape-ebctt*.mjs
+scripts/trinidad.mjs
