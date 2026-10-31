@@ -73,6 +73,21 @@ describe('listProviderModels — OpenAI-compatible providers', () => {
     expect((init as { headers: Record<string, string> }).headers.Authorization)
       .toBe('Bearer sk_novita-test-key');
   });
+
+  it('uses Refuseless /v1/models with Bearer authentication', async () => {
+    const f = fakeFetch({ data: [{ id: 'glm-5.3-abliterated' }] });
+    const models = await listProviderModels('refuseless', {
+      baseUrl: 'https://refuseless.com/v1',
+      apiKey: 'rf-test-key',
+      fetchImpl: f,
+    });
+
+    expect(models.map((m) => m.id)).toEqual(['glm-5.3-abliterated']);
+    const [url, init] = f.mock.calls[0];
+    expect(url).toBe('https://refuseless.com/v1/models');
+    expect((init as { headers: Record<string, string> }).headers.Authorization)
+      .toBe('Bearer rf-test-key');
+  });
 });
 
 describe('listProviderModels — Anthropic wire', () => {

@@ -3793,7 +3793,7 @@
     <table class="hfm-table">
       <tr><th>Section</th><th>What to put there</th></tr>
       <tr><td>Universal API Config</td><td>Pick a provider, paste its base URL + key, fetch the live model list, pick a model, set max tokens. This is the fastest path to a working brain.</td></tr>
-      <tr><td>API Keys</td><td>Per-provider keys: OpenRouter, Venice, Hugging Face, Anthropic, OpenAI. Keys entered here are stored in the local config store.</td></tr>
+      <tr><td>API Keys</td><td>Per-provider keys: OpenRouter, Venice, Hugging Face, Anthropic, OpenAI, Refuseless. Keys entered here are stored in the local config store.</td></tr>
       <tr><td>Local Model</td><td>Point at llama.cpp / Ollama / any OpenAI-compatible server (host, port, path, model, optional key) and toggle it on. Test from the panel before relying on it.</td></tr>
       <tr><td>Egress Proxy (SOCKS5)</td><td>One-click mode row: DIRECT / TOR (9050) / TOR BROWSER (9150) / CUSTOM. <b>Start Tor daemon</b> boots the local Tor detached and waits until the SOCKS port actually answers. The status line distinguishes proxied / proxy dead / leak / direct — a dead proxy is reported, never papered over.</td></tr>
       <tr><td>Local Agents</td><td>Detect and enlist already-authenticated CLIs (Claude Code, Codex, Hermes). This is the keyless path.</td></tr>
@@ -3836,6 +3836,7 @@
       <tr><td>T3MP3ST_OPENCELLID_KEY</td><td>Cell-tower geolocation lane.</td></tr>
       <tr><td>T3MP3ST_PHONEINFOGA_URL / _TOKEN</td><td>External PhoneInfoga instance for phone OSINT.</td></tr>
       <tr><td>T3MP3ST_GITHUB_TOKEN / T3MP3ST_GIT_TOKEN</td><td>Repo access for code/supply-chain lanes.</td></tr>
+      <tr><td>REFUSELESS_API_KEY</td><td>Refuseless hosted API (OpenAI-compatible, abliterated open models). Alternate name: the Settings card stores the same key.</td></tr>
       <tr><td>TEMPEST_DEFAULT_PROVIDER / TEMPEST_MODEL_FALLBACK</td><td>Default provider choice; 1 enables the model fallback ladder.</td></tr>
       <tr><td>TEMPEST_LOCAL_BASE_URL / _API_KEY / TEMPEST_LOCAL_MODEL</td><td>Local-model server coordinates (same fields the Settings Local Model section writes).</td></tr>
     </table>

@@ -5748,6 +5748,7 @@
                                     <option value="openai">OpenAI · OpenAI-compatible</option>
                                     <option value="nanogpt">NanoGPT · OpenAI-compatible</option>
                                     <option value="novita">Novita AI · OpenAI-compatible</option>
+                                    <option value="refuseless">Refuseless · OpenAI-compatible, abliterated models</option>
                                     <option value="anthropic">Claude · Anthropic Messages API</option>
                                 </select>
                             </div>
@@ -9993,6 +9994,7 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             openai: 'https://api.openai.com/v1',
             nanogpt: 'https://nano-gpt.com/api/v1',
             novita: 'https://api.novita.ai/openai/v1',
+            refuseless: 'https://refuseless.com/v1',
             anthropic: 'https://api.anthropic.com',
         };
         function uacProvider() { return document.getElementById('uacProvider')?.value || 'openrouter'; }

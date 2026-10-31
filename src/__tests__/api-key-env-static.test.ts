@@ -73,7 +73,7 @@ describe('API key environment handling hardening', () => {
   it('exportConfig redacts every supported provider key slot', () => {
     const block = exportConfigBlock();
 
-    for (const provider of ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'deepseek', 'huggingface', 'nanogpt', 'novita', 'litellm']) {
+    for (const provider of ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'deepseek', 'huggingface', 'nanogpt', 'novita', 'refuseless', 'litellm']) {
       expect(block).toContain(`${provider}: settings.apiKeys.${provider} ? '***REDACTED***' : undefined`);
     }
   });
@@ -93,6 +93,21 @@ describe('API key environment handling hardening', () => {
     // the UI starts explaining which providers a browser call can actually reach.
     expect(settingsSource).toMatch(/<option value="nanogpt"[^>]*>/);
     expect(uiSource).toContain("nanogpt: 'https://nano-gpt.com/api/v1'");
+  });
+
+  it('documents Refuseless and makes it selectable in both Settings pages', () => {
+    const block = envTemplateBlock();
+    expect(block).toContain('REFUSELESS_API_KEY=');
+    expect(setupSource).toContain("setApiKey('refuseless', apiKey)");
+    // The .env bridge must map the provider, or its key is stored in localStorage forever.
+    expect(serverSource).toContain("refuseless: 'REFUSELESS_API_KEY'");
+    // Selectable in the Universal API Config panel AND the Model Selection list — asserting the
+    // option's VALUE, not its label, so the wording stays free to change.
+    expect(settingsSource).toMatch(/<option value="refuseless"[^>]*>/);
+    expect(settingsSource).toMatch(/<option value="refuseless">/);
+    // The shared base-URL map on both pages, so the field prefills the real endpoint.
+    expect(settingsSource).toContain("refuseless: 'https://refuseless.com/v1'");
+    expect(uiSource).toContain("refuseless: 'https://refuseless.com/v1'");
   });
 
   it('ConfigManager uses env keys in-memory and does not persist imported env keys', () => {

@@ -1375,8 +1375,48 @@
                     '<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">automated: fingerprint → auth → inject → trigger → canary → command</span></div>';
             }
 
-            document.getElementById('modalBody').innerHTML = bodyHtml;
-            document.getElementById('cveModalOverlay').classList.add('active');
+                        if (['CVE-2026-79362','CVE-2026-52630','CVE-2026-109618','CVE-2026-109619'].indexOf(item.cveID) !== -1) {
+                const mpk = document.createElement('div');
+                mpk.id = 'modalMalwarePkg';
+                mpk.style.cssText = 'margin-top:12px;border:1px solid rgba(255,71,87,0.4);border-radius:8px;padding:12px 14px;background:rgba(255,71,87,0.06);';
+                mpk.innerHTML = '<div class="modal-section-title" style="color:#ff6b6b;">MALWARE PACKAGE &mdash; RCE + Full Control + Creds</div><div style="font-size:12px;color:var(--text-secondary);">loading package&hellip;</div>';
+                bodyHtml += '<div id="modalMalwarePkgHost"></div>';
+            }
+document.getElementById('modalBody').innerHTML = bodyHtml;
+                        if (['CVE-2026-79362','CVE-2026-52630','CVE-2026-109618','CVE-2026-109619'].indexOf(item.cveID) !== -1) {
+                const host = document.getElementById('modalMalwarePkgHost');
+                if (host) {
+                    fetch(getApiBase() + '/api/cves/malware?cveId=' + encodeURIComponent(item.cveID)).then(function(r){ return r.json(); }).then(function(j){
+                        if (!j.success) { host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">no malware package: ' + (j.error||'') + '</div>'; return; }
+                        const p = j.package;
+                        const esc2 = function(t){ return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+                        let h = '<div class="modal-section-title" style="color:#ff6b6b;">MALWARE PACKAGE &mdash; ' + esc2(p.id) + '</div>';
+                        h += '<div style="font-size:12.5px;color:var(--text-primary);font-weight:700;margin-bottom:6px;">' + esc2(p.objective) + '</div>';
+                        h += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px;"><b style="color:#ff9f43;">RCE:</b> ' + esc2(p.rceMechanism) + '</div>';
+                        h += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px;"><b style="color:#2ed573;">CREDS:</b> ' + esc2(p.credHarvest) + '</div>';
+                        h += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;"><b style="color:#70a1ff;">PERSIST:</b> ' + esc2(p.persistence) + '</div>';
+                        h += '<div class="modal-section-title">Deploy Stages</div>';
+                        h += '<div style="max-height:260px;overflow:auto;font-size:11.5px;background:rgba(0,0,0,0.3);padding:10px 12px;border-radius:6px;">';
+                        (p.components||[]).forEach(function(c, i){
+                            h += '<div style="margin-bottom:8px;border-left:2px solid #ff4757;padding-left:8px;">' +
+                                '<b style="color:#ff6b6b;text-transform:uppercase;font-size:10px;letter-spacing:0.5px;">' + esc2(c.stage) + (i+1) + '</b> <span style="color:var(--text-primary);font-weight:600;">' + esc2(c.name) + '</span>' +
+                                '<div style="color:var(--text-secondary);">&rarr; ' + esc2(c.location) + '</div>' +
+                                (c.notes ? '<div style="color:var(--text-muted);font-size:11px;">' + esc2(c.notes) + '</div>' : '') + '</div>';
+                        });
+                        h += '</div>';
+                        h += '<div style="margin-top:10px;"><button id="copyWebshellBtn" style="padding:6px 12px;background:#ff4757;color:#0a0c12;font-weight:700;border:none;border-radius:6px;cursor:pointer;font-size:11px;">COPY T3K WEBSHELL (PHP)</button> <span style="font-size:11px;color:var(--text-muted);">canary-verified shell + passive creds harvester &mdash; lab/receipted targets only</span></div>';
+                        host.innerHTML = h;
+                        const cb = document.getElementById('copyWebshellBtn');
+                        if (cb) cb.addEventListener('click', function(){
+                            fetch(getApiBase() + '/api/cves/malware/webshell').then(function(r2){ return r2.json(); }).then(function(j2){
+                                navigator.clipboard.writeText(j2.webshell || '');
+                                toast('T3K webshell copied (' + (j2.bytes||0) + ' bytes)');
+                            });
+                        });
+                    }).catch(function(e){ host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">package load failed: ' + esc2(e && e.message || e) + '</div>'; });
+                }
+            }
+document.getElementById('cveModalOverlay').classList.add('active');
         }
 
         function closeCveModal() {

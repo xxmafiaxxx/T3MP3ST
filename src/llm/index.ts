@@ -9,6 +9,7 @@
  * - OpenAI (GPT models)
  * - HuggingFace (open models via the OpenAI-compatible Inference Providers router)
  * - Novita AI (OpenAI-compatible API serving open-source and frontier models)
+ * - Refuseless (OpenAI-compatible hosted API of abliterated open models)
  * - Mock (for testing)
  * - Local (Ollama, etc.)
  */
@@ -812,6 +813,22 @@ class NovitaAdapter extends OpenAIAdapter {
       return {
         valid: false,
         error: 'Novita AI API key is required. Set NOVITA_API_KEY. Docs: https://novita.ai/settings/key-management',
+      };
+    }
+    return { valid: true };
+  }
+}
+
+// Refuseless — OpenAI-compatible hosted API of abliterated open models. Plain bearer wire,
+// so it reuses OpenAIAdapter verbatim; only the key's own env name differs.
+class RefuselessAdapter extends OpenAIAdapter {
+  name = 'refuseless';
+
+  validateConfig(): { valid: boolean; error?: string } {
+    if (!this.config.apiKey) {
+      return {
+        valid: false,
+        error: 'Refuseless API key is required. Set REFUSELESS_API_KEY. Keys: https://refuseless.com/console',
       };
     }
     return { valid: true };
@@ -1766,6 +1783,8 @@ constructor(config: LLMConfig) {
         return new NanoGPTAdapter(config);
       case 'novita':
         return new NovitaAdapter(config); // Novita AI's native API is OpenAI-compatible
+      case 'refuseless':
+        return new RefuselessAdapter(config); // Refuseless speak plain OpenAI wire
       case 'codex':
         return new CodexAdapter(config);
       case 'mock':
@@ -2091,6 +2110,12 @@ export function createNovitaBackbone(apiKey?: string, model?: string): LLMBackbo
   return new LLMBackbone(llmConfig);
 }
 
+export function createRefuselessBackbone(apiKey?: string, model?: string): LLMBackbone {
+  const llmConfig = config.getLLMConfig('refuseless', model);
+  if (apiKey) llmConfig.apiKey = apiKey;
+  return new LLMBackbone(llmConfig);
+}
+
 export function createLiteLLMBackbone(apiKey?: string, model?: string, baseUrl?: string): LLMBackbone {
   const llmConfig = config.getLLMConfig('litellm', model);
   if (apiKey) llmConfig.apiKey = apiKey;
@@ -2131,7 +2156,7 @@ export function createOllamaBackbone(model?: string, baseUrl?: string): LLMBackb
  * Create the best available backbone based on configured API keys
  */
 export function createBestAvailableBackbone(): LLMBackbone {
-  // Priority: OpenRouter > Venice > LiteLLM > Anthropic > OpenAI > DeepSeek > HuggingFace > NanoGPT > Novita > Local > Mock
+  // Priority: OpenRouter > Venice > LiteLLM > Anthropic > OpenAI > DeepSeek > HuggingFace > NanoGPT > Novita > Refuseless > Local > Mock
   const providers = config.getConfiguredProviders();
 
   if (providers.includes('openrouter')) {
@@ -2160,6 +2185,9 @@ export function createBestAvailableBackbone(): LLMBackbone {
   }
   if (providers.includes('novita')) {
     return createNovitaBackbone();
+  }
+  if (providers.includes('refuseless')) {
+    return createRefuselessBackbone();
   }
 
   // Default to mock if no API keys configured

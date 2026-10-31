@@ -11,7 +11,7 @@ import { isAbsolute, join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
 
-type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita' | 'local' | 'ollama';
+type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita' | 'refuseless' | 'local' | 'ollama';
 
 // =============================================================================
 // CONFIGURATION SCHEMA
@@ -31,6 +31,7 @@ export interface TempestSettings {
     nanogpt?: string;
     litellm?: string;
     novita?: string;
+    refuseless?: string;
     local?: string;
     ollama?: string;
   };
@@ -103,6 +104,13 @@ export interface TempestSettings {
 
   // Novita AI — OpenAI-compatible API serving open-source and frontier models
   novita: {
+    baseUrl: string;
+    defaultModel: string;
+  };
+
+  // Refuseless — OpenAI-compatible abliterated-model API (GLM / Qwen / DeepSeek
+  // abliterated builds, 1M context). Wire shape is plain OpenAI, keyed by bearer.
+  refuseless: {
     baseUrl: string;
     defaultModel: string;
   };
@@ -214,6 +222,15 @@ const DEFAULT_SETTINGS: TempestSettings = {
   novita: {
     baseUrl: 'https://api.novita.ai/openai/v1',
     defaultModel: 'zai-org/glm-5.2',
+  },
+
+  // Refuseless' OpenAI-compatible surface — the base ends at /v1 and the
+  // OpenAIAdapter appends /chat/completions (probed live 2026-10-31: an unkeyed
+  // request answers {"error":{"code":"invalid_key"}} in OpenAI shape, so the API
+  // itself sits in front of the Cloudflare wall the marketing pages have).
+  refuseless: {
+    baseUrl: 'https://refuseless.com/v1',
+    defaultModel: 'glm-5.3-abliterated',
   },
 
   codex: {
@@ -893,6 +910,36 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
       capabilities: ['reasoning', 'code', 'analysis', 'agents', 'tools'],
     },
   ],
+  // Refuseless serves abliterated builds of these open models. The ids are the ones its own
+  // toolkit documents (glm-5.3-abliterated / qwen3.8-flash-next-abliterated /
+  // deepseek-v4.1-flash-abliterated); "Fetch models" replaces this list with the live catalog,
+  // so a renamed tag here degrades to a visible fetch, not a silent dead choice.
+  refuseless: [
+    {
+      id: 'glm-5.3-abliterated',
+      name: 'GLM 5.3 Abliterated (Refuseless)',
+      provider: 'Refuseless',
+      contextWindow: 1000000,
+      maxOutput: 32000,
+      capabilities: ['reasoning', 'code', 'analysis', 'agents', 'tools', 'uncensored'],
+    },
+    {
+      id: 'qwen3.8-flash-next-abliterated',
+      name: 'Qwen 3.8 Flash Next Abliterated (Refuseless)',
+      provider: 'Refuseless',
+      contextWindow: 1000000,
+      maxOutput: 32000,
+      capabilities: ['reasoning', 'code', 'analysis', 'fast', 'tools', 'uncensored'],
+    },
+    {
+      id: 'deepseek-v4.1-flash-abliterated',
+      name: 'DeepSeek V4.1 Flash Abliterated (Refuseless)',
+      provider: 'Refuseless',
+      contextWindow: 1000000,
+      maxOutput: 384000,
+      capabilities: ['reasoning', 'code', 'analysis', 'tools', 'uncensored'],
+    },
+  ],
   local: [
     {
       id: 'local-model',
@@ -1074,7 +1121,7 @@ class ConfigManager {
         const envContent = readFileSync(envPath, 'utf-8');
         const lines = envContent.split('\n');
         // Validation variables added
-        const VALID_PROVIDERS = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek', 'huggingface', 'nanogpt', 'local'];
+        const VALID_PROVIDERS = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek', 'huggingface', 'nanogpt', 'novita', 'refuseless', 'local'];
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -1184,6 +1231,7 @@ class ConfigManager {
       huggingface: 'HF_TOKEN',
       nanogpt: 'NANOGPT_API_KEY',
       novita: 'NOVITA_API_KEY',
+      refuseless: 'REFUSELESS_API_KEY',
       litellm: 'LITELLM_API_KEY',
     };
 
@@ -1254,6 +1302,7 @@ class ConfigManager {
     if (this.hasApiKey('huggingface')) providers.push('huggingface');
     if (this.hasApiKey('nanogpt')) providers.push('nanogpt');
     if (this.hasApiKey('novita')) providers.push('novita');
+    if (this.hasApiKey('refuseless')) providers.push('refuseless');
 
     // Codex uses the local Codex CLI/account auth instead of API-key storage.
     providers.push('codex');
@@ -1349,6 +1398,12 @@ class ConfigManager {
         baseUrl = this.config.get('novita').baseUrl;
         actualModel = model || this.config.get('novita').defaultModel;
         break;
+      case 'refuseless':
+        // Refuseless' OpenAI-compatible surface (abliterated open models).
+        apiKey = this.getApiKey('refuseless');
+        baseUrl = this.config.get('refuseless').baseUrl;
+        actualModel = model || this.config.get('refuseless').defaultModel;
+        break;
       case 'codex':
         actualModel = model || this.config.get('codex').defaultModel;
         break;
@@ -1424,7 +1479,7 @@ class ConfigManager {
     const flag = (process.env.TEMPEST_MODEL_FALLBACK || '').trim().toLowerCase();
     if (!flag || ['0', 'false', 'off', 'no'].includes(flag)) return [];
     const chain: FallbackEntry[] = [];
-    const add = (p: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita') => {
+    const add = (p: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita' | 'refuseless') => {
       if (p === primary) return;
       if (p === 'litellm' ? !this.hasLiteLLMProxy() : !this.hasApiKey(p)) return;
       chain.push({
@@ -1445,6 +1500,7 @@ class ConfigManager {
     add('huggingface');
     add('nanogpt');
     add('novita');
+    add('refuseless');
     return chain;
   }
 
@@ -1476,6 +1532,9 @@ class ConfigManager {
         break;
       case 'nanogpt':
         this.config.set('defaultModel', this.config.get('nanogpt').defaultModel);
+        break;
+      case 'refuseless':
+        this.config.set('defaultModel', this.config.get('refuseless').defaultModel);
         break;
       case 'xai':
         this.config.set('defaultModel', this.config.get('xai').defaultModel);
@@ -1523,6 +1582,9 @@ class ConfigManager {
         break;
       case 'nanogpt':
         this.config.set('nanogpt', { ...this.config.get('nanogpt'), defaultModel: model });
+        break;
+      case 'refuseless':
+        this.config.set('refuseless', { ...this.config.get('refuseless'), defaultModel: model });
         break;
       case 'xai':
         this.config.set('xai', { ...this.config.get('xai'), defaultModel: model });
@@ -1576,6 +1638,7 @@ class ConfigManager {
         huggingface: settings.apiKeys.huggingface ? '***REDACTED***' : undefined,
         nanogpt: settings.apiKeys.nanogpt ? '***REDACTED***' : undefined,
         novita: settings.apiKeys.novita ? '***REDACTED***' : undefined,
+        refuseless: settings.apiKeys.refuseless ? '***REDACTED***' : undefined,
         litellm: settings.apiKeys.litellm ? '***REDACTED***' : undefined,
       },
     };
@@ -1636,6 +1699,10 @@ NANOGPT_API_KEY=
 # Novita AI API Key (OpenAI-compatible API serving open-source and frontier models)
 # Get your key at: https://novita.ai/settings/key-management
 NOVITA_API_KEY=
+
+# Refuseless API Key (OpenAI-compatible API serving abliterated open models)
+# Create a key in the console at: https://refuseless.com/console
+REFUSELESS_API_KEY=
 
 # Local model (Ollama / LM Studio / vLLM / llama.cpp, or any OpenAI-compatible server)
 # Point TEMPEST_LOCAL_BASE_URL at the server root (Ollama default shown below).

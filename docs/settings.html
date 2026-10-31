@@ -3651,6 +3651,7 @@
                                     <option value="openai" data-direct="0">OpenAI · key stored, not used for browser calls</option>
                                     <option value="nanogpt" data-direct="0">NanoGPT · key stored, not used for browser calls</option>
                                     <option value="novita" data-direct="0">Novita AI · key stored, not used for browser calls</option>
+                                    <option value="refuseless" data-direct="0">Refuseless · abliterated models, key stored, not used for browser calls</option>
                                     <option value="anthropic" data-direct="0">Claude · key stored, not used for browser calls</option>
                                     <option value="ollama" data-direct="0">Ollama · local, use Settings → 🖥️ Local Model</option>
                                 </select>
@@ -3756,6 +3757,18 @@
                             </div>
                             <div style="font-size: 10px; color: #888; margin-bottom: 8px;">Stored, but direct-LLM currently routes via <b>OpenRouter</b> or a connected agent — not wired to this key yet.</div>
                             <button class="btn btn-primary btn-sm" onclick="saveApiKey('openai')">Save</button>
+                        </div>
+
+                        <div class="card">
+                            <h4 style="margin-bottom: 12px; font-size: 14px;">Refuseless API Key</h4>
+                            <div class="form-group">
+                                <div class="api-key-input">
+                                    <input type="password" class="form-input" id="refuselessKey" placeholder="refuseless key...">
+                                    <button class="api-key-toggle" onclick="toggleApiKey('refuselessKey')">Show</button>
+                                </div>
+                                <div class="form-hint">Hosted OpenAI-compatible API serving abliterated open models (GLM / Qwen / DeepSeek builds, 1M context). Create a key in the <a href="https://refuseless.com/console" target="_blank" style="color: var(--accent);">refuseless.com console</a>.</div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="saveApiKey('refuseless')">Save</button>
                         </div>
                     </div>
 
@@ -3968,6 +3981,7 @@
                                 <option value="gemini">Gemini</option>
                                 <option value="nanogpt">NanoGPT</option>
                                 <option value="novita">Novita</option>
+                                <option value="refuseless">Refuseless</option>
                                 <option value="deepseek">DeepSeek</option>
                                 <option value="huggingface">HuggingFace</option>
                                 <option value="litellm">LiteLLM</option>
@@ -7690,6 +7704,7 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             openai: 'https://api.openai.com/v1',
             nanogpt: 'https://nano-gpt.com/api/v1',
             novita: 'https://api.novita.ai/openai/v1',
+            refuseless: 'https://refuseless.com/v1',
             anthropic: 'https://api.anthropic.com',
             ollama: 'http://localhost:11434/api',
         };
